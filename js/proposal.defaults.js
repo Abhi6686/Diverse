@@ -1,0 +1,19 @@
+// Boilerplate lifted verbatim from Bid Proposal v3 1.html.
+window.PROPOSAL_DEFAULTS = {
+  "description": "Thank you for giving us this opportunity to provide this budget proposal for your project. We are looking forward to working with you!",
+  "acceptanceNote": "We trust that our proposal meets your requirements. Please sign and return a copy as confirmation of acceptance.",
+  "type": "For Guardrails, Handrails, Bollards, Galvanized Platforms & Stairs",
+  "terms": "<ul>\n  <li>This proposal is subject to change if not accepted by approval deadline. Beyond that, new material pricing will be sought out based on the volatility of the marketplace. Fabrication based on approved drawings and specifications.</li>\n  <li>This proposal may be withdrawn without any liability to DiVerse Industrial Solutions if the buyer's subcontract Terms and Conditions are not accepted.</li>\n  <li>We are not responsible for protecting our work after installation or repairing damage to our work caused by others.</li>\n  <li>No overtime or premium time is included in this proposal unless noted otherwise.</li>\n  <li>DiVerse Industrial Solutions will not proceed with any change order that adds cost to our contract without written approval for the scope of work, the value of the added work, and any additional time required to complete the added Scope of work.</li>\n  <li>Written change orders are considered approved when issued and are not subject to additional approvals.</li>\n  <li>Quantities are estimated and subject to verification.</li>\n  <li>Notice of property damage caused by DiVerse Industrial Solutions must be submitted in writing within 24 hours of the occurrence.</li>\n  <li>We do not accept back charges for damages that are not caused by DiVerse Industrial Solutions.</li>\n  <li>We will be billing for stored materials, including fabricated and non-fabricated materials purchased for this project.</li>\n  <li>Substitute materials require prior written approval.</li>\n  <li>Shop drawings will be submitted for approval before fabrication.</li>\n  <li>Fabrication will commence only after receipt of approved drawings.</li>\n  <li>Delays in approvals may affect delivery schedules.</li>\n  <li>Delivery schedule begins after receipt of approved drawings and required deposits.</li>\n  <li>Delivery dates are estimates and subject to material availability.</li>\n  <li>Delays caused by weather, site conditions, or customer actions are not the responsibility of the supplier.</li>\n  <li>Site must be accessible and ready for installation.</li>\n  <li>Adequate staging and storage space must be provided.</li>\n  <li>Additional work will be billed separately.</li>\n</ul>",
+  "paymentTerms": "<ul>\n  <li>50% advance payment upon issuance of the Purchase Order (PO) to initiate material procurement and fabrication.</li>\n  <li>25% payment upon completion of 60% of the fabrication work.</li>\n  <li>Remaining 25% payment prior to dispatch of the finished materials.</li>\n</ul>",
+  "inclusions": "<ul>\n  <li>DBE participation as Diverse Industrial Solutions is a PA UCP certified.</li>\n  <li>WBE participation as Diverse Industrial Solutions is a PA DGS (SDE-WBE) certified firm.</li>\n  <li>MBE participation as Diverse Industrial Solutions is a PA DGS (SDB-MBE) certified firm.</li>\n  <li>SBA (WOSB) (Small Business Administration Owned Small Business)</li>\n  <li>PA DGS (SB ONLY) (PA Department of General Services Small Business (SELF-CERTIFIED ONLY).</li>\n  <li>Union Labor Rates</li>\n  <li>Packaged as Supply & Install Package only</li>\n  <li>Standard Work Hours</li>\n  <li>Project Safety requirements.</li>\n</ul>"
+};
+
+window.COMPANY_DEFAULT = {
+  "name": "DiVerse Industrial Solutions, LLC",
+  "address": "180 Johnson Lane Clarksburg, PA 15725",
+  "phone": "(724)388-0154",
+  "email": "DiverseSol@outlook.com",
+  "logoType": "default",
+  "logoUrl": "",
+  "brandSlogan": "Industrial Solutions"
+};

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DiverSe Project Management</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: 'Inter', sans-serif; background: #f1f5f9; }
+  .glass { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
+  .card-hover { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+  .status-submitted { background: #dbeafe; color: #1e40af; }
+  .status-progress { background: #fef3c7; color: #92400e; }
+  .status-completed { background: #d1fae5; color: #065f46; }
+  .status-notstarted { background: #f3f4f6; color: #4b5563; }
+  .status-awarded { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
+  .status-lost { background: #fee2e2; color: #991b1b; }
+  .status-noscope { background: #f5f3ff; color: #5b21b6; }
+
+  /* A Lost bid stays on Active Bids so the work that went into it is still
+     visible, but it must not read as live work sitting in a list of live work. */
+  .grid-table tbody tr.row-decided td { opacity: 0.55; }
+  .grid-table tbody tr.row-decided:hover td { opacity: 1; }
+
+  /* BANNER: the logo sits over a faint ember, present at rest. The sparks
+     themselves are painted on #sparkCanvas by js/sparks.js, on hover only. */
+  .banner-stage { isolation: isolate; }
+  .banner-stage::before {
+    content: ''; position: absolute; left: -8%; top: 50%;
+    width: 46%; height: 190%; transform: translateY(-50%);
+    background: radial-gradient(ellipse at center, rgba(249,115,22,0.16), rgba(249,115,22,0) 68%);
+    pointer-events: none; z-index: 0;
+  }
+  .banner-logo {
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));
+    transition: filter 0.35s ease;
+  }
+  /* A hot edge on the mark while the sparks are flying, so the effect reads as
+     one thing rather than particles floating past an unrelated logo. */
+  .banner-stage:hover .banner-logo {
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45)) drop-shadow(0 0 10px rgba(249,146,22,0.55));
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .banner-logo, .banner-stage:hover .banner-logo { transition: none; }
+  }
+  .table-row { transition: background 0.15s ease; }
+  .table-row:hover { background: #f8fafc; }
+  .animate-fade-in { animation: fadeIn 0.4s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .tab-active { border-bottom: 3px solid #3b82f6; color: #1e40af; font-weight: 600; }
+  .tab-inactive { color: #64748b; border-bottom: 3px solid transparent; }
+  .tab-inactive:hover { color: #1e40af; }
+  .search-input:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+  .modal-overlay { background: rgba(15,23,42,0.5); backdrop-filter: blur(4px); }
+  .month-card { transition: all 0.2s; cursor: pointer; }
+  .month-card:hover { transform: scale(1.02); }
+  .month-card.active { background: #eff6ff; border-color: #3b82f6 !important; box-shadow: 0 0 0 2px #3b82f6; }
+  .truncate-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  input, select, textarea { font-family: 'Inter', sans-serif; }
+  .btn-icon { transition: all 0.15s; }
+  .btn-icon:hover { transform: scale(1.15); }
+  .sticky-header { position: sticky; top: 0; z-index: 10; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Data tables: thin gridlines so columns read as a grid, and cell content
+     that lines up with the heading above it rather than drifting away from it. */
+  .grid-table { border-collapse: collapse; }
+  .grid-table th, .grid-table td { border: 1px solid #e5e7eb; }
+  .grid-table thead th { background: #f8fafc; position: relative; }
+  .grid-table tbody tr:hover td { background: #f8fafc; }
+  /* Sticky headers need their own background or rows show through them. */
+  .grid-table thead.sticky-header th { background: #f8fafc; }
+  /* Alignment is set once per column and applied to the th and its tds
+     together, so a right-aligned figure sits under a right-aligned title. */
+  .col-left   { text-align: left; }
+  .col-center { text-align: center; }
+  .col-right  { text-align: right; }
+
+  /* Rich-text areas in the proposal editor and the rendered document. */
+  .prose-mini ul, .prose-doc ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+  .prose-mini ol, .prose-doc ol { list-style: decimal; padding-left: 1.25rem; margin: 0.25rem 0; }
+  .prose-mini li, .prose-doc li { margin: 0.15rem 0; }
+  .prose-doc li { line-height: 1.45; }
+  .prose-mini:empty::before { content: 'Type details (use the toolbar for bold, lists and indents)'; color: #cbd5e1; }
+
+  /* THE PROPOSAL, AS PAGES.
+
+     js/proposal.paginate.js measures the document and deals it into these, so
+     each one is a real sheet that knows its own number and carries the running
+     header and footer the printed proposal has. What is on screen is therefore
+     what comes out of the printer - the same breaks, in the same places.
+
+     0.55in of padding is the letterhead margin; the header and footer sit
+     inside it. The body is what is left, and the paginator reads its height
+     rather than being told a number, so changing any of this here is enough. */
+  .doc-page {
+    width: 8.5in; height: 11in;
+    padding: 0.55in 0.6in 0.45in;
+    display: flex; flex-direction: column;
+    position: relative; overflow: hidden;
+    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.12);
+    margin: 0 auto 1.25rem;
+  }
+  .doc-page .doc-head { flex: 0 0 auto; padding-bottom: 0.18in; }
+  .doc-page .doc-head:not(:empty) { border-bottom: 1px solid rgba(100, 116, 139, 0.25); margin-bottom: 0.22in; }
+  .doc-page .doc-body { flex: 1 1 auto; min-height: 0; }
+  .doc-page .doc-foot { flex: 0 0 auto; padding-top: 0.14in; margin-top: 0.18in;
+                        border-top: 1px solid rgba(100, 116, 139, 0.25); }
+
+  /* Blocks carry their spacing as padding, never margin. Two adjacent margins
+     collapse into one, which would make a block's measured height depend on
+     what happened to precede it - and every measurement after a page break
+     would then be wrong. */
+  .doc-page .doc-body > * { margin-top: 0; margin-bottom: 0; }
+
+  /* The hidden pages the paginator works against. Inside the same host, so the
+     cascade that styles a real page styles these identically. */
+  .doc-probe { position: absolute; visibility: hidden; pointer-events: none;
+               left: -10000px; top: 0; }
+
+  /* Content is measured in a page that is free to grow, never in a real one.
+     scrollHeight never reports less than clientHeight, so inside a page of
+     fixed height every block short of a full sheet measures as the whole sheet
+     and the arithmetic is meaningless. This one has the same width - which is
+     what decides how text wraps, and therefore how tall it is - and no height
+     at all. */
+  .doc-measure { height: auto !important; overflow: visible !important; }
+  .doc-measure .doc-body { flex: 0 0 auto; }
+
+  /* POP-OUT: a window opened with ?popout=1 shows one page and a slim bar.
+     Driven by a body class so the rules live here rather than in inline styles
+     scattered through js/nav.js. */
+  body.popout header.app-header,
+  body.popout .module-bar-row,
+  body.popout .sub-menu-bar,
+  body.popout footer { display: none !important; }
+  body:not(.popout) #popoutHeader { display: none !important; }
+  body.popout main { padding-top: 1rem !important; }
+
+  /* PROJECT VIEW: one project, full screen. While you are estimating a job the
+     other five modules are noise and the takeoff needs the width, so the same
+     treatment as a pop-out - minus the footer, which the project bar replaces. */
+  body.projectview header.app-header,
+  body.projectview .module-bar-row,
+  body.projectview .sub-menu-bar,
+  body.projectview footer { display: none !important; }
+  body:not(.projectview) #projectHeader { display: none !important; }
+  body.projectview main { padding-top: 1rem !important; max-width: none !important; }
+
+  /* PRINT: only the proposal document goes on paper. */
+  @media print {
+    /* No browser margin: each .doc-page already carries its own, and a second
+       one on top would push every sheet onto the next and leave a trail of
+       blank pages behind it. */
+    @page { size: letter; margin: 0; }
+    body { background: #fff !important; }
+    body.printing-proposal header.app-header,
+    body.printing-proposal #projectHeader,
+    body.printing-proposal .no-print,
+    body.printing-proposal section.month-nav,
+    body.printing-proposal section.kpi-row,
+    body.printing-proposal .tab-bar,
+    body.printing-proposal footer,
+    body.printing-proposal #toastHost { display: none !important; }
+    body.printing-proposal main { padding: 0 !important; max-width: none !important; }
+    body.printing-proposal .no-print-grid { display: block !important; }
+    #proposalDoc {
+      width: auto !important; box-shadow: none !important; margin: 0 !important;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    /* Dark styles must keep their background on paper. */
+    #proposalDoc, #proposalDoc * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* One .doc-page is one sheet. The breaks were decided when the document was
+       measured, so the browser is told exactly where to cut rather than being
+       left to guess - and the last page must not push out an empty one. */
+    .doc-page { box-shadow: none !important; margin: 0 !important; break-after: page; }
+    .doc-page-last { break-after: auto; }
+    .doc-probe { display: none !important; }
+  }
+</style>
+</head>
+<body class="min-h-screen bg-slate-100">
+
+<div id="toastHost" class="fixed bottom-6 right-6 z-[100] space-y-2"></div>
+
+<!-- Shown until the local database has opened, then replaced by a failure panel if it cannot -->
+<div id="bootOverlay" class="fixed inset-0 z-[200] bg-slate-100 flex items-center justify-center">
+  <div class="text-center">
+    <i class="fas fa-circle-notch fa-spin text-3xl text-blue-500 mb-3"></i>
+    <p class="text-sm text-slate-500">Opening local database...</p>
+  </div>
+</div>
+
+<!-- Only appears when IndexedDB is unavailable and we have fallen back -->
+<div id="storageWarning" class="hidden bg-amber-100 border-b border-amber-300 text-amber-900 text-sm px-4 py-2.5"></div>
+
+<!-- Only appears when another tab wrote while this one had focus in a field -->
+<div id="externalChangeBar" class="hidden bg-blue-100 border-b border-blue-300 text-blue-900 text-sm px-4 py-2.5 flex items-center gap-3">
+  <i class="fas fa-info-circle"></i>
+  <span class="flex-1 change-message">This project was changed in another tab. Your unsaved edits are still here.</span>
+  <button onclick="App.reloadFromDisk()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold">Reload</button>
+  <button onclick="App.dismissExternalChange()" class="px-2 py-1 text-blue-700 hover:text-blue-900 text-xs">Dismiss</button>
+</div>
+
+<!-- Slim bar shown only in a popped-out window (?popout=1) -->
+<header id="popoutHeader" class="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between gap-4 shadow-lg"></header>
+
+<!-- The project page's own bar: back, project identity, its three tabs and
+     the Award action. Rendered by js/project.js. -->
+<header id="projectHeader" class="bg-slate-900 text-white px-4 sm:px-6 py-3 flex items-center justify-between gap-4 shadow-lg sticky top-0 z-40"></header>
+
+<!-- Header -->
+<header class="app-header bg-slate-900 text-white shadow-xl">
+  <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <!-- The logo carries the company name, so the heading beside it only has
+           to name the app. Sparks are painted on the canvas behind, on hover -
+           see js/sparks.js. The canvas is decorative and never takes a click. -->
+      <div id="bannerStage" class="banner-stage relative flex items-center gap-4 sm:gap-5 py-1">
+        <canvas id="sparkCanvas" aria-hidden="true" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+        <img src="assets/diverse-logo.png" alt="DiVerse Industrial Solutions"
+             class="banner-logo relative h-16 sm:h-20 w-auto select-none" draggable="false">
+        <div class="relative hidden sm:block h-12 w-px bg-white/15"></div>
+        <h1 class="relative text-xl sm:text-2xl font-semibold tracking-tight text-slate-200">Project Management</h1>
+      </div>
+      <!-- Save / Load act on the whole database, so they stay global. Anything
+           that only makes sense for one module lives in that module's toolbar.
+           Rendered by js/app.js from one table, because which of them a role may
+           use is a permission and not something to spell out in markup. -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <div id="headerActions" class="flex items-center gap-2 flex-wrap"></div>
+        <!-- Who is signed in, and their menu. Empty when the app is running off
+             a file with no server and therefore nobody to be. -->
+        <div id="userChip"></div>
+      </div>
+    </div>
+    <!-- Module bar: the six top-level sections, rendered from Nav.MENU -->
+    <div class="module-bar-row mt-4">
+      <div id="moduleBar" class="flex gap-1 overflow-x-auto scrollbar-hide pb-3"></div>
+    </div>
+  </div>
+</header>
+
+<!-- Sub-menu for the active module, plus that module's own actions -->
+<div id="subMenuBar" class="sub-menu-bar bg-white border-b border-slate-200 shadow-sm">
+  <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-3">
+    <div id="subMenuTabs" class="flex overflow-x-auto scrollbar-hide"></div>
+    <div id="subMenuToolbar" class="flex items-center gap-2 flex-wrap py-2"></div>
+  </div>
+</div>
+
+<input type="file" id="projectFileInput" accept=".json" class="hidden"
+       onchange="if(this.files[0])App.loadProject(this.files[0])">
+<input type="file" id="proposalTemplateInput" accept=".json" class="hidden"
+       onchange="if(this.files[0]){Proposal.loadTemplate(this.files[0]);this.value=''}">
+<input type="file" id="catalogCsvInput" accept=".csv" class="hidden"
+       onchange="if(this.files[0]){RateLib.importCSV(this.files[0]);this.value=''}">
+
+<main class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+  <!-- DASHBOARD: the month overview, the KPI cards and the charts. These used
+       to sit outside <main> and were therefore on screen under every tab. -->
+  <div id="section-dashboard" class="hidden animate-fade-in">
+    <div class="glass rounded-xl p-4 shadow-lg border border-white/50 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-600 uppercase tracking-wider"><i class="fas fa-calendar-alt mr-2"></i>Month Overview <span class="text-blue-600">2026</span></h3>
+        <button onclick="Bids.showAll()" class="text-xs text-blue-600 hover:text-blue-800 font-medium px-3 py-1 bg-blue-50 rounded-lg transition">View All</button>
+      </div>
+      <div class="grid grid-cols-6 md:grid-cols-12 gap-2" id="monthGrid"></div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      <div class="glass rounded-xl p-5 shadow-lg card-hover border border-white/50">
+        <div class="w-9 h-9 bg-blue-100 rounded-lg flex items-center justify-center mb-2"><i class="fas fa-clipboard-list text-blue-600 text-sm"></i></div>
+        <p class="text-2xl font-bold text-slate-800" id="kpiTotal">0</p>
+        <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider font-medium">Total Bids</p>
+      </div>
+      <div class="glass rounded-xl p-5 shadow-lg card-hover border border-white/50">
+        <div class="w-9 h-9 bg-indigo-100 rounded-lg flex items-center justify-center mb-2"><i class="fas fa-paper-plane text-indigo-600 text-sm"></i></div>
+        <p class="text-2xl font-bold text-slate-800" id="kpiSubmitted">0</p>
+        <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider font-medium">Submitted</p>
+      </div>
+      <div class="glass rounded-xl p-5 shadow-lg card-hover border border-white/50">
+        <div class="w-9 h-9 bg-amber-100 rounded-lg flex items-center justify-center mb-2"><i class="fas fa-spinner text-amber-600 text-sm"></i></div>
+        <p class="text-2xl font-bold text-slate-800" id="kpiProgress">0</p>
+        <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider font-medium">In Progress</p>
+      </div>
+      <div class="glass rounded-xl p-5 shadow-lg card-hover border border-white/50">
+        <div class="w-9 h-9 bg-emerald-100 rounded-lg flex items-center justify-center mb-2"><i class="fas fa-trophy text-emerald-600 text-sm"></i></div>
+        <p class="text-2xl font-bold text-slate-800" id="kpiAwarded">0</p>
+        <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider font-medium">Awarded</p>
+      </div>
+      <div class="glass rounded-xl p-5 shadow-lg card-hover border border-white/50">
+        <div class="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center mb-2"><i class="fas fa-dollar-sign text-slate-600 text-sm"></i></div>
+        <p class="text-2xl font-bold text-slate-800" id="kpiValue">$0</p>
+        <p class="text-xs text-slate-500 mt-1 uppercase tracking-wider font-medium">Total Value</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
+        <h3 class="text-lg font-bold text-slate-800 mb-4"><i class="fas fa-chart-bar text-blue-500 mr-2"></i>Monthly Bid Volume</h3>
+        <canvas id="monthChart" height="200"></canvas>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
+        <h3 class="text-lg font-bold text-slate-800 mb-4"><i class="fas fa-chart-pie text-blue-500 mr-2"></i>Status Distribution</h3>
+        <canvas id="statusChart" height="200"></canvas>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
+        <h3 class="text-lg font-bold text-slate-800 mb-4"><i class="fas fa-layer-group text-blue-500 mr-2"></i>Material Distribution</h3>
+        <canvas id="materialChart" height="200"></canvas>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
+        <h3 class="text-lg font-bold text-slate-800 mb-4"><i class="fas fa-map-marker-alt text-blue-500 mr-2"></i>Regional Distribution</h3>
+        <canvas id="regionChart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- BID LIST: one section serving All Bids, Active Bids and Awarded Bids.
+       They differ only by which statuses they admit, so they share the toolbar
+       and the grid rather than keeping three near-identical copies in sync. -->
+  <div id="section-bidlist" class="hidden animate-fade-in">
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-6 border border-slate-200 flex flex-wrap gap-3 items-center">
+      <div class="relative flex-1 min-w-[200px]">
+        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+        <input type="text" id="searchActive" placeholder="Search projects, regions, products, engineers..."
+          class="search-input w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 transition" onkeyup="Bids.filterTable()">
+      </div>
+      <select id="filterStatus" onchange="Bids.filterTable()" class="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none"></select>
+      <select id="filterRegion" onchange="Bids.filterTable()" class="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none"></select>
+      <select id="filterMonth" onchange="Bids.filterTable()" class="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none">
+        <option value="">All Months</option>
+        <option value="0">January</option><option value="1">February</option><option value="2">March</option>
+        <option value="3">April</option><option value="4">May</option><option value="5">June</option>
+        <option value="6">July</option><option value="7">August</option><option value="8">September</option>
+        <option value="9">October</option><option value="10">November</option><option value="11">December</option>
+      </select>
+      <button onclick="BidGrid.openColumns(event)" title="Choose which columns to show"
+              class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm hover:border-blue-400 transition flex items-center gap-2">
+        <i class="fas fa-table-columns text-slate-500"></i> Columns
+        <span id="gridFilterBadge" class="hidden px-1.5 bg-blue-600 text-white rounded-full text-[10px] font-bold"></span>
+      </button>
+    </div>
+
+    <!-- Header, rows, sorting, per-column filters and the column selector are
+         all rendered by js/bidgrid.js from one column-definition array. -->
+    <div id="bidsGridHost"></div>
+  </div>
+
+  <!-- PROJECT VIEW: Overview, plus TakeOff and Proposal, which keep their own
+       hosts below. js/nav.js puts body.projectview on for all three. -->
+  <div id="section-project" class="hidden animate-fade-in"></div>
+  <div id="section-takeoff" class="hidden animate-fade-in"></div>
+  <div id="section-proposal" class="hidden animate-fade-in"></div>
+
+  <!-- SETTINGS: the rail plus whichever panel is showing. Rate Library and
+       References render into their own hosts exactly as before; they just live
+       inside this shell now. -->
+  <div id="settingsShell" class="hidden grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
+    <aside id="settingsRail"></aside>
+    <div class="min-w-0">
+      <div id="section-settings" class="hidden animate-fade-in"></div>
+      <div id="section-ratelib" class="hidden animate-fade-in"></div>
+      <div id="section-references" class="hidden animate-fade-in"></div>
+    </div>
+  </div>
+
+  <!-- Modules not built yet. Rendered by js/nav.js so the placeholder text is
+       written once rather than four times. -->
+  <div id="section-production" class="hidden animate-fade-in"></div>
+  <div id="section-inventory" class="hidden animate-fade-in"></div>
+  <div id="section-report" class="hidden animate-fade-in"></div>
+  <div id="section-scheduler" class="hidden animate-fade-in"></div>
+</main>
+
+<footer class="bg-white border-t border-slate-200 mt-12">
+  <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+      <p class="text-sm text-slate-500">Bid Proposal Manager &copy; 2026. Confidential.</p>
+      <div class="flex gap-4 text-sm text-slate-500 items-center">
+        <span><i class="fas fa-database mr-1 text-blue-500"></i> <span id="totalRecords">0</span> Records</span>
+        <span id="saveIndicator"><i class="fas fa-clock mr-1 text-slate-400"></i>Ready</span>
+        <button id="resetButton" onclick="App.resetAll()" class="hidden text-xs text-slate-300 hover:text-red-500">Reset</button>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<!-- ADD/EDIT BID MODAL -->
+<div id="bidModal" class="fixed inset-0 modal-overlay hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-fade-in">
+    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+      <h2 class="text-xl font-bold text-slate-800" id="modalTitle">Add New Bid</h2>
+      <button onclick="Bids.closeModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center transition"><i class="fas fa-times text-slate-500"></i></button>
+    </div>
+    <form id="bidForm" onsubmit="Bids.save(event)" class="p-6 space-y-6">
+      <input type="hidden" id="editId">
+      <!-- A new bid is identified by nothing but its name and its place in the
+           list: the Sr. No. is the row's position, and the Proposal No. is not
+           assigned until the bid is picked up (see #proposalNoBlock below). -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="md:col-span-2">
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Project Name *</label>
+          <input type="text" id="mProject" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none" placeholder="Enter project name">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Portal *</label>
+          <select id="mPortal" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none">
+            <option>PlanHub</option><option>ConstructConnect</option><option>BuildingConnected</option><option>PennBid</option><option>SmartBid</option><option>Other</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Region/County *</label>
+          <select id="mRegion" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none"></select>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Product <span class="text-slate-400 normal-case font-normal">(select one or more)</span></label>
+          <div class="bg-slate-50 border border-slate-200 rounded-lg p-2 focus-within:border-blue-400">
+            <div id="mProductChips" class="flex flex-wrap gap-1 mb-2 min-h-[22px] items-center"></div>
+            <select id="mProductAdd" onchange="Bids.onProductChange(this)" class="w-full px-2 py-1.5 bg-white border border-slate-200 rounded text-sm outline-none focus:border-blue-400"></select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Material</label>
+          <select id="mMaterial" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none">
+            <option value="">Select Material</option>
+            <option>Carbon steel</option><option>Aluminum</option><option>Stainless steel</option><option>Glass</option><option>Wood</option><option>Galvanized Steel</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Bid Price ($)</label>
+          <input type="number" step="any" id="mPrice" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none" placeholder="0">
+          <label class="flex items-center gap-1.5 mt-1.5 text-[11px] text-slate-500"><input type="checkbox" id="mPriceLocked"> Lock &mdash; don't overwrite from takeoff</label>
+        </div>
+      </div>
+      <!-- Numbers a bid only earns by progressing. Hidden entirely on a new bid
+           and on one still sitting in All Bids: a project is not identified by a
+           proposal number until somebody has picked it up and is going to write
+           the proposal. Bids.openAdd / Bids.edit toggle it. -->
+      <div id="proposalNoBlock" class="hidden border border-slate-200 rounded-xl p-4">
+        <h3 class="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Active stage
+          <span class="text-slate-400 normal-case font-normal">&mdash; assigned once the bid is picked up</span></h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Proposal No.</label>
+            <!-- The project's identity: unique across the register, and carried
+                 onto its takeoff and its proposal document. Bids.save refuses a
+                 duplicate rather than letting two projects share one. -->
+            <input type="text" id="mProposalNo" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono focus:border-blue-400 outline-none" placeholder="DIS-P-1042">
+            <div class="text-[11px] mt-1 text-slate-400">Unique &middot; goes on the proposal</div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Job No.</label>
+            <!-- Issued on award, never typed -->
+            <div id="awardNoHint" class="text-sm min-h-[38px] flex items-center"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- The first pass, made while the bid is still on All Bids. These are
+           NOT the project's hours: once a bid is picked up, the effort is
+           recorded per engineer on the Team & Hours card. Labelled so it is
+           obvious which stage the number you are typing belongs to. -->
+      <div class="border border-slate-200 rounded-xl p-4">
+        <div class="flex items-baseline justify-between gap-3 mb-3 flex-wrap">
+          <h3 class="text-xs font-bold text-slate-600 uppercase tracking-wider">First pass <span class="text-slate-400 normal-case font-normal">&mdash; the intake review, on All Bids</span></h3>
+          <div id="teamHrsHint" class="text-[11px] text-slate-500"></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Engineer <span class="text-slate-400 normal-case font-normal">(initials)</span></label>
+            <input type="text" id="mEngineer" list="engineerOptions" autocomplete="off" oninput="Bids.onEngineerChange(this)"
+                   class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none uppercase" placeholder="e.g. AF">
+            <datalist id="engineerOptions"></datalist>
+            <div id="engineerHint" class="text-[11px] mt-1 min-h-[16px]"></div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Estimation Hrs</label>
+            <input type="number" step="0.5" id="mEstHrs" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none" placeholder="0">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Assigned Hrs</label>
+            <input type="number" step="0.5" id="mAssignedHrs" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none" placeholder="0">
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Due Date <span class="text-slate-400 normal-case font-normal">(MM-DD-YYYY)</span></label>
+          <div class="relative">
+            <input type="text" id="mDueDate" placeholder="MM-DD-YYYY" maxlength="10" inputmode="numeric" autocomplete="off"
+                   class="w-full px-3 py-2 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none">
+            <input type="date" id="mDueDate__picker" tabindex="-1" aria-hidden="true" class="absolute opacity-0 pointer-events-none w-0 h-0 right-8 bottom-0">
+            <button type="button" onclick="U.openDatePicker('mDueDate')" tabindex="-1" title="Open calendar"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600"><i class="fas fa-calendar-alt text-xs"></i></button>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Status *</label>
+          <!-- Options come from Bids.STATUSES. Awarded and Lost are outcomes of
+               the Award/Lost decision, which issues the job number, so they are
+               not offered here - see Bids.populateStatusSelect. -->
+          <select id="mStatus" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none"></select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Platform Link</label>
+          <input type="url" id="mLink" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none" placeholder="https://...">
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Comments</label>
+        <textarea id="mComments" rows="2" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-blue-400 outline-none resize-none" placeholder="Additional notes..."></textarea>
+      </div>
+      <div class="flex justify-end gap-3 pt-4 border-t border-slate-100">
+        <button type="button" onclick="Bids.closeModal()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition">Cancel</button>
+        <button type="submit" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition shadow-lg shadow-blue-200"><i class="fas fa-save mr-2"></i>Save Bid</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- DUPLICATE PROJECT NAME. Two bids can legitimately share a name - a rebid, a
+     second package - so this warns rather than refuses. It is raised when the
+     bid is picked up, because finding out afterwards means the estimating has
+     already been done twice. -->
+<div id="duplicateModal" class="fixed inset-0 modal-overlay hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-6 animate-fade-in">
+    <div class="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      <i class="fas fa-clone text-amber-600 text-2xl"></i>
+    </div>
+    <h3 class="text-lg font-bold text-slate-800 mb-2 text-center">Same project name already exists</h3>
+    <p class="text-sm text-slate-500 mb-4 text-center" id="duplicateCount"></p>
+    <div id="duplicateList" class="space-y-2 mb-4"></div>
+    <p class="text-xs text-slate-500 mb-6 text-center">
+      Add <span id="duplicateProject" class="font-semibold text-slate-700"></span> to Active Bids anyway?
+      It goes on as a separate project and needs its own Proposal No.
+    </p>
+    <div class="flex justify-center gap-3">
+      <button onclick="Bids.cancelAddToActive()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition">Cancel</button>
+      <button onclick="Bids.confirmAddToActive()" class="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-medium transition">Add anyway</button>
+    </div>
+  </div>
+</div>
+
+<!-- AWARD / LOST CONFIRMATION. One modal for both outcomes: they are the same
+     decision, and two near-identical confirmations would drift apart. The copy
+     and the colours come from Bids.DECISIONS. Award names the number before it
+     is issued, because a job number that has been on paper is never reissued. -->
+<div id="decisionModal" class="fixed inset-0 modal-overlay hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-fade-in text-center">
+    <div id="decisionIconWrap" class="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      <i id="decisionIcon" class="fas fa-trophy text-emerald-600 text-2xl"></i>
+    </div>
+    <h3 class="text-lg font-bold text-slate-800 mb-2" id="decisionTitle">Move to Awarded?</h3>
+    <p class="text-sm text-slate-500 mb-1"><span id="decisionProject" class="font-semibold text-slate-700"></span>
+      <span id="decisionNumberLabel">will be given job number</span></p>
+    <p class="text-xl font-mono font-bold text-emerald-700 mb-3 hidden" id="decisionNumberRow">
+      <span id="decisionNumber">DIS-26-0001</span></p>
+    <p class="text-xs text-slate-500 mb-6" id="decisionNote"></p>
+    <div class="flex justify-center gap-3">
+      <button onclick="Bids.closeDecisionModal()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition">Cancel</button>
+      <button id="decisionConfirm" onclick="Bids.confirmDecision()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition">Award</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE CONFIRMATION -->
+<div id="deleteModal" class="fixed inset-0 modal-overlay hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-fade-in text-center">
+    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      <i class="fas fa-exclamation-triangle text-red-500 text-2xl"></i>
+    </div>
+    <h3 class="text-lg font-bold text-slate-800 mb-2">Delete Bid?</h3>
+    <p class="text-sm text-slate-500 mb-6">This also removes the bid's takeoff and proposal. This cannot be undone.</p>
+    <div class="flex justify-center gap-3">
+      <button onclick="Bids.closeDeleteModal()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition">Cancel</button>
+      <button onclick="Bids.confirmDelete()" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Data (first-run seeds and assets lifted from the source files) -->
+<script src="js/seed.js"></script>
+<script src="js/references.seed.js"></script>
+<script src="js/catalog.seed.js"></script>
+<script src="js/proposal.styles.js"></script>
+<script src="js/proposal.defaults.js"></script>
+<!-- Application -->
+<script src="js/util.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/remote.js"></script>
+<script src="js/store.js"></script>
+<script src="js/nav.js"></script>
+<script src="js/rates.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/bidgrid.js"></script>
+<script src="js/references.js"></script>
+<script src="js/ratespanel.js"></script>
+<script src="js/takeoff.model.js"></script>
+<script src="js/takeoff.js"></script>
+<script src="js/proposal.paginate.js"></script>
+<script src="js/proposal.js"></script>
+<script src="js/ratelib.js"></script>
+<script src="js/bids.js"></script>
+<script src="js/assignments.js"></script>
+<script src="js/project.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/sparks.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

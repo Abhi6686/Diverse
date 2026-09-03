@@ -1,0 +1,33 @@
+{
+  "name": "diverse-project-management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DiVerse Industrial Solutions - bid, takeoff and proposal management",
+  "main": "serve.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning serve.js",
+    "import": "node --disable-warning=ExperimentalWarning tools/import-json.js",
+    "test": "node --disable-warning=ExperimentalWarning tests/api.js && node tests/verify-lancaster.js && node tests/smoke.js && node --disable-warning=ExperimentalWarning tests/sync.js",
+    "test:api": "node --disable-warning=ExperimentalWarning tests/api.js",
+    "test:sync": "node --disable-warning=ExperimentalWarning tests/sync.js",
+    "test:ui": "node tests/smoke.js",
+    "test:costs": "node tests/verify-lancaster.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "fake-indexeddb": "*",
+    "jsdom": "*"
+  },
+  "//": [
+    "No runtime dependencies on purpose. SQLite is node:sqlite, built into Node 22;",
+    "the HTTP server and Server-Sent Events are node:http. jsdom and fake-indexeddb",
+    "are only needed to run the browser tests: npm install --no-save jsdom fake-indexeddb",
+    "",
+    "--disable-warning=ExperimentalWarning silences the one notice node:sqlite prints.",
+    "It is not silencing anything else, and the flag becomes unnecessary on Node 24",
+    "where node:sqlite is stable."
+  ]
+}

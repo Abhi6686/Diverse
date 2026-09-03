@@ -1,0 +1,30 @@
+# dependencies (zero runtime deps; devDeps are fetched for tests, not committed)
+node_modules/
+
+# live application data - never commit real bid/user data
+diverse.db
+diverse.db-shm
+diverse.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# scratch / local working files
+.scratch/
+*.log
+
+# client reference documents (local only, not part of the app)
+Bid\ Proposal_Lancaster\ Township.pdf
+Bid\ Proposal_Lancaster\ Township*.pdf
+Estimation_Lancaster\ Township.xlsx
+Takeoff_Lancaster\ Township.pdf
+Diverse\ Bid\ management\ update.docx
+Bid\ Proposal\ v3\ 1.html
+Bid_Proposal_Manager_2026\ \(1\).html
+image\ \(52\).png
+image\ \(53\).png
+qt=q_95.png
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
