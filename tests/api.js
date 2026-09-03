@@ -84,9 +84,9 @@ const patch = (p, body) => send('PATCH', p, body);
 const del = (p) => send('DELETE', p);
 
 /* Sign in and keep the cookie. Returns the identity so a test can swap back. */
-async function signIn(email, password) {
+async function signIn(username, password) {
   cookie = null;
-  const r = await post('/login', { email, password });
+  const r = await post('/login', { username, password });
   return { ok: r.status === 200, cookie, body: r.body };
 }
 
@@ -144,11 +144,14 @@ async function run() {
   r = await post('/changes', { changes: [{ kind: 'bid', id: 99, json: { id: 99, project: 'X' } }] });
   check('and so are writes', r.status === 401, String(r.status));
 
-  r = await post('/setup', { name: 'Ada', email: 'ada@diverse.test', initials: 'AL', password: 'short' });
+  r = await post('/setup', { name: 'Ada', username: 'ada', initials: 'AL', password: 'short' });
   check('a weak first password is refused', r.status === 400, JSON.stringify(r.body));
 
+  r = await post('/setup', { name: 'Ada Lovelace', password: 'letmein123' });
+  check('a missing username is refused', r.status === 400, JSON.stringify(r.body));
+
   r = await post('/setup', {
-    name: 'Ada Lovelace', email: 'ada@diverse.test', initials: 'al', password: 'letmein123'
+    name: 'Ada Lovelace', username: 'ada', email: 'ada@diverse.test', initials: 'al', password: 'letmein123'
   });
   check('the first administrator is created', r.status === 200, JSON.stringify(r.body));
   check('and is signed in straight away', !!cookie, String(cookie));
@@ -156,7 +159,7 @@ async function run() {
     r.body.user.permissions.length + ' of ' + r.body.catalogue.length);
   ADMIN = cookie;
 
-  r = await post('/setup', { name: 'Sneak', email: 'sneak@x.test', password: 'letmein123' });
+  r = await post('/setup', { name: 'Sneak', username: 'sneak', password: 'letmein123' });
   check('setup cannot be used a second time to mint another admin', r.status === 409, String(r.status));
 
   r = await get('/session');
@@ -175,7 +178,7 @@ async function run() {
   // change log everything else goes through.
   const seq0 = r.body.seq;
   check('and a seq to start counting from', seq0 >= 1, String(seq0));
-  check('bootstrap carries the signed-in person', r.body.user.email === 'ada@diverse.test');
+  check('bootstrap carries the signed-in person', r.body.user.username === 'ada');
 
   console.log('\n--- writing ---');
   r = await post('/changes', {
@@ -335,15 +338,19 @@ async function run() {
 
   console.log('\n--- accounts ---');
   cookie = ADMIN;
-  r = await post('/users', { name: 'Grace H', email: 'grace@diverse.test', initials: 'GH', password: 'passw0rd1' });
-  check('an admin can create an employee', r.status === 200, JSON.stringify(r.body));
+  r = await post('/users', { name: 'Grace H', username: 'grace', initials: 'GH', password: 'passw0rd1' });
+  check('an admin can create an employee with no email at all', r.status === 200, JSON.stringify(r.body));
   check('who lands in the Employee role by default', r.body.user.role === 'Employee', r.body.user.role);
+  check('and has no email on file', r.body.user.email === '', JSON.stringify(r.body.user));
   const graceId = r.body.user.id;
 
-  r = await post('/users', { name: 'Dup', email: 'GRACE@diverse.test', password: 'passw0rd1' });
-  check('an email address cannot be used twice, whatever the case', r.status === 409, String(r.status));
+  r = await post('/users', { name: 'Dup', username: 'GRACE', password: 'passw0rd1' });
+  check('a username cannot be used twice, whatever the case', r.status === 409, String(r.status));
 
-  r = await post('/users', { name: 'Bad', email: 'not-an-email', password: 'passw0rd1' });
+  r = await post('/users', { name: 'Bad', username: 'no', password: 'passw0rd1' });
+  check('a too-short username is refused', r.status === 400, String(r.status));
+
+  r = await post('/users', { name: 'Bad', username: 'grace2', email: 'not-an-email', password: 'passw0rd1' });
   check('a malformed email is refused', r.status === 400, String(r.status));
 
   r = await get('/users');
@@ -351,19 +358,19 @@ async function run() {
     JSON.stringify(r.body.users).indexOf('pw_') < 0 && !('pwHash' in r.body.users[0]),
     JSON.stringify(r.body.users[0]));
 
-  const signedIn = await signIn('grace@diverse.test', 'passw0rd1');
-  check('the employee can sign in', signedIn.ok, JSON.stringify(signedIn.body));
+  const signedIn = await signIn('grace', 'passw0rd1');
+  check('the employee can sign in by username', signedIn.ok, JSON.stringify(signedIn.body));
   EMPLOYEE = cookie;
   check('and gets fewer permissions than the admin',
     signedIn.body.user.permissions.length < r.body.roles.find(x => x.name === 'Admin').permissions.length,
     String(signedIn.body.user.permissions.length));
 
-  const wrong = await signIn('grace@diverse.test', 'not-it');
+  const wrong = await signIn('grace', 'not-it');
   check('a wrong password is refused', !wrong.ok);
   check('and does not say whether the account exists',
     /do not match/.test(wrong.body.error), wrong.body.error);
-  const nobody = await signIn('nobody@diverse.test', 'passw0rd1');
-  check('an unknown address gets the identical message',
+  const nobody = await signIn('nobody', 'passw0rd1');
+  check('an unknown username gets the identical message',
     nobody.body.error === wrong.body.error, nobody.body.error);
 
   console.log('\n--- what an employee may and may not do ---');
@@ -468,7 +475,7 @@ async function run() {
   cookie = EMPLOYEE;
   r = await get('/bootstrap');
   check('their session stops working immediately', r.status === 401, String(r.status));
-  const back = await signIn('grace@diverse.test', 'passw0rd1');
+  const back = await signIn('grace', 'passw0rd1');
   check('and they cannot sign back in', !back.ok && /deactivated/.test(back.body.error),
     JSON.stringify(back.body));
 
@@ -480,7 +487,7 @@ async function run() {
   check('and the old token is revoked, not merely forgotten', r.status === 401, String(r.status));
 
   // Back in as the admin for anything that follows.
-  await signIn('ada@diverse.test', 'letmein123');
+  await signIn('ada', 'letmein123');
   ADMIN = cookie;
 
   console.log('\n--- persistence across a restart ---');

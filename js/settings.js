@@ -194,7 +194,8 @@
         '<div class="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Add someone</div>' +
         '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
           inp('newUserName', 'Full name', 'text', '') +
-          inp('newUserEmail', 'Email address', 'email', '') +
+          inp('newUserUsername', 'Username', 'text', '') +
+          inp('newUserEmail', 'Email address (optional)', 'email', '') +
           inp('newUserInitials', 'Initials', 'text', 'maxlength="6" style="text-transform:uppercase"') +
           '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Role</label>' +
             '<select id="newUserRole" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400">' +
@@ -205,8 +206,9 @@
             '<button onclick="Settings.addUser()" class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition">' +
               '<i class="fas fa-user-plus mr-1.5"></i>Create account</button></div>' +
         '</div>' +
-        '<p class="text-[11px] text-slate-400 mt-2">At least 8 characters, with a letter and a number. ' +
-        'They can change it from the menu under their name.</p>' +
+        '<p class="text-[11px] text-slate-400 mt-2">Username: 3-32 characters, letters, numbers, dots, ' +
+        'underscores or hyphens. Password: at least 8 characters, with a letter and a number. ' +
+        'They can change their password from the menu under their name.</p>' +
       '</div>' +
 
       '<div class="space-y-2">' + people.users.map(userRow).join('') + '</div>';
@@ -232,7 +234,8 @@
           (me ? '<span class="ml-1.5 text-[10px] font-normal text-blue-600">you</span>' : '') +
           (u.active ? '' : '<span class="ml-1.5 text-[10px] font-normal text-slate-500">deactivated</span>') +
         '</div>' +
-        '<div class="text-[11px] text-slate-500 truncate">' + U.esc(u.email) + '</div>' +
+        '<div class="text-[11px] text-slate-500 truncate">@' + U.esc(u.username) +
+          (u.email ? ' &middot; ' + U.esc(u.email) : '') + '</div>' +
       '</div>' +
       '<input value="' + U.escAttr(u.initials || '') + '" maxlength="6" placeholder="INI" ' +
         'onchange="Settings.setUserField(' + u.id + ',\'initials\',this.value)" ' +
@@ -432,6 +435,7 @@
     addUser: function () {
       root.Auth.createUser({
         name: U.$('newUserName').value.trim(),
+        username: U.$('newUserUsername').value.trim(),
         email: U.$('newUserEmail').value.trim(),
         initials: U.$('newUserInitials').value.trim(),
         roleId: Number(U.$('newUserRole').value),
@@ -473,7 +477,7 @@
 
     resetUserPassword: function (id) {
       var u = people.users.filter(function (x) { return x.id === id; })[0] || {};
-      var pw = prompt('New password for ' + u.name + ' (' + u.email + ')\n\n' +
+      var pw = prompt('New password for ' + u.name + ' (@' + u.username + ')\n\n' +
         'At least 8 characters, with a letter and a number. Tell it to them in person;\n' +
         'they can change it themselves from the menu under their name.');
       if (pw === null || pw === '') return;

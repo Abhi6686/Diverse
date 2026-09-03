@@ -217,7 +217,7 @@ async function handle(req, res, ctx) {
 
     if (route === '/api/login' && req.method === 'POST') {
       const body = (await readBody(req)) || {};
-      const out = auth.login(body.email, body.password);
+      const out = auth.login(body.username, body.password);
       json(res, 200, { user: publicSelf(out.user), catalogue: perms.PERMISSIONS },
         { 'Set-Cookie': auth.cookieHeader(out.session.token, out.session.expires) });
       return true;
@@ -415,7 +415,7 @@ async function handle(req, res, ctx) {
    anybody else's details. */
 function publicSelf(u) {
   return {
-    id: u.id, email: u.email, name: u.name, initials: u.initials || '',
+    id: u.id, username: u.username, email: u.email || '', name: u.name, initials: u.initials || '',
     roleId: u.roleId, role: u.role, permissions: u.permissions
   };
 }
@@ -423,7 +423,8 @@ function publicSelf(u) {
 function sessionOf(userId) {
   const row = auth.userById(userId);
   return {
-    id: row.id, email: row.email, name: row.name, initials: row.initials || '',
+    id: row.id, username: row.username, email: row.email || '', name: row.name,
+    initials: row.initials || '',
     roleId: row.role_id, role: row.role_name,
     permissions: auth.permsOfRole(row.role_id)
   };

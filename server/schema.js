@@ -192,6 +192,58 @@ const STEPS = [
         for (const p of perms.ROLE_DEFAULTS[name]) insertPerm.run(id, p);
       }
     }
+  },
+
+  {
+    version: 3,
+    name: 'sign in by username; email becomes optional',
+    up: function (db) {
+      /* SQLite cannot relax a NOT NULL/UNIQUE constraint or insert a new
+         NOT NULL UNIQUE column in place, so the table is rebuilt - the
+         standard SQLite recipe for this. The replacement is built under a
+         throwaway name and swapped in by dropping the original and renaming
+         the replacement over it, rather than renaming the original out of the
+         way first: doing it that way round leaves sessions' REFERENCES
+         clause silently rewritten to point at the now-dropped name, which
+         breaks every session the moment this transaction commits. */
+      db.exec(`
+        CREATE TABLE users_new (
+          id           INTEGER PRIMARY KEY,
+          /* What is typed to sign in. Not email: the office does not hand an
+             email address to everyone who needs to log a bid. */
+          username     TEXT COLLATE NOCASE UNIQUE NOT NULL,
+          email        TEXT COLLATE NOCASE UNIQUE,
+          name         TEXT NOT NULL,
+          initials     TEXT COLLATE NOCASE,
+          role_id      INTEGER NOT NULL REFERENCES roles(id),
+          pw_hash      TEXT NOT NULL,
+          pw_salt      TEXT NOT NULL,
+          active       INTEGER NOT NULL DEFAULT 1,
+          created_at   TEXT NOT NULL,
+          last_seen_at TEXT
+        );
+      `);
+
+      // Every existing account gets a username derived from its email, so
+      // nobody already on the system is locked out the day this ships. Two
+      // emails sharing a local part are numbered apart.
+      const old = db.prepare('SELECT * FROM users').all();
+      const insert = db.prepare(
+        'INSERT INTO users_new (id, username, email, name, initials, role_id, pw_hash, ' +
+        'pw_salt, active, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+      const taken = new Set();
+      for (const u of old) {
+        const base = String(u.email || u.name || 'user').split('@')[0]
+          .toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
+        let candidate = base, n = 1;
+        while (taken.has(candidate)) candidate = base + (++n);
+        taken.add(candidate);
+        insert.run(u.id, candidate, u.email, u.name, u.initials, u.role_id,
+          u.pw_hash, u.pw_salt, u.active, u.created_at, u.last_seen_at);
+      }
+      db.exec('DROP TABLE users');
+      db.exec('ALTER TABLE users_new RENAME TO users');
+    }
   }
 ];
 
@@ -239,20 +291,31 @@ function migrate(db, log) {
   const pending = STEPS.filter(s => s.version > from);
   if (!pending.length) return from;
 
-  for (const step of pending) {
-    db.exec('BEGIN');
-    try {
-      step.up(db);
-      db.prepare('INSERT INTO meta(key, value) VALUES(?, ?) ' +
-        'ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-        .run('schemaVersion', String(step.version));
-      db.exec('COMMIT');
-      if (log) log('  schema -> v' + step.version + '  ' + step.name);
-      from = step.version;
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw new Error('Schema step ' + step.version + ' (' + step.name + ') failed: ' + e.message);
+  /* Off for the whole migration, not just the steps that rebuild a table:
+     PRAGMA foreign_keys is a no-op inside a transaction, so it has to be set
+     before BEGIN, and a table rebuild (the only way SQLite can relax a
+     column's constraints) needs it off or two things go wrong at once - a
+     rename silently rewrites *other* tables' REFERENCES clauses to the old
+     name, and dropping the referenced table cascade-deletes their rows. */
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    for (const step of pending) {
+      db.exec('BEGIN');
+      try {
+        step.up(db);
+        db.prepare('INSERT INTO meta(key, value) VALUES(?, ?) ' +
+          'ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+          .run('schemaVersion', String(step.version));
+        db.exec('COMMIT');
+        if (log) log('  schema -> v' + step.version + '  ' + step.name);
+        from = step.version;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw new Error('Schema step ' + step.version + ' (' + step.name + ') failed: ' + e.message);
+      }
     }
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
   return from;
 }

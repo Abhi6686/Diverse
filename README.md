@@ -11,8 +11,12 @@ office network use — that is the one to give the team.
 
 **The first person to open it creates the first administrator.** There is no default password
 anywhere in this app: the setup screen appears once, on a database with no accounts, and asks
-for a name, an email address and a password. Everyone else is created by an administrator from
+for a name, a username and a password. Email is optional - it is not needed to sign in, and not
+everyone in the office has one. Everyone else is created by an administrator from
 **Settings › People**.
+
+**Sign-in is by username, not email.** A username is 3-32 characters: letters, numbers, dots,
+underscores or hyphens.
 
 **Everyone shares one database.** The server keeps it in `diverse.db` beside the app; every
 browser on the network is a window onto the same records, and an edit made on one machine
@@ -623,7 +627,7 @@ or one at a time:
 
 ```
 npm run test:costs   # cost maths vs the workbook, to the cent
-npm run test:api     # 97 checks: schema, conflicts, uniqueness, the change log, accounts
+npm run test:api     # 100 checks: schema, conflicts, uniqueness, the change log, accounts
 npm run test:ui      # 521 checks driving the app in a real DOM
 npm run test:sync    # 37 checks: two browsers, two people, one server, live
 ```

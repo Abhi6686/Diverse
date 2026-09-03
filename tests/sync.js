@@ -173,6 +173,7 @@ async function main() {
     // Driven through the real form rather than the API, so the screen people
     // actually see on day one is the thing under test.
     A.U.$('authName').value = 'Ada Lovelace';
+    A.U.$('authUsername').value = 'ada';
     A.U.$('authEmail').value = 'ada@diverse.test';
     A.U.$('authInitials').value = 'AL';
     A.U.$('authPassword').value = 'letmein123';
@@ -204,7 +205,7 @@ async function main() {
     // People panel calls.
     const made = await jarFetch(jarA, ORIGIN, '/api/users', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Grace H', email: 'grace@diverse.test',
+      body: JSON.stringify({ name: 'Grace H', username: 'grace',
         initials: 'GH', password: 'passw0rd1' })
     }).then(r => r.json());
     check('the admin can create an employee', !!made.user, JSON.stringify(made));
@@ -213,7 +214,7 @@ async function main() {
     const B = await openBrowser(ORIGIN, 'client B', jarB);
     check('a second browser is asked to sign in, not to set up',
       B.Auth.mode === 'login', B.Auth.mode);
-    B.U.$('authEmail').value = 'grace@diverse.test';
+    B.U.$('authUsername').value = 'grace';
     B.U.$('authPassword').value = 'passw0rd1';
     B.Auth.submitLogin({ preventDefault() {} });
     await wait(1600);

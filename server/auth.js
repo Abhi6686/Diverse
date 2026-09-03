@@ -70,11 +70,26 @@ function checkPasswordStrength(password) {
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME = /^[a-zA-Z0-9._-]{3,32}$/;
 
+/* Email is optional now, so an empty value is not an error - it means "no
+   email on file", which comes back as null rather than ''. */
 function checkEmail(email) {
   const e = String(email == null ? '' : email).trim().toLowerCase();
+  if (!e) return null;
   if (!EMAIL.test(e)) throw new AuthError(400, 'That does not look like an email address.');
   return e;
+}
+
+/* What is typed to sign in. Not email: not everyone in the office has one. */
+function checkUsername(username) {
+  const u = String(username == null ? '' : username).trim();
+  if (!u) throw new AuthError(400, 'A username is required.');
+  if (!USERNAME.test(u)) {
+    throw new AuthError(400,
+      'A username needs 3-32 characters: letters, numbers, dots, underscores or hyphens only.');
+  }
+  return u;
 }
 
 /* ---- roles ------------------------------------------------------------- */
@@ -193,7 +208,7 @@ function deleteRole(roleId) {
 function publicUser(row) {
   if (!row) return null;
   return {
-    id: row.id, email: row.email, name: row.name,
+    id: row.id, username: row.username, email: row.email || '', name: row.name,
     initials: row.initials || '', roleId: row.role_id,
     role: row.role_name || (roleRow(row.role_id) || {}).name || '',
     active: !!row.active,
@@ -208,8 +223,14 @@ function userById(id) {
   return handle().prepare(USER_SELECT + 'WHERE u.id = ?').get(Number(id));
 }
 
+function userByUsername(username) {
+  return handle().prepare(USER_SELECT + 'WHERE u.username = ?').get(String(username || '').trim());
+}
+
 function userByEmail(email) {
-  return handle().prepare(USER_SELECT + 'WHERE u.email = ?').get(String(email).trim().toLowerCase());
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return null;
+  return handle().prepare(USER_SELECT + 'WHERE u.email = ?').get(e);
 }
 
 function listUsers() {
@@ -241,10 +262,12 @@ function assertNotLastAdmin(userId, what) {
 }
 
 function createUser(input) {
+  const username = checkUsername(input.username);
   const email = checkEmail(input.email);
   const name = String(input.name || '').trim();
   if (!name) throw new AuthError(400, 'A person needs a name.');
-  if (userByEmail(email)) throw new AuthError(409, email + ' already has an account.');
+  if (userByUsername(username)) throw new AuthError(409, '"' + username + '" is already taken.');
+  if (email && userByEmail(email)) throw new AuthError(409, email + ' already has an account.');
 
   const role = input.roleId ? roleRow(input.roleId) : roleByName('Employee');
   if (!role) throw new AuthError(400, 'No such role.');
@@ -254,9 +277,9 @@ function createUser(input) {
   const initials = String(input.initials || '').trim().toUpperCase();
 
   const info = handle().prepare(
-    'INSERT INTO users (email, name, initials, role_id, pw_hash, pw_salt, active, created_at) ' +
-    'VALUES (?,?,?,?,?,?,?,?)')
-    .run(email, name, initials || null, role.id, pw.hash, pw.salt,
+    'INSERT INTO users (username, email, name, initials, role_id, pw_hash, pw_salt, active, created_at) ' +
+    'VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(username, email, name, initials || null, role.id, pw.hash, pw.salt,
       input.active === false ? 0 : 1, now());
 
   return publicUser(userById(Number(info.lastInsertRowid)));
@@ -266,10 +289,18 @@ function updateUser(userId, patch, actor) {
   const u = userById(userId);
   if (!u) throw new AuthError(404, 'No such person.');
 
+  if (patch.username !== undefined) {
+    const username = checkUsername(patch.username);
+    const clash = userByUsername(username);
+    if (clash && clash.id !== u.id) throw new AuthError(409, '"' + username + '" is already taken.');
+    handle().prepare('UPDATE users SET username = ? WHERE id = ?').run(username, u.id);
+  }
   if (patch.email !== undefined) {
     const email = checkEmail(patch.email);
-    const clash = userByEmail(email);
-    if (clash && clash.id !== u.id) throw new AuthError(409, email + ' already has an account.');
+    if (email) {
+      const clash = userByEmail(email);
+      if (clash && clash.id !== u.id) throw new AuthError(409, email + ' already has an account.');
+    }
     handle().prepare('UPDATE users SET email = ? WHERE id = ?').run(email, u.id);
   }
   if (patch.name !== undefined) {
@@ -365,11 +396,11 @@ function sweep() {
   handle().prepare('DELETE FROM sessions WHERE expires_at < ?').run(now());
 }
 
-function login(email, password) {
-  const row = userByEmail(String(email || ''));
+function login(username, password) {
+  const row = userByUsername(String(username || ''));
   // The same message either way. "No such account" tells anyone who asks which
-  // addresses have accounts here.
-  const wrong = new AuthError(401, 'That email address and password do not match.');
+  // usernames have accounts here.
+  const wrong = new AuthError(401, 'That username and password do not match.');
   if (!row) {
     // Still spend the time, so a missing account cannot be told from a wrong
     // password by how quickly the answer comes back.
@@ -389,7 +420,7 @@ function login(email, password) {
    resolved permission list so nothing downstream has to query again. */
 function sessionUser(row) {
   return {
-    id: row.id, email: row.email, name: row.name,
+    id: row.id, username: row.username, email: row.email || '', name: row.name,
     initials: row.initials || '',
     roleId: row.role_id, role: row.role_name || (roleRow(row.role_id) || {}).name || '',
     permissions: permsOfRole(row.role_id)
@@ -464,10 +495,10 @@ function can(user, perm) {
 
 module.exports = {
   AuthError, COOKIE,
-  hashPassword, verifyPassword, checkPasswordStrength, checkEmail,
+  hashPassword, verifyPassword, checkPasswordStrength, checkEmail, checkUsername,
   listRoles, roleRow, roleByName, permsOfRole, createRole, updateRole, deleteRole,
   setRolePermissions, lastRoleWith,
-  listUsers, userById, userByEmail, publicUser, anyUsers, otherAdmins,
+  listUsers, userById, userByUsername, userByEmail, publicUser, anyUsers, otherAdmins,
   createUser, updateUser, deleteUser, setupFirstAdmin,
   login, startSession, revoke, revokeAllFor, sweep,
   currentUser, cookieToken, cookieHeader, clearedCookieHeader,

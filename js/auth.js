@@ -18,7 +18,7 @@
 
   var U = root.U;
 
-  var user = null;          // { id, name, email, initials, role, permissions }
+  var user = null;          // { id, name, username, email, initials, role, permissions }
   var catalogue = [];       // the permission list, for the Roles screen
   var mode = 'solo';        // 'solo' (no server) | 'setup' | 'login' | 'in'
   var pending = null;       // resolve() of the promise begin() handed back
@@ -134,7 +134,7 @@
     return shell('fa-right-to-bracket', 'DiverSe Project Management',
       'Sign in to reach the shared bid register.',
       '<form onsubmit="Auth.submitLogin(event)">' +
-        field('authEmail', 'Email address', 'email', 'autocomplete="username" required') +
+        field('authUsername', 'Username', 'text', 'autocomplete="username" required') +
         field('authPassword', 'Password', 'password', 'autocomplete="current-password" required') +
         '<button type="submit" id="authSubmit" ' +
           'class="w-full mt-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg ' +
@@ -153,7 +153,8 @@
       'This database has no accounts yet. Create the first administrator.',
       '<form onsubmit="Auth.submitSetup(event)">' +
         field('authName', 'Your name', 'text', 'required') +
-        field('authEmail', 'Email address', 'email', 'autocomplete="username" required') +
+        field('authUsername', 'Username', 'text', 'autocomplete="username" required') +
+        field('authEmail', 'Email address (optional)', 'email', 'autocomplete="email"') +
         field('authInitials', 'Initials on the bids table', 'text',
           'maxlength="6" placeholder="e.g. MGJ" style="text-transform:uppercase"') +
         field('authPassword', 'Password', 'password', 'autocomplete="new-password" required') +
@@ -202,7 +203,7 @@
              'border border-slate-200 py-1.5 z-50 text-slate-700">' +
           '<div class="px-3 py-2 border-b border-slate-100">' +
             '<div class="text-xs font-semibold text-slate-800 truncate">' + U.esc(user.name) + '</div>' +
-            '<div class="text-[11px] text-slate-500 truncate">' + U.esc(user.email) + '</div>' +
+            '<div class="text-[11px] text-slate-500 truncate">' + U.esc(user.email || '@' + user.username) + '</div>' +
           '</div>' +
           menuItem('fa-key', 'Change my password', 'Auth.changePassword()') +
           menuItem('fa-table-columns', 'Reset my table layout', 'Auth.resetLayout()') +
@@ -260,7 +261,7 @@
       api('/login', {
         method: 'POST',
         body: JSON.stringify({
-          email: U.$('authEmail').value.trim(),
+          username: U.$('authUsername').value.trim(),
           password: U.$('authPassword').value
         })
       }).then(admitted).catch(function (e) {
@@ -283,6 +284,7 @@
         method: 'POST',
         body: JSON.stringify({
           name: U.$('authName').value.trim(),
+          username: U.$('authUsername').value.trim(),
           email: U.$('authEmail').value.trim(),
           initials: U.$('authInitials').value.trim(),
           password: pw
@@ -320,7 +322,7 @@
     },
 
     changePassword: function () {
-      var next = prompt('New password for ' + user.email +
+      var next = prompt('New password for ' + user.username +
         '\n\nAt least 8 characters, with a letter and a number:');
       if (next === null) return;
       var again = prompt('Type it once more:');
