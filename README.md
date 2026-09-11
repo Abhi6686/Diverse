@@ -22,8 +22,28 @@ underscores or hyphens.
 browser on the network is a window onto the same records, and an edit made on one machine
 appears on the others without a refresh.
 
-No dependencies. SQLite is `node:sqlite`, built into Node 22; the web server and the live
-updates are `node:http`. Needs **Node 22.5 or newer**.
+No runtime dependencies. SQLite is `node:sqlite`, built into Node 22; the web server and the
+live updates are `node:http`. Needs **Node 22.5 or newer**.
+
+### Changing how it looks
+
+The stylesheet is built rather than fetched. `assets/tailwind.css` is compiled from the class
+names used in the HTML and in `js/`, and it is **committed** — so a machine that has never run
+`npm install` still serves a fully styled app.
+
+```
+npm run build:css     # after adding or changing a class name
+npm run watch:css     # rebuild as you edit
+```
+
+If you add a class and the styling does not appear, that is the rebuild you missed. Only class
+names the compiler can *see* get shipped, which means a class name has to appear in the source
+as a complete string: `'bg-' + tone + '-600'` produces nothing, and `'bg-emerald-600'` written
+out in full works. The existing code already follows this rule.
+
+Colours are named for their job, not their shade — `bg-surface`, `text-muted`, `border-line`,
+`bg-brand`. What each one resolves to, in both the light and the dark theme, is
+`assets/tokens.css`. That is the only file in the app that names an actual colour.
 
 Other ways to start it:
 
@@ -83,14 +103,20 @@ A few things worth knowing:
   last person to type the winner.
 - **Two people editing one bid do not silently overwrite each other.** Every record carries a
   revision; the second save is refused, the server's version is shown, and the app says so.
-- **Proposal No. and Job No. are unique in the database itself**, not only in the form that
-  types them. A check in the browser can be raced by two machines; a constraint cannot.
+- **The project number is unique in the database itself**, not only in the form that types it.
+  A check in the browser can be raced by two machines; a constraint cannot.
 - **Dropping the connection is cheap.** Every change has a sequence number, so a browser that
   reconnects asks for what it missed rather than reloading everything.
 - **Your column layout is yours.** It is a preference, not a record, so it is saved against
   your account rather than shared — and because it is against the account and not the browser,
   it is waiting for you on whichever machine you sit at. **Reset my table layout** is in the
   menu under your name.
+- **You can see who else is in a project.** The server already knew who was connected; it now
+  also knows what each of them has open, because each window says so. A project somebody else
+  is looking at is marked in the bids table and on the project's own header, with their
+  initials — live, appearing and clearing as people come and go. Nobody is locked out and
+  nothing is blocked: it is so you can ask before you both start, and the revision check above
+  is still what actually prevents a lost edit.
 
 ## Accounts, roles and access
 
@@ -172,6 +198,52 @@ Six top-level modules, of which one is built:
 | **Bid Management** | The working module: All Bids, Active Bids, Awarded Bids |
 | Production Manager, Inventory Manager, Report Manager, Scheduler | Placeholders — each says so plainly rather than showing a mock-up |
 
+### Where it opens, and the guide
+
+**Opening the app and reloading it are different events, and they get opposite answers.** A new
+tab or window lands on the **Dashboard** — the state of the office. Pressing F5 keeps you
+exactly where you were, including which project and which of its tabs, because a reload is not
+a decision to go somewhere else.
+
+The page you were on is remembered *per tab*, so two windows on two projects each reload onto
+their own. It used to be remembered per person, saved with your column layouts — which meant
+leaving the app on a proposal reopened it inside that document every time, and on a shared
+machine a brand-new account inherited the last page of whoever used the browser before them.
+
+**The sign-in page welds the mark into place.** DiVerse fabricate and install miscellaneous
+metals, so the logo is laid down rather than merely displayed: an arc travels across it with
+sparks coming off the seam, the metal behind cools from white-hot to its own colour, sparks
+that reach the floor bounce and skitter, and the company's own two lines — *Trust Through
+Quality Work*, *Safety is our foundation* — come up as it finishes.
+
+**The depth is real, not drawn.** The scene is a CSS `perspective` stage with the plate, the
+drawing grid, the mark and the spark canvas at different `translateZ`, and the mark itself is
+ten copies of the artwork stacked backwards in z, each a shade darker — so rotating the stage
+shows the *side* of the letters, because there is one. Nothing here fakes dimension with a skew
+and a drop shadow; the browser is doing the projection. On top of that: a slow idle float so it
+is alive when nobody is touching it, pointer parallax that separates the planes as you move, a
+specular sweep masked to the artwork so the highlight travels across the letters rather than
+over the box they sit in, a laid-back reflection on the plate, and a hair of blur on the
+backdrop.
+
+The weld runs about two and a half seconds and then stops; clicking the mark runs it again, as
+does **Replay**. After that only CSS animates — no JavaScript frame loop ticks while somebody
+is typing a password. `prefers-reduced-motion: reduce` gets the finished mark with its depth
+and no motion at all, a hidden tab paints nothing, and a browser with no canvas gets the plain
+image. It is the same particle engine as the banner's hover sparks
+([js/sparks.js](js/sparks.js)), not a second one — see [js/intro.js](js/intro.js).
+
+**Signing in.** The password field has a reveal button, off by default: a password you cannot
+see on a shop-floor machine is a password you mistype, and this app already cost somebody a
+reset over it. Caps Lock is called out while the field has focus. A failed attempt keeps your
+username and clears only the password. And the hint under the button says what the field
+actually wants — your **username**, not your email address.
+
+**The ? button in the header opens the user guide** — every part of the app, what it does and
+how it is meant to be used. The sign-in screen carries the headline half of the same document,
+so somebody without an account can still find out what this is. Both are written in one place
+([js/guide.js](js/guide.js)); there is no second copy to go stale.
+
 ### The three bid tabs are three stages, not three filters
 
 | Tab | What is in it |
@@ -194,8 +266,16 @@ The number on each tab is what that tab holds, ignoring the search box and the c
 filters — it counts the list, not the view you have narrowed it to.
 
 That means a bid you enter with **Add Bid** starts in All Bids and takes one more click to
-reach Active Bids. Bids that existed before this change were all marked active, so nothing
-moved on upgrade.
+reach Active Bids.
+
+**Bids that existed before this change were all marked active**, so that the tab would not
+empty on upgrade — and that put the whole intake register on the working list, where ninety-odd
+enquiries nobody had picked up sat beside the handful actually being worked. Since a bid is
+issued its Proposal No. at the moment it is picked up, carrying a number is the test for having
+been picked up, and anything active without one has now been put back where it belongs.
+**Nothing was deleted**: those bids keep their team rows, hours, takeoffs and history, they are
+still in All Bids, and *Add to Active bid* brings any of them back — with a number this time. A
+bid with an outcome — Awarded, Lost, No Scope — is never moved by this, whatever its number.
 
 A bid leaves Active Bids when it is **Awarded** (it becomes a job) or marked **No Scope**
 (that verdict is reached at intake, so it should never have been picked up). A **Lost** bid
@@ -226,7 +306,7 @@ from:
 
 | From | What you get |
 |---|---|
-| **All Bids** | The record card and one action — **Add to Active bid**. No job number, no estimate, no proposal: none of it exists yet. If the bid is already active the button reads **Open in Active Bids** and takes you across |
+| **All Bids** | The record card and one action — **Add to Active bid**. No project number, no estimate, no proposal: none of it exists yet, and picking the bid up is what issues the number. If the bid is already active the button reads **Open in Active Bids** and takes you across |
 | **Active / Awarded Bids** | The workspace: **Overview**, **TakeOff**, **Proposal**, and the **Award ▾** decision |
 
 TakeOff and Proposal used to be tabs in Bid Management, which meant nothing on screen said
@@ -277,10 +357,233 @@ Two tabs were added alongside the bid tracker:
   material bill, the cost/labour block and the drawing-reference grid. A tree on the left
   shows every product, its component groups and its rolled-up cost, ending in the project's
   Total Bid Cost.
-- **Proposal** — the client-facing document in all 9 styles from `Bid Proposal v3 1.html`,
-  generated from a takeoff and printed to PDF with Ctrl+P.
+- **Proposal** — the client-facing document, generated from a takeoff and printed to PDF with
+  Ctrl+P. Thirteen styles: the original nine from `Bid Proposal v3 1.html`, plus four typeset
+  ones added later —
+
+  | | | |
+  |---|---|---|
+  | **10 · Serif Letterhead** | serif throughout, generous leading | reads as a professional-services letter |
+  | **11 · Engineering Document** | titleblock header, monospaced figures, ruled tables | familiar to anyone who reads shop drawings |
+  | **12 · Modern Accent** | mostly white, wide margins, one accent colour | contemporary and quiet |
+  | **13 · Lancaster** | a reproduction of the PDF the shop already sends | the default for new proposals |
+
+  The original nine are **frozen** — proposals already sent to clients were printed under
+  them, and changing one would change a document somebody has on file. The later four work by
+  adding a single key the others do not have, so the nine render byte-identically.
+
+  **13 · Lancaster** is Style 3 of the v3 app, which is what printed
+  `Bid Proposal_Lancaster Township.pdf`. It is not an impression of that document: every size
+  and weight was read back out of the v3 bundle's own class strings and cross-checked against
+  the PDF's embedded fonts and point sizes, converted at the 1px = 0.75pt Chrome prints at.
+  Its typography follows one rule, which is what keeps four levels of hierarchy on a page
+  without it looking like a poster:
+
+  | Face | Used for |
+  |---|---|
+  | **Inter** 800 | structure only — section headings and scope-item titles |
+  | **Segoe UI** 400–900 | everything a person reads: the letterhead, the details grid, `BID PROPOSAL`, the slogan, all prose |
+  | **Consolas** | money only — line prices and the total |
+
+  Money is the one place a monospace earns its keep, because a column of figures lines up on
+  the digit. A reference number or a project name is read once, not compared down a column,
+  so it sits with the prose — which is why the proposal number and the project name beside it
+  are now in the same face, and why the letterhead is one face rather than three.
 
 Plus a **Rate Library** page, under Settings, holding the parts catalog and the labour/equipment rates.
+
+### One number, for the project's life
+
+**`DIS-26-0001` is issued the moment a bid is picked up** — All Bids → Active Bids — and it
+never changes again. It is the Proposal No. printed on the document that goes to the client,
+and it is still the number the job is known by after it is won. The sequence restarts each
+January and a number is never reissued, not even if the bid it belonged to is deleted.
+
+It used to be issued at award, as a separate Job No. That was too late to be any use: the
+proposal that won the job had already gone out under whatever number somebody typed by hand.
+There is no second number now, and no Job No. column.
+
+The number is editable — sometimes it has to be made to match one already sent — and it is
+unique across the register, on the screen and in the database.
+
+### Dates and times
+
+**Stored dates come in two kinds, and they are not interchangeable.**
+
+- A **calendar date** — a due date, an award date — is stored `YYYY-MM-DD` and shown
+  `MM-DD-YYYY`. The 22nd is the 22nd everywhere; it never goes through a timezone.
+- A **moment** — when a bid was created, every history entry, a takeoff's last edit — is
+  stored as a UTC timestamp and **always displayed in IST**, labelled, whatever the machine
+  reading it is set to. The office is in India, and a timestamp in an audit log that quietly
+  means something else on a laptop that has travelled is worse than no timestamp.
+
+This was previously got wrong: every reader took the date off the front of the UTC string,
+which is the **previous day** for anything between midnight and 05:30 IST. A bid entered at
+02:00 showed as the day before, for five and a half hours out of every twenty-four.
+
+`U.date` formats the first kind, `U.stamp` the second. Reach for the right one.
+
+### The schedule — who is booked, and when
+
+**Hours are booked against days.** Adding an engineer to a task on the **Team & Hours** card
+gives a start date — the day the task was created — three working days to book against, and an
+*Add day* button for longer tasks. The day boxes start empty: nobody has booked anything to
+them yet, and a nought is not the same claim as a blank. Weekends are shown and shaded so the
+strip reads as a real calendar; *Add day* steps over them, but hours can still be put on one.
+
+A row that somehow arrives without a start date or any days — synced from a session running
+older code, restored from a backup taken before this existed — is laid out with both when the
+card draws it, rather than shown as a strip with nothing on it and no way in.
+
+**Asgn Hrs is the sum of those days** and is no longer typed. Estm Hrs still is — it is the
+estimate made up front, and the days are the booking made afterwards. Two different facts.
+Moving the start date slides the whole booking, keeping the hours on the same working day of
+the task: a job pushed back a week is the same plan, later.
+
+**Active Bids has a third view, Employee**, beside Comfortable and Compact. Each bid is a row
+with its engineers stacked, and a calendar to the right showing each person's hours per day.
+Actions, Sr. No. and Project hold still while everything else scrolls.
+
+**Engineer sits last, hard against the calendar** — after Status, immediately before the first
+date. Reading a figure back to the name it belongs to is what you do all day on this view, so
+the names are at the edge the dates start at rather than four columns away. It is placed there
+for you: the column chooser reorders everything else as usual, and Engineer's position on
+Comfortable and Compact is left exactly where you put it.
+
+- **Day, Week or Month** is how much calendar is on screen: today, this week, or this whole
+  month. The columns are always single days — a day is what hours are booked in, and the
+  question the view gets opened for is which day somebody is on. Zooming out shows more days,
+  not bigger buckets.
+- **Arrows page back and forward** by one of whatever is on screen, and *Today* returns.
+  The window is named above the calendar, year included, so a schedule you have paged three
+  months forward cannot mislead you about when it is. Where you paged to is not saved — the
+  zoom is a preference, but the view always opens on today.
+- **Every active bid is listed**, booked or not — the same list as the other two views, with a
+  calendar beside it. A bid nobody is on next week is exactly what you want to see when you are
+  deciding who to put on it. The bar says how many of them have anybody booked in the window,
+  and the footer how many hours that is.
+- **Hours booked to a row with no engineer** on it get a line of their own, marked
+  *unassigned*, so the figures in a cell always add up to the total underneath it.
+- **Every column you have arranged is here**, the same as on Comfortable and Compact — turn
+  them on and off in the column chooser as usual. Engineer is the exception, shown and placed
+  whatever the chooser says, because every calendar cell is a line per engineer and that column
+  is what says whose line is whose. The chooser marks it *(beside the calendar)* so it is clear
+  it is being placed rather than ignored. The schedule never writes to your saved layout.
+- **A heavy rule between projects, a hairline between people.** A row is several engineers
+  tall, so the two boundaries are drawn differently — read down the calendar and the heavy
+  rules are the projects.
+- **Cells tint by load** — deepening past three-quarters of capacity, and red over it — so an
+  overbooked day is visible without reading the figures. Capacity is eight hours per person
+  per working day.
+- **A totals row** carries the shop's booked hours per day. This is the row worth opening the
+  view for: it is where next week being overcommitted is visible at a glance.
+- **A rule down each Monday**, so a month of thirty-one columns still reads as weeks.
+- **The deadline is marked on the calendar** — a chequered flag on the day the project is due,
+  coloured for how close it is: overdue in red, within three days in amber, otherwise brand.
+  It follows the revised due date where the client has moved it, since that is the date the
+  project actually works to. The column heading counts how many projects are due that day, and
+  a deadline that falls outside the window shows as a ‹ or › on the edge it lies past rather
+  than not appearing at all.
+- **Filter the Engineer column to one person** and you have every project they are on, with
+  their hours across the calendar.
+
+### What else a bid now records
+
+- **When it arrived.** Every bid is stamped on entry with the date *and time*, in IST, and All
+  Bids is read in that order — the Created column takes the slot the number used to have
+  there, since nothing on that list has a number yet. Bids that predate the stamp show
+  `~ 06-10-2026` with no time: the tilde means the date was inferred, and there is no hour to
+  claim for a guess.
+- **The newest bid is at the top.** All three tabs rest in arrival order, newest first, with
+  the inferred backlog below the bids that were genuinely entered. Sorting by a column
+  overrides it; the third click on a header comes back here rather than dropping into the
+  order the records happen to be stored in.
+- **A revised due date**, optional, beside the original. Once set it is the date the project
+  works to *everywhere* — the grid, the sort, the month it is filed under, "due within 7 days"
+  on the dashboard, the XLSX export and the flag on the Employee schedule. One function decides
+  it, `Bids.effectiveDueDate`, so nothing can disagree about which date is in force.
+
+  **Due within 7 days** lists every bid it counts — the panel scrolls rather than showing the
+  first four under a count of eight — and it leaves out anything marked **Completed**. Completed
+  sits in the open bucket, because the work is done but the bid has not been won or lost, which
+  used to leave finished jobs reporting themselves overdue all week. *Submitted to review* still
+  appears: it is out there, and its deadline is still real.
+
+  **Both dates are shown, and neither is struck through.** The Due Date field shows the due
+  date; the Revised Due field shows the revision, marked *in force*. They used to be merged —
+  the Due Date box showed whichever was in force with the original crossed out beside it, which
+  put a value in that field that was not `bid.dueDate` and said the original had been cancelled.
+  It has not been: it is the date on the record, and the reason the revision is worth knowing
+  about. In the bids table the date in force leads and the original sits under it, labelled
+  `orig`.
+- **Everything that happens to it.** The **History** card is a full audit trail: the bid being
+  created, every field that changes and what it changed from, every change to the team or the
+  products, and every move between stages — each with who did it and when, in IST.
+
+  Any stage move can be undone with a note — an award rescinded, a bid picked up by mistake —
+  and the reversal is logged too. Reversing restores the status the bid actually had, because
+  the log recorded it. **The project number never moves**, whatever the stage does: it is on
+  paper already.
+
+  Two edits to the same field by the same person within two minutes are merged into one entry,
+  so correcting a price twice does not bury the change that mattered — and an edit undone
+  inside that window leaves no entry at all, because nothing happened. Deleting an entry needs
+  **bid.history.delete** and is itself recorded.
+- **Products with their materials.** A project is usually several products, each in its own
+  material — handrail in one, bollards in another. They are rows on the **Products &
+  Materials** card now, one product per row carrying its own materials, instead of a list of
+  products beside a single material select that could not say which was which. Materials are
+  a managed list under **Settings › Materials**.
+
+Deleting a history entry needs the new **bid.history.delete** permission (Admin only by
+default), and the deletion is itself recorded — the trail can be pruned, visibly, but not
+quietly emptied.
+
+### Editing
+
+**Click any field on the project page** to change it where you are reading it — a single click,
+or Enter from the keyboard; the pencil beside the label is always faintly there so you can see
+which fields take an edit without having to try. Enter commits, Escape reverts, **Tab saves and
+opens the next field**, and there are ✓ and ✕ buttons for the mouse. A date opens the calendar.
+
+The same rules the full form applies apply here: a duplicate project number is refused, a date
+that cannot exist is refused, and changing a due date re-files the bid under the right month.
+**A refused value now keeps the editor open and says why**, rather than being dropped when the
+field lost focus — which is what used to happen, silently, with the old value simply reappearing.
+
+Fields the app works out for itself — the hours, the products, the linear feet from the
+takeoff — are deliberately not editable, because the next recalculation would throw the edit
+away.
+
+### On the takeoff
+
+**Add other charge** now takes a quantity, a unit and a unit price, so a line reads as
+`2 Wks × $1,000` instead of a bare `2000` with the reasoning lost. A charge with just an
+amount still works exactly as before. The **U/M** on the standard Cost & Labour rows is
+editable too — supervision quoted by the week, a truck by the load — and only the exceptions
+are stored, so a row left alone keeps its default.
+
+### Looking at it
+
+- **Light or dark.** The sun/moon button in the header cycles light → dark → match the
+  system. It is your setting, stored with the rest of your layout, and it applies before the
+  page paints so a dark app never flashes white on the way in. The printed proposal is
+  deliberately exempt: it is paper, and it stays white under both themes and on the printer.
+- **The project name stays put.** The first columns of the bids table are frozen, so
+  scrolling right to reach Status no longer leaves you looking at a table of anonymous
+  figures. Every row is the same height, whatever is in it.
+- **One button per row, and it leads.** The Actions column is first now and frozen with the
+  project name, so reaching it no longer means scrolling the name off the screen. Everything
+  — the takeoff, the proposal, editing, awarding, moving a bid back, the portal link, delete
+  — is behind the **⋮** menu, named in words rather than guessed from an icon.
+- **Drag a column edge to resize it.** Double-click the grip to put one column back;
+  **Reset widths** in the Columns panel puts them all back. Widths are yours alone, saved
+  with your columns and filters.
+- **Comfortable or compact**, bottom right of the table. Remembered per tab, alongside your
+  columns and filters, and cleared by *Reset my table layout* like everything else.
+- **The dashboard leads with what is urgent**: bids due within seven days, and submitted
+  bids whose proposal was never generated. The twelve month cards became one strip of bars,
+  which is still the month filter — click one to narrow All Bids.
 
 ## Everyday flow
 
@@ -314,63 +617,73 @@ Every material row you save is folded into the catalog:
 
 ## The numbers on a bid
 
-Three, each doing one job.
+Two, each doing one job.
 
 ### Sr. No. — where the row is
 
-The first column. It counts the rows on screen, 1, 2, 3, and is **not stored on the bid**.
-That is deliberate: the ordinal it replaced was a saved value, so every deletion left a hole in
-it (1, 3, 4, 5…). A counter cannot fall out of sequence — it *is* the position, so it
-renumbers itself after a deletion and follows a re-sort. It is on all three tabs.
+The second column, after the actions. It counts the rows on screen, 1, 2, 3, and is **not
+stored on the bid**. That is deliberate: the ordinal it replaced was a saved value, so every
+deletion left a hole in it (1, 3, 4, 5…). A counter cannot fall out of sequence — it *is* the
+position, so it renumbers itself after a deletion and follows a re-sort. It is on all three
+tabs.
 
 Because it is positional it is not a name for anything. The number that identifies a project
 is the Proposal No.
 
-### Proposal No. — which project this is
+### Proposal No. — the project, for its whole life
 
-**Only asked for once the bid is active.** A bid that has just arrived is identified by its
-name and its place in the list, so the Add New Bid form does not have the field at all — and
-neither does editing a bid still sitting in All Bids. It appears, under **Active stage**,
-the moment the bid is picked up. (A number already on a record is preserved while hidden, not
-wiped.)
+`DIS-26-0001`. **Issued automatically the moment the bid is picked up**, All Bids → Active
+Bids, and never changed again.
 
-It is **unique across the whole register**: saving a bid whose
-Proposal No. is already on another one is refused, with a message naming the bid that holds
-it. The match ignores case and surrounding spaces, so `dis-p-1042` and `DIS-P-1042 ` count as
-the same number rather than sneaking past as two.
+- `26` is the year, and the sequence restarts each January — the first project of 2027 is
+  `DIS-27-0001`.
+- Allocated as *highest existing for that year + 1*. Deleting a project does not free its
+  number for reuse, because a number that has been on paper must never turn up on a second
+  one. Numbers issued under the old job-number scheme are counted too, so one of those can
+  never be handed out again either.
+- **Permanent through every stage.** Awarding confirms it rather than replacing it. Moving a
+  bid back to Active, or all the way back to All Bids, keeps it — it is on the proposal that
+  was sent.
+
+It is **unique across the whole register**: saving a bid whose Proposal No. is already on
+another is refused, with a message naming the bid that holds it, both in the form and when
+edited in place on the project page. The match ignores case and surrounding spaces, so
+`dis-26-0001` and `DIS-26-0001 ` count as the same number rather than sneaking past as two.
+The database enforces it as well as the form.
 
 It follows the project outward — a takeoff started on the bid picks it up, the generated
-proposal prints it, and changing it on the bid updates both rather than leaving a stale number
-on a document that has already gone out. One project, one number, everywhere it appears.
+proposal prints it, and changing it on the bid updates both rather than leaving a stale
+number on a document that has already gone out. **One project, one number, everywhere it
+appears.**
 
-Blank is allowed: a bid that has just arrived need not have one yet, and several blanks are
-not duplicates of each other.
+It is editable, because occasionally a number has to be made to match one already sent.
 
-### Job No. — which job this became
+### There is no Job No.
 
-Issued when a bid is **awarded**, of the form `DIS-26-0001`:
-
-- `26` is the year it was awarded, and the sequence restarts each year — the first award of
-  2027 is `DIS-27-0001`.
-- Allocated as *highest existing for that year + 1*. Deleting a job does not free its number
-  for reuse, because a number that has been on paper must never turn up on a second job.
-- **Permanent.** Moving a bid out of Awarded keeps it, and re-awarding does not renumber it.
+There used to be a second number, `DIS-26-0001`, issued at award. It is gone. That numbering
+*is* the Proposal No. now, issued earlier — at award the project simply keeps the number it
+already has. A bid that carried an old job number had it moved across on upgrade, since that
+is the number it was already known by.
 
 | Tab | Numbers shown |
 |---|---|
-| **All Bids** | Sr. No., Proposal No. |
+| **All Bids** | Sr. No., **Created** — nothing here has been picked up, so nothing has a number |
 | **Active Bids** | Sr. No., Proposal No. |
-| **Awarded Bids** | Sr. No., Job No., Proposal No. |
+| **Awarded Bids** | Sr. No., Proposal No. |
 
 ## Awarding, and losing
 
 **Award ▾** on the project page (and the 🏆 button in the Actions column) offers the two ways
 a bid stops being worked:
 
-- **Award** — issues the job number and moves the bid to Awarded Bids.
-- **Mark Lost** — issues nothing. Job numbers identify work we are actually doing.
+- **Award** — moves the bid to Awarded Bids, under the number it already has.
+- **Mark Lost** — the project keeps its number too: it is on the proposal that lost.
 
-Both ask first; the award names the number it is about to issue.
+Both ask first, and the award names the number the job is being won under.
+
+Either can be undone. **Move back to Active Bids** appears in the row menu and on the
+project page once a bid is decided; it asks for a note, restores the status the bid actually
+had before the decision, and is recorded in the bid history along with everything else.
 
 Awarded and Lost are **not** on the Add/Edit Bid form's status list. They are the outcome of
 this decision, which is also what issues the number, so they are not values you type. A bid
@@ -421,16 +734,52 @@ task so the hours can be pivoted by person or by task type.
 
 ## Exporting a takeoff to Excel
 
-**Export to Excel** under the Project Cost Summary writes the whole estimate as one workbook:
-a **Summary** sheet — the same rollup the rail shows, down to Total Bid Cost — then one
-worksheet per product, each with its materials, its cost and labour lines, and the drawing
-grid its quantities came from. Each product's ⋮ menu still exports that sheet on its own.
+**Export to Excel** under the Project Cost Summary writes the estimate into **the shop's own
+workbook** — its fonts, its colours, its borders and its column widths, not a bare grid of
+numbers. The sheets are:
+
+| | |
+|---|---|
+| **References** | the lookup lists, hidden as the template hides them |
+| **Project Cost Summary** | the same rollup the rail shows, down to Total Bid Cost |
+| one per product | materials, cost and labour lines, and the drawing grid the quantities came from |
+| **Weight Calculator** | hidden; the pipe and bar weight sheet |
+| **Factors** | the hours-per-LF and material-selection tables |
+
+Each product's ⋮ menu exports that product on its own, and still brings the lookup sheets
+and the summary with it — a sheet with nothing behind it can't be worked on.
+
+**The figures are live formulas, not a snapshot.** Line totals are `=Qty*Unit Cost`, Material
+Cost sums the column, the labour hours are the run length times the shop's factor, and the
+Project Cost Summary points at each product sheet's own Total Cost. Change a unit cost three
+sheets away and the bid total moves. The workbook is marked to recalculate when it opens, so
+nothing depends on the cached numbers being trusted.
+
+One exception, on purpose: a **material quantity** is a formula only where the estimator
+wrote one. A quantity typed into the takeoff comes out as the number that was typed. Putting
+a formula there would mean shipping a cell that silently disagrees with what somebody meant.
 
 The materials table has no **Options** column. It held an abbreviated restatement of the
 Description — `8" SCH 40` beside `Carbon Steel 8 SCH 40 PIPE A-500 GR B 8.625" OD .322 Thk.` —
 which meant typing the specification twice and gave the proposal the shorter of the two to
 print. The Description is what the client should read, so it is the one kept, and the
-proposal's spec bullets now read **feature — description**.
+proposal's spec bullets now read **feature — description**. The exported sheets are the
+template's columns with that one removed, so everything from Vendor rightwards sits one
+column to the left of where the old workbook had it.
+
+### Changing how the export looks
+
+Nothing about the formatting lives in the code. `js/estimate.template.js` is generated from
+the shop's workbook and carries its `styles.xml` verbatim, plus a map of which style belongs
+on which kind of row. To restyle the export, restyle the workbook and rebuild:
+
+```
+npm run build:xlsx-template          # reads Estimation_....xlsx, rewrites js/estimate.template.js
+npm run test:xlsx                    # unzips a fresh export and checks every formula
+```
+
+The test also rebuilds the generated file in memory and compares, so one that has fallen
+behind its source fails rather than quietly shipping last month's formatting.
 
 ## The Add / Edit Bid form
 
@@ -519,6 +868,15 @@ identifying fields, then the scope as ruled entries — title left, price right,
 bulleted underneath — a **TOTAL BID PRICE** panel, and the contract half behind a
 `CONTRACT DETAILS & TERMS` divider: Terms, Inclusions, Payment, then the signature line.
 
+**What the logo sits on is a choice of three** — none, white, or black — in the proposal
+generator's **Company** tab. It depends on how the logo file itself was drawn and not on
+taste: a logo with a white background needs the white card on a dark style, or it prints as a
+white rectangle in the corner; one drawn in white on transparent needs the black card on a
+light style, or it vanishes. The choice is kept with the company details, so it is the default
+for the next proposal as well. Documents saved before this carried a `frameLogo` boolean and
+still open framed in white, and templates written here still carry it — so a file moved to or
+from the v3 app behaves the same as it always did.
+
 **It is paginated into real letter-size pages,** each carrying the running header and its own
 `Page 3`. On screen you see the same sheets that come out of the printer, broken in the same
 places.
@@ -588,9 +946,21 @@ Date and Approval Deadline, every table, and the printed proposal.
 
 Date boxes are text fields rather than the browser's native date input, because that
 control renders in whatever order the browser's locale wants (dd-mm-yyyy here) and a page
-cannot override it. Type `09152026` and the dashes appear as you go; the calendar icon
-still opens the native picker. A date that does not exist (`02-30-2026`) turns the field
-red and blocks the save rather than being silently discarded.
+cannot override it. Type `09152026` and the dashes appear as you go. A date that does not exist
+(`02-30-2026`) turns the field red and blocks the save rather than being silently discarded.
+
+**The calendar behind the icon is the app's own** ([js/datepicker.js](js/datepicker.js)) and
+reads the same way round as the field it fills in. It used to be a hidden native date input,
+opened purely to borrow the browser's popup — so the field said MM-DD-YYYY and the calendar it
+opened said dd-mm-yyyy, on the same screen, for the same date. There is now no
+`input[type=date]` left anywhere in the app.
+
+- Arrows move a day, PageUp/PageDown a month, Enter picks, Escape closes.
+- **Today** and **Clear** are on the bottom row; today is ringed and the chosen day filled.
+- Weeks start **Sunday** — this is a wall calendar. The Employee schedule starts Monday because
+  that is a working week, which is a different question.
+- Opening the **Revised Due** calendar flags the original due date on the grid and starts on
+  that month, since the new date is chosen by moving the old one.
 
 Stored values stay ISO `YYYY-MM-DD`, so sorting and existing `.json` backups are unaffected.
 
@@ -681,6 +1051,10 @@ spot.
 | `js/bids.js` | the bid tracker: statuses, the three stages, promotion and the award/lost decision |
 | `js/assignments.js` | the Team & Hours rows and their totals |
 | `js/sparks.js` | the banner's welding sparks, on hover |
+| `js/guide.js` | the user guide, in one place — the sign-in page shows its headline half |
+| `js/intro.js` | the sign-in page's welded logo, on the spark engine below |
+| `js/datepicker.js` | the calendar behind every date field |
+| `js/presence.js` | who else has a project open, from the live stream |
 | `js/project.js` | the full-screen project page and its three stages |
 | `js/settings.js` | the Settings page: rail, Regions, Engineers, Company, People, Roles |
 | `js/ratelib.js` | Rate Library page |

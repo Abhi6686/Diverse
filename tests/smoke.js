@@ -36,15 +36,23 @@ const dom = new JSDOM(html, {
   url: 'file://' + HTML.replace(/\\/g, '/'),
   virtualConsole: vc,
   beforeParse(win) {
-    // jsdom has no localStorage under file://, and no execCommand.
-    const store = {};
-    Object.defineProperty(win, 'localStorage', {
-      value: {
-        getItem: k => (k in store ? store[k] : null),
-        setItem: (k, v) => { store[k] = String(v); },
-        removeItem: k => { delete store[k]; }
-      }
-    });
+    // jsdom has neither storage under file:// - the origin is opaque, and
+    // touching sessionStorage throws rather than returning null - nor
+    // execCommand. Both are stood up here, so the app is exercised on the same
+    // path a browser takes rather than on its private-mode fallbacks.
+    function shim(name) {
+      const store = {};
+      Object.defineProperty(win, name, {
+        value: {
+          getItem: k => (k in store ? store[k] : null),
+          setItem: (k, v) => { store[k] = String(v); },
+          removeItem: k => { delete store[k]; },
+          clear: () => { Object.keys(store).forEach(k => { delete store[k]; }); }
+        }
+      });
+    }
+    shim('localStorage');
+    shim('sessionStorage');
     // Real IndexedDB semantics, in memory - the app's primary storage path.
     win.indexedDB = new FDBFactory();
     win.IDBKeyRange = FDBKeyRange;
@@ -62,10 +70,11 @@ const dom = new JSDOM(html, {
 // them from file:// reliably across platforms.
 const win = dom.window;
 const localScripts = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js', 'js/proposal.styles.js',
-  'js/proposal.defaults.js', 'js/util.js', 'js/auth.js', 'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js',
-  'js/bidgrid.js', 'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js', 'js/takeoff.js',
-  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/project.js',
-  'js/settings.js', 'js/sparks.js', 'js/app.js'];
+  'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js',
+  'js/bidgrid.js', 'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js',
+  'js/xlsx.zip.js', 'js/estimate.template.js', 'js/estimate.xlsx.js', 'js/takeoff.js',
+  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
+  'js/settings.js', 'js/app.js'];
 
 // Wait until parsing has finished, otherwise app.js correctly defers its boot to
 // DOMContentLoaded and the assertions below would run against an empty page.
@@ -101,6 +110,31 @@ function waitFor(cond, what, timeoutMs = 5000) {
   });
 }
 
+/* An .xlsx the app just built, opened again. The exporter writes stored
+   entries, so there is nothing to inflate - this walks the central directory
+   the way any unzip tool would, which is the point: a header the writer got
+   wrong fails here and not in Excel. tests/estimate-xlsx.js does the thorough
+   version; this is enough to look at a sheet. */
+function unzipMem(bytes) {
+  const b = Buffer.from(bytes);
+  let end = b.length - 22;
+  while (end >= 0 && b.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < 0) throw new Error('the exported workbook is not a zip');
+  const count = b.readUInt16LE(end + 10);
+  let p = b.readUInt32LE(end + 16);
+  const out = {};
+  for (let i = 0; i < count; i++) {
+    const nameLen = b.readUInt16LE(p + 28);
+    const name = b.toString('utf8', p + 46, p + 46 + nameLen);
+    const lho = b.readUInt32LE(p + 42);
+    const size = b.readUInt32LE(p + 20);
+    const start = lho + 30 + b.readUInt16LE(lho + 26) + b.readUInt16LE(lho + 28);
+    out[name] = b.toString('utf8', start, start + size);
+    p += 46 + nameLen + b.readUInt16LE(p + 30) + b.readUInt16LE(p + 32);
+  }
+  return out;
+}
+
 /* Read the persisted state straight out of IndexedDB, bypassing the app. */
 function readState() {
   return new Promise((resolve, reject) => {
@@ -126,17 +160,44 @@ function gridRows() {
   // The "no bids match" placeholder is one row with a colspan; not a data row.
   return [...t.tBodies[0].querySelectorAll('tr')].filter(r => r.querySelectorAll('td').length > 1);
 }
+/* On the Employee view the last row is the shop's totals, which has as many
+   cells as a bid row and is not one. Bid rows carry .sched-row. */
+function schedRows() {
+  const t = gridEl();
+  return t ? [...t.tBodies[0].querySelectorAll('tr.sched-row')] : [];
+}
 
 async function run() {
 const { Store, Bids, Takeoff, Proposal, RateLib, Catalog, App, Nav, BidGrid,
-        Project, Settings, Assign, Rates, TakeoffModel: M, U } = win;
+        Project, Settings, Assign, Products, History, Schedule, Rates, TakeoffModel: M, UI, U } = win;
 
 console.log('--- boot ---');
 check('store initialised', !!Store.db);
 check('seed bids loaded (93)', Store.db.bids.length === 93, String(Store.db.bids.length));
 check('catalog seeded (60 parts)', Catalog.all().length === 60, String(Catalog.all().length));
-check('9 proposal styles present', Object.keys(win.PROPOSAL_STYLES).length === 9);
+check('13 proposal styles present', Object.keys(win.PROPOSAL_STYLES).length === 13,
+  String(Object.keys(win.PROPOSAL_STYLES).length));
+// The original nine are what proposals already sent to clients were printed
+// under. They are frozen: no typeface key, so they render exactly as before.
+check('the original nine are untouched by the typeset themes',
+  [1, 2, 3, 4, 5, 6, 7, 8, 9].every(i => win.PROPOSAL_STYLES[i].docFont === undefined),
+  [1, 2, 3, 4, 5, 6, 7, 8, 9].filter(i => win.PROPOSAL_STYLES[i].docFont).join(','));
+check('and the four typeset ones each name a typeface',
+  [10, 11, 12, 13].every(i => !!win.PROPOSAL_STYLES[i].docFont),
+  [10, 11, 12, 13].map(i => win.PROPOSAL_STYLES[i].docFont).join(','));
 check('KPI total rendered', U.$('kpiTotal').textContent === '93', U.$('kpiTotal').textContent);
+
+/* A FRESH DATABASE HAS NOTHING ON ACTIVE BIDS, and that is correct: the seed is
+   an intake register, and a bid reaches the working list when somebody picks it
+   up (see the schema 15 note in js/store.js). Most of what follows exercises the
+   working list, so the fixture puts the register on it - the flag directly,
+   rather than through Bids.addToActive, which would issue ninety-three proposal
+   numbers and write ninety-three history entries that the later tests would then
+   have to read around. Promotion itself is tested where it belongs. */
+check('a fresh database lists nothing as active - nobody has picked anything up',
+  Store.db.bids.every(b => !b.active));
+Store.db.bids.forEach(b => { b.active = true; });
+Bids.filterTable();
 check('active bid rows rendered', gridRows().length > 0);
 check('month grid rendered', U.$('monthGrid').children.length === 12);
 
@@ -273,6 +334,300 @@ win.Takeoff.setItem(item.id, 'qtyExpr',
 check('fx quantity evaluates like the workbook',
   M.itemQty(item, prod.groups[0]) === 23, String(M.itemQty(item, prod.groups[0])));
 win.Takeoff.toggleQtyMode(item.id);
+
+/* ---- drawing scopes -> order quantities --------------------------------- *
+ *
+ * The arithmetic an estimator used to do on a calculator: what the drawings
+ * came to, divided by what a vendor sells it in, rounded up to whole items.
+ * Built on a product of its own so the Lancaster figures above are untouched.
+ */
+console.log('\n--- scopes, stock sizes and order quantities ---');
+{
+  const p2 = M.newProduct('Steel Guardrail', t);
+  // The same scope measured in two groups. Two columns, one name, one order.
+  p2.groups = [M.newGroup('Run A', ['Top Rail']), M.newGroup('Run B', ['Top Rail'])];
+  p2.groups[0].grid.columns[0].um = 'LF';
+  p2.groups[1].grid.columns[0].um = 'LF';
+  p2.groups[0].grid.rows = [{ ref: '1/A', values: { [p2.groups[0].grid.columns[0].key]: 300 } }];
+  p2.groups[1].grid.rows = [{ ref: '2/A', values: { [p2.groups[1].grid.columns[0].key]: 200 } }];
+
+  const scopes = M.productScopes(p2);
+  check('two columns of one name are one scope', scopes.length === 1, String(scopes.length));
+  check('and it totals across every group of the product',
+    M.scopeTotal(p2, scopes[0].key) === 500, String(M.scopeTotal(p2, scopes[0].key)));
+  check('a scope on another product is not counted in',
+    M.scopeTotal(prod, scopes[0].key) === null,
+    String(M.scopeTotal(prod, scopes[0].key)));
+
+  // Measuring something is asking to buy it.
+  const added = M.syncScopeRows(p2);
+  check('a measured scope gets a material row without being asked', added.length === 1,
+    String(added.length));
+  check('named after the scope, in the Features column', added[0].feature === 'Top Rail',
+    added[0].feature);
+  check('and running it again does not add a second',
+    M.syncScopeRows(p2).length === 0);
+
+  const stick = added[0];
+  const grpA = p2.groups[0];
+  check('with no stock size, the order is the measurement rounded up',
+    M.orderQty(stick, grpA, p2) === 500, String(M.orderQty(stick, grpA, p2)));
+
+  stick.packQty = 21; stick.packUm = 'LF'; stick.unitCost = 96.73;
+  check('500 LF at 21 LF a stick is 24 sticks',
+    M.orderQty(stick, grpA, p2) === 24, String(M.orderQty(stick, grpA, p2)));
+  check('and the row is costed on what is bought, not what is needed',
+    Math.abs(M.itemTotal(stick, grpA, p2) - 24 * 96.73) < 0.005,
+    String(M.itemTotal(stick, grpA, p2)));
+
+  // The other way a vendor quotes: by the foot rather than by the stick.
+  stick.costBasis = 'unit';
+  check('priced per unit, the cost follows what the job needs',
+    Math.abs(M.itemTotal(stick, grpA, p2) - 500 * 96.73) < 0.005,
+    String(M.itemTotal(stick, grpA, p2)));
+  stick.costBasis = 'pack';
+
+  // Packets, not lengths - the same division, a different word for it.
+  const keyB = p2.groups[1].grid.columns[0].key;
+  p2.groups[1].grid.rows[0].values[keyB] = null;          // 300 measured in all
+  p2.groups[0].grid.rows[0].values[p2.groups[0].grid.columns[0].key] = 250;
+  stick.packQty = 100;
+  check('250 of something 100 to a packet is 3 packets',
+    M.orderQty(stick, grpA, p2) === 3, String(M.orderQty(stick, grpA, p2)));
+  p2.groups[0].grid.rows[0].values[p2.groups[0].grid.columns[0].key] = 300;
+  p2.groups[1].grid.rows[0].values[keyB] = 200;
+  stick.packQty = 21;
+
+  check('a unit mismatch is reported',
+    (stick.packUm = 'EA', !!M.unitMismatch(stick, grpA, p2)));
+  check('but not enforced - the order quantity still comes out',
+    M.orderQty(stick, grpA, p2) === 24);
+  stick.packUm = 'LF';
+
+  // Deleting the column must not delete the costed line it was feeding.
+  p2.groups[1].grid.columns = [];
+  check('a scope measured in one group still totals from the other',
+    M.scopeTotal(p2, stick.scopeKey) === 300, String(M.scopeTotal(p2, stick.scopeKey)));
+  p2.groups[0].grid.columns = [];
+  check('and losing the last column leaves the row, not a silent zero',
+    p2.groups[0].items.indexOf(stick) >= 0 &&
+    M.orderQty(stick, grpA, p2) === null &&
+    /scope/i.test(M.itemQtyError(stick, grpA, p2) || ''),
+    M.itemQtyError(stick, grpA, p2));
+}
+
+/* ---- typing over the order quantity ------------------------------------- *
+ *
+ * The division is right and the answer is still sometimes wrong - a stick on
+ * the shelf, a vendor minimum, two offcuts that will cover the run. The typed
+ * figure has to win without the measurement behind it being thrown away.
+ */
+console.log('\n--- an order quantity typed over the calculation ---');
+{
+  /* Really in the takeoff, unlike the scope fixture above: the assertions here
+     go through Takeoff.setOrderQty, which resolves the row from whatever the
+     pane is currently showing. Taken out again at the end of the block so the
+     proposal figures further down are the ones the workbook has. */
+  const p3 = M.newProduct('Steel Guardrail', t);
+  t.products.push(p3);
+  p3.groups = [M.newGroup('Run', ['Top Rail'])];
+  const gr = p3.groups[0];
+  gr.grid.columns[0].um = 'LF';
+  gr.grid.rows = [{ ref: '1/A', values: { [gr.grid.columns[0].key]: 76.9 } }];
+  M.syncScopeRows(p3);
+  const it3 = gr.items[0];
+  it3.packQty = 21; it3.packUm = 'LF'; it3.unitCost = 100;
+
+  check('the calculation stands until it is argued with',
+    M.orderQty(it3, gr, p3) === 4 && it3.orderQtyOverride == null,
+    String(M.orderQty(it3, gr, p3)));
+  /* The no-migration claim, asserted: a row shaped the way every row already
+     in the database is shaped - with no orderQtyOverride key at all - costs
+     exactly what it did before this feature existed. */
+  const legacy = { id: 'old', qty: 7, um: 'EA', unitCost: 10, qtyMode: 'manual' };
+  check('a row with no override key at all behaves as it always did',
+    !('orderQtyOverride' in legacy) &&
+    M.orderQty(legacy, gr, p3) === 7 && M.itemTotal(legacy, gr, p3) === 70 &&
+    M.orderQtyStale(legacy, gr, p3) === null,
+    String(M.orderQty(legacy, gr, p3)));
+
+  win.Takeoff.selectProduct(p3.id);
+  win.Takeoff.selectGroup(p3.id, gr.id);
+  win.Takeoff.setOrderQty(it3.id, '3');
+  check('a typed quantity wins', M.orderQty(it3, gr, p3) === 3, String(M.orderQty(it3, gr, p3)));
+  check('but the calculation is still there underneath',
+    M.computedOrderQty(it3, gr, p3) === 4, String(M.computedOrderQty(it3, gr, p3)));
+  check('and the row is costed on what was typed',
+    M.itemTotal(it3, gr, p3) === 300, String(M.itemTotal(it3, gr, p3)));
+  /* The distinction the stale flag turns on: a typed 3 differing from a
+     calculated 4 is not staleness, it is the override doing its job. Saying so
+     on every render would be the row reciting the decision back at whoever
+     just made it. */
+  check('typing over the calculation is not by itself reported as stale',
+    M.orderQtyStale(it3, gr, p3) === null, JSON.stringify(M.orderQtyStale(it3, gr, p3)));
+  check('a row nobody typed over is never stale',
+    M.orderQtyStale(M.newItem({ qty: 2 }), gr, p3) === null);
+  check('nor is one overridden before the app recorded what it computed at the time',
+    M.orderQtyStale({ orderQtyOverride: 3, qtyMode: 'manual', qty: 1 }, gr, p3) === null);
+
+  // Re-measure the drawing underneath the typed figure: 76.9 -> 97.9 LF, which
+  // is 5 sticks where it was 4 when the 3 was typed.
+  gr.grid.rows[0].values[gr.grid.columns[0].key] = 97.9;
+  const stale = M.orderQtyStale(it3, gr, p3);
+  check('re-measuring leaves the typed number alone', M.orderQty(it3, gr, p3) === 3);
+  check('and reports that the ground moved, with both figures',
+    stale && stale.typed === 3 && stale.was === 4 && stale.computes === 5, JSON.stringify(stale));
+
+  // Retyping resets what the number was decided against, so an accepted figure
+  // does not go on reporting the move that prompted it.
+  win.Takeoff.setOrderQty(it3.id, '7');
+  check('retyping the override takes the current calculation as its new baseline',
+    it3.orderQtyBase === 5 && M.orderQtyStale(it3, gr, p3) === null,
+    String(it3.orderQtyBase));
+
+  win.Takeoff.setOrderQty(it3.id, '2.4');
+  check('a fraction of a stick is rounded up, not ordered',
+    it3.orderQtyOverride === 3, String(it3.orderQtyOverride));
+
+  /* Blank means "go back to the calculation", never "order none of it". */
+  win.Takeoff.setOrderQty(it3.id, '');
+  check('blanking the box restores the calculation rather than ordering zero',
+    it3.orderQtyOverride === undefined && M.orderQty(it3, gr, p3) === 5,
+    JSON.stringify([it3.orderQtyOverride, M.orderQty(it3, gr, p3)]));
+
+  win.Takeoff.setOrderQty(it3.id, '9');
+  win.Takeoff.clearOrderQty(it3.id);
+  check('and so does the undo arrow', M.orderQty(it3, gr, p3) === 5);
+
+  win.Takeoff.setTab('materials');
+  const matHtml = U.$('section-takeoff').innerHTML;
+  check('the Order Qty is an editable field, not a label',
+    new RegExp('<input[^>]*id="ord-' + it3.id + '"').test(matHtml), 'no ord- input found');
+  win.Takeoff.setOrderQty(it3.id, '3');            // decided against a computed 5
+  win.Takeoff.render();
+  check('and once typed over it is marked as such, with a way back',
+    /bg-warn-soft[^"]*border-warn/.test(U.$('section-takeoff').innerHTML) &&
+    /Takeoff.clearOrderQty/.test(U.$('section-takeoff').innerHTML));
+  check('with nothing said about the drawings while they have not moved',
+    !/now computes/.test(U.$('section-takeoff').innerHTML));
+  gr.grid.rows[0].values[gr.grid.columns[0].key] = 130;   // 130/21 -> 7
+  win.Takeoff.render();
+  check('and the note appearing only once they do',
+    /now computes 7/.test(U.$('section-takeoff').innerHTML));
+
+  // Put the takeoff back as it was - the proposal assertions below compare
+  // against the workbook's own figures.
+  t.products = t.products.filter(p => p !== p3);
+  win.Takeoff.selectProduct(prod.id);
+}
+
+/* ---- documents, and the drawing references that open them ---------------- */
+console.log('\n--- documents and drawing-reference links ---');
+{
+  check('https passes the URL guard', U.safeUrl('https://onedrive.live.com/x.pdf') ===
+    'https://onedrive.live.com/x.pdf');
+  check('so does http, and surrounding space is trimmed',
+    U.safeUrl('  http://a.b/c  ') === 'http://a.b/c');
+  // The whole reason the helper exists: escaping quotes does nothing to a
+  // scheme, and every one of these would otherwise be a live href.
+  [['javascript:alert(1)', 'javascript'], ['JaVaScRiPt:alert(1)', 'mixed case'],
+   ['data:text/html,<script>x</script>', 'data:'], ['  javascript:alert(1)', 'padded'],
+   ['java\nscript:alert(1)', 'newline-split'], ['mailto:a@b.c', 'mailto'],
+   ['example.com', 'no scheme'], ['', 'blank'], [null, 'null'], ['https://', 'scheme only']]
+    .forEach(([bad, what]) => {
+      check(`${what} is refused as a link`, U.safeUrl(bad) === null, String(U.safeUrl(bad)));
+    });
+
+  const tk = M.newTakeoff(null);
+  check('a takeoff has an empty document list on first read',
+    Array.isArray(M.documents(tk)) && M.documents(tk).length === 0);
+
+  const drawings = M.newDocument({ name: 'Shell Drawings', url: 'https://onedrive.live.com/d1' });
+  const addendum = M.newDocument({ name: 'Addendum 2', url: 'https://onedrive.live.com/d2',
+    category: 'Addendum' });
+  M.documents(tk).push(drawings, addendum);
+  tk.drawingDocId = drawings.id;
+
+  const rowA = { ref: '1/A', values: {} };
+  const rowB = { ref: '2/A', values: {}, docId: addendum.id };
+  const rowC = { ref: '3/A', values: {}, docId: 'doc_gone' };
+  tk.products = [{ id: 'p', type: 'X', groups: [{ id: 'g', items: [],
+    grid: { columns: [], rows: [rowA, rowB, rowC] } }] }];
+
+  check('a reference with no document of its own follows the drawing set',
+    M.docForRow(tk, rowA) === drawings);
+  check('one that names a document opens that instead',
+    M.docForRow(tk, rowB) === addendum);
+  check('and one naming a document that is gone resolves to nothing, not a broken link',
+    M.docForRow(tk, rowC) === null);
+
+  check('the drawing set counts the references that follow it',
+    M.docRefCount(tk, drawings.id) === 1, String(M.docRefCount(tk, drawings.id)));
+  check('and a document named outright counts its own',
+    M.docRefCount(tk, addendum.id) === 1, String(M.docRefCount(tk, addendum.id)));
+
+  // Unstarring must not leave references pointing at a document by accident.
+  tk.drawingDocId = null;
+  check('with nothing starred, a default-following reference resolves to nothing',
+    M.docForRow(tk, rowA) === null);
+  check('and the deleted-document row still does too', M.docForRow(tk, rowC) === null);
+}
+
+/* Nothing about a takeoff written before schema 16 may cost a penny more or
+   less for having been opened. */
+console.log('\n--- schema 16 leaves old takeoffs costing what they did ---');
+{
+  const old = {
+    schemaVersion: 15,
+    bids: [], catalog: [{ id: 'c1', vendor: 'Alro', partNo: 'X', um: 'EA', unitCost: 5 }],
+    takeoffs: {
+      t1: {
+        id: 't1', project: {}, rollup: { miscPct: 5, taxPct: 7, roundMode: 'manual' },
+        products: [{
+          id: 'p1', type: 'Steel Guardrail', unit: 'LF', totalLF: 100,
+          groups: [{
+            id: 'g1', name: 'G',
+            items: [{ id: 'i1', feature: 'Top Rail', qty: 7.5, um: 'EA',
+                      unitCost: 12.5, qtyMode: 'manual' }],
+            grid: { columns: [{ key: 'k1', label: 'Top Rail_1-1/2" Pipe (LF)' }],
+                    rows: [{ ref: '1/A', values: { k1: 40 } }] }
+          }],
+          finish: { qty: null, unitCost: null, label: '' },
+          labour: { engineering: { hrs: null, rate: null }, fabrication: { hrs: null, rate: null },
+                    installation: { hrs: null, rate: null }, supervisor: { hrs: null, rate: null } },
+          equipment: { forklift: { days: null, rate: null }, truck: { days: null, rate: null } },
+          extras: [], markupPct: 25, overheadPct: 20, overrides: {},
+          hiddenRows: {}, rowLabels: {}, rowUnits: {}, proposalRows: {}
+        }]
+      }
+    }
+  };
+  const migrated = Store.migrate(JSON.parse(JSON.stringify(old)));
+  const mp = migrated.takeoffs.t1.products[0];
+  const mi = mp.groups[0].items[0];
+  check('every material row gains the four new fields',
+    mi.scopeKey === null && mi.packQty === null && mi.packUm === '' && mi.costBasis === 'pack',
+    JSON.stringify({ s: mi.scopeKey, q: mi.packQty, u: mi.packUm, b: mi.costBasis }));
+  check('the unit comes out of the column heading and into a field of its own',
+    mp.groups[0].grid.columns[0].label === 'Top Rail_1-1/2" Pipe' &&
+    mp.groups[0].grid.columns[0].um === 'LF',
+    JSON.stringify(mp.groups[0].grid.columns[0]));
+  check('a heading with no unit in it is left alone, and defaults to EA',
+    (() => {
+      const c = Store.splitColumnUnit('Base Plate (typ.)');
+      return c.label === 'Base Plate (typ.)' && c.um === '';
+    })());
+  check('an old TK() formula still finds the column it was written against',
+    M.gridSubtotals(mp.groups[0])['Top Rail_1-1/2" Pipe (LF)'] === 40,
+    String(M.gridSubtotals(mp.groups[0])['Top Rail_1-1/2" Pipe (LF)']));
+  check('a hand-typed quantity is NOT rounded up behind the estimator\'s back',
+    M.orderQty(mi, mp.groups[0], mp) === 7.5, String(M.orderQty(mi, mp.groups[0], mp)));
+  check('so the row costs exactly what it did before the upgrade',
+    Math.abs(M.itemTotal(mi, mp.groups[0], mp) - 93.75) < 0.0001,
+    String(M.itemTotal(mi, mp.groups[0], mp)));
+  check('and every catalog part gains a stock-size field to fill in',
+    migrated.catalog[0].packQty === null && migrated.catalog[0].packUm === '');
+}
 
 console.log('\n--- cost rows: hide, rename, proposal checkbox ---');
 Takeoff.setTab('cost');
@@ -445,7 +800,17 @@ console.log('\n--- the materials table and the workbook it exports ---');
   Takeoff.setTab('materials');
   Takeoff.render();
   const table = U.$('section-takeoff').querySelector('#matBody').closest('table');
-  const heads = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  /* Two header rows now: a band row grouping the three quantity pairs, then the
+     headings themselves. The second is the one that has to line up with the
+     cells, and reading both would count every heading twice. */
+  const headRows = [...table.querySelectorAll('thead tr')];
+  check('the quantity columns are banded, so the three U/M columns are told apart',
+    headRows.length === 2 &&
+    ['From Drawing Takeoff', 'Vendor Stock', 'Order']
+      .every(b => headRows[0].textContent.includes(b)),
+    headRows[0] ? headRows[0].textContent.trim() : 'no band row');
+  const heads = [...headRows[headRows.length - 1].querySelectorAll('th')]
+    .map(th => th.textContent.trim());
   // The Options column held an abbreviated restatement of the Description.
   check('the materials table has no Options column',
     !heads.some(h => /^Options$/i.test(h)), heads.join('|'));
@@ -460,46 +825,77 @@ console.log('\n--- the materials table and the workbook it exports ---');
   check('and the footer spans the same width', footCells === heads.length,
     `${footCells} vs ${heads.length}`);
 
-  const sheet = Takeoff.productSheet(prod);
-  check('the exported sheet drops Options too', !sheet[0].includes('Options'), sheet[0].join('|'));
-  // The drawing grid further down the sheet has its own width, so only the
-  // material rows are compared against the header.
+  /* The export itself is pulled apart in tests/estimate-xlsx.js, which unzips
+     the workbook and reads its formulas. What matters here is that the wiring
+     holds in a real browser: the template loaded with the page, the exporter
+     found it, and the sheet the estimator sees on screen is the sheet that
+     comes out of it. */
+  check('the estimate template loaded with the page', !!win.ESTIMATE_TEMPLATE);
+  const parts = unzipMem(win.Estimate.buildWorkbook(t));
+  const guardrail = parts['xl/worksheets/sheet3.xml'];
+  const cols = [...guardrail.matchAll(/<c r="[A-M]1"[^>]*><is><t[^>]*>([^<]*)</g)].map(m => m[1]);
+  check('the exported sheet drops Options too', !cols.includes('Options'), cols.join('|'));
+  /* The sheet's columns, stated rather than derived, because they are what
+     every formula in productSheet addresses by letter - Qty is G and the line
+     total is M, and a column inserted without moving those would write the
+     arithmetic into the wrong cells.
+     The workbook has always spelled the description heading "Desription". */
+  check('and the exported sheet has the thirteen columns the formulas address',
+    JSON.stringify(cols) === JSON.stringify(['Features', 'Vendor', 'Vendor Part No',
+      'Desription', 'Length/PKT Qty', 'Stock U/M', 'Qty', 'U/M', 'Material', 'Grade',
+      'Weight (lb)', 'Unit Cost', 'Total Cost']),
+    cols.join('|'));
+  /* The screen carries one pair the sheet does not: what the drawings measured.
+     The sheet says that as the ROUNDUP formula in Qty, which points straight at
+     the drawing grid's Sub Total - a column of its own would be the same number
+     written twice. Everything else appears in both. */
+  cols.filter(h => h !== 'Desription' && h !== 'Stock U/M').forEach(h => {
+    check(`"${h}" is on the screen as well as in the workbook`, heads.includes(h),
+      heads.join('|'));
+  });
+  check('and the screen adds the drawing-takeoff pair the sheet computes',
+    heads.includes('Length/PKT Qty') &&
+    heads.filter(h => h === 'U/M').length === 3, heads.join('|'));
+
   const anItem = prod.groups[0].items[0];
-  const itemRow = sheet.find(r => r[3] === anItem.description);
-  check('a material row is as wide as the header and starts with the feature',
-    !!itemRow && itemRow.length === sheet[0].length && itemRow[0] === anItem.feature,
-    JSON.stringify(itemRow));
-  check('and its description is not displaced by the removed column',
-    itemRow[sheet[0].indexOf('Desription')] === anItem.description,
-    JSON.stringify(itemRow));
-  // The labour lines pad by hand to the header width; if that drifts, the rate
-  // and total land under the wrong headings.
-  const eng = sheet.find(r => r[0] === 'Engineering cost');
-  check('a labour line puts its total in the last column',
-    eng.length === sheet[0].length && eng[eng.length - 1] > 0,
-    JSON.stringify(eng));
+  check('a material description lands under the Desription heading',
+    new RegExp('<c r="D\\d+"[^>]*><is><t[^>]*>' +
+      anItem.description.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(guardrail),
+    anItem.description);
+  check('and a line total is a formula, not a frozen number',
+    /<c r="M\d+"[^>]*><f>G\d+\*L\d+<\/f>/.test(guardrail));
 
   // Excel refuses a duplicate sheet name, and throws rather than renaming.
-  const names = [];
-  const XLSX = { utils: {
-    book_new: () => ({}),
-    aoa_to_sheet: a => a,
-    book_append_sheet: (wb, s, name) => names.push(name)
-  }, writeFile: () => {} };
-  const realXLSX = win.XLSX;
-  win.XLSX = XLSX;
   const realType = t.products[0].type;
   if (t.products.length > 1) t.products[1].type = realType;   // force a clash
-  Takeoff.exportWorkbook();
+  const names = [...unzipMem(win.Estimate.buildWorkbook(t))['xl/workbook.xml']
+    .matchAll(/<sheet name="([^"]*)"/g)].map(m => m[1]);
   if (t.products.length > 1) t.products[1].type = realType + ' B';
-  win.XLSX = realXLSX;
-  check('the workbook leads with a summary sheet', names[0] === 'Summary', names.join(','));
-  check('then one sheet per product',
-    names.length === t.products.length + 1, names.join(','));
+  check('the workbook opens on the cost summary',
+    names[1] === 'Project Cost Summary', names.join(','));
+  check('a sheet per product, between the lookup sheets',
+    names.length === t.products.length + 4, names.join(','));
   check('and no two sheets share a name',
     new Set(names.map(n => n.toLowerCase())).size === names.length, names.join(','));
   check('no sheet name is longer than Excel allows',
     names.every(n => n.length <= 31), names.join(','));
+
+  // And the button itself, end to end: a builder nothing calls is not an
+  // export. Store.downloadBlob is the last link, so it is watched rather than
+  // replaced.
+  const downloads = [];
+  const realDownload = Store.downloadBlob;
+  Store.downloadBlob = (blob, filename) => downloads.push({ blob, filename });
+  Takeoff.exportWorkbook();
+  Takeoff.exportProduct(prod.id);
+  Store.downloadBlob = realDownload;
+  check('Export XLSX hands a file to the browser',
+    downloads.length === 2 && downloads.every(d => d.blob.size > 0),
+    JSON.stringify(downloads.map(d => d.filename)));
+  check('named for the project, and for the product on its own',
+    /- Takeoff\.xlsx$/.test(downloads[0].filename) &&
+    downloads[1].filename.includes(prod.type),
+    downloads.map(d => d.filename).join(' | '));
 }
 
 console.log('\n--- material row proposal checkboxes ---');
@@ -528,6 +924,50 @@ check('one scope item per product type',
 const scope0 = prop.scopeItems[0];
 check('scope details carry the product Total Linear Feet',
   /Total Linear Feet: 442\.43 LF/.test(scope0.details), scope0.details);
+
+console.log('\n--- what the logo sits on ---');
+{
+  /* A logo drawn on white needs a white card on a dark style; one drawn in
+     white on transparent needs a dark card on a light one. Three answers, not
+     the boolean this replaced. */
+  Proposal.setLogoFrame('white');
+  check('the choice is kept with the company details',
+    prop.companyData.logoFrame === 'white', prop.companyData.logoFrame);
+  check('and becomes the shop default, so the next proposal starts there',
+    Store.db.company.logoFrame === 'white', String(Store.db.company.logoFrame));
+
+  Proposal.setLogoFrame('black');
+  check('black is a choice too', prop.companyData.logoFrame === 'black');
+  Proposal.setLogoFrame('none');
+  check('as is nothing at all', prop.companyData.logoFrame === 'none');
+  check('a value that is not one of the three is refused',
+    (Proposal.setLogoFrame('chartreuse'), prop.companyData.logoFrame === 'none'),
+    prop.companyData.logoFrame);
+
+  check('each one paints something different behind the logo',
+    Proposal.LOGO_FRAMES.white.card !== Proposal.LOGO_FRAMES.black.card &&
+    Proposal.LOGO_FRAMES.none.card === '' &&
+    /bg-white/.test(Proposal.LOGO_FRAMES.white.card) &&
+    /bg-slate-950/.test(Proposal.LOGO_FRAMES.black.card),
+    JSON.stringify(Proposal.LOGO_FRAMES.black));
+
+  // A document saved before this existed - or one written by the v3 app these
+  // templates are shared with - carries only the boolean.
+  delete prop.companyData.logoFrame;
+  prop.frameLogo = true;
+  check('an older proposal still frames its logo in white',
+    Proposal.logoFrame(prop) === 'white', Proposal.logoFrame(prop));
+  prop.frameLogo = false;
+  check('and one saved without the frame still has none',
+    Proposal.logoFrame(prop) === 'none', Proposal.logoFrame(prop));
+
+  Proposal.setLogoFrame('black');
+  check('the choice wins over the old boolean once it is made',
+    Proposal.logoFrame(prop) === 'black', Proposal.logoFrame(prop));
+  check('and the boolean is kept in step for anything still reading it',
+    prop.frameLogo === true, String(prop.frameLogo));
+  Proposal.setLogoFrame('white');
+}
 
 console.log('\n--- what reaches the proposal ---');
 check('ticked cost rows are described on the proposal',
@@ -649,21 +1089,28 @@ check('the warning offers a Regenerate button',
 Proposal.generateFromTakeoff(t.id);
 check('regenerating clears the stale state', Proposal.isStale(prop) === false);
 
-console.log('\n--- proposal button in the Actions column ---');
+console.log('\n--- the proposal entry in the row menu ---');
 App.switchTab('active');
 Bids.filterTable();
 {
+  // The takeoff and proposal controls are menu entries now rather than icons
+  // sitting on the row, so the menu is where they have to be looked for.
   const withProposal = Store.db.bids.find(b => b.proposalId && Store.db.proposals[b.proposalId]);
   check('a bid with a proposal offers to open it',
-    /Proposal\.open\(/.test(Bids.actionCell(withProposal)), 'no open call');
+    /Proposal\.open\(/.test(Bids.rowMenu(withProposal)), 'no open call');
   const noTakeoff = { id: 99002, project: 'No takeoff', status: 'In Progress' };
-  const cell = Bids.actionCell(noTakeoff);
-  check('a bid with neither shows a disabled proposal control',
-    /cursor-not-allowed/.test(cell) && !/Proposal\./.test(cell));
+  const menu = Bids.rowMenu(noTakeoff);
+  check('a bid with neither is offered no proposal entry at all',
+    !/Proposal\./.test(menu), menu);
+  check('but it is still offered the takeoff that would produce one',
+    /Takeoff\.openForBid/.test(menu), menu);
   check('a bid with a takeoff but no proposal offers to generate one', (() => {
     const b = Store.db.bids.find(x => x.takeoffId && !x.proposalId);
-    return !b || /generateFromTakeoff/.test(Bids.actionCell(b));
+    return !b || /generateFromTakeoff/.test(Bids.rowMenu(b));
   })());
+  check('and the row itself is just the one menu button',
+    (Bids.actionCell(withProposal).match(/<button|<a /g) || []).length === 1,
+    Bids.actionCell(withProposal));
 }
 
 // Several products: equal split, and the pennies must still reconcile.
@@ -747,9 +1194,9 @@ check('document shows the linear-feet line', /Total Linear Feet/.test(doc.innerH
 check('terms boilerplate present (20 clauses)',
   (prop.proposalData.terms.match(/<li>/g) || []).length === 20);
 
-console.log('\n--- all 9 styles render ---');
+console.log('\n--- all 13 styles render ---');
 let styleOK = true;
-for (let i = 1; i <= 9; i++) {
+for (let i = 1; i <= 13; i++) {
   Proposal.set('selectedStyle', i);
   const h = U.$('proposalDoc').innerHTML;
   if (!h || h.length < 800 || /undefined/.test(h)) {
@@ -759,6 +1206,80 @@ for (let i = 1; i <= 9; i++) {
   }
 }
 check('every style renders without "undefined" class strings', styleOK);
+
+/* THE PAGINATOR IS THE RISK WITH A NEW TYPEFACE.
+   Page breaks are measured against a probe page, so the probe has to be set in
+   the same face as the sheets - otherwise the breaks land in the wrong places
+   and blocks go missing or get printed twice. This checks the invariant that
+   matters on every theme: the same scope items come out the other side, once
+   each, however the document is dealt into pages. */
+{
+  const expected = Store.db.proposals[Proposal.currentId()].scopeItems.length;
+  let paginationOK = true;
+  for (let i = 1; i <= 13; i++) {
+    Proposal.set('selectedStyle', i);
+    const doc = U.$('proposalDoc');
+    const pages = doc.querySelectorAll('.doc-page:not(.doc-probe)');
+    const rows = doc.querySelectorAll('.doc-page:not(.doc-probe) .scope-row');
+    if (!pages.length || rows.length !== expected) {
+      paginationOK = false;
+      console.log('    style ' + i + ': ' + pages.length + ' page(s), ' +
+        rows.length + ' scope rows, expected ' + expected);
+    }
+  }
+  check('every style paginates without losing or duplicating a scope item',
+    paginationOK);
+
+  // And the typeset themes really do carry their class onto the sheets, which
+  // is what makes the probe and the pages agree in the first place.
+  Proposal.set('selectedStyle', 10);
+  check('a typeset theme sets its typeface on every page',
+    [...U.$('proposalDoc').querySelectorAll('.doc-page')]
+      .every(el => el.classList.contains('doc-serif')),
+    U.$('proposalDoc').querySelector('.doc-page').className);
+  Proposal.set('selectedStyle', 1);
+  check('and an original theme sets none',
+    ![...U.$('proposalDoc').querySelectorAll('.doc-page')]
+      .some(el => /doc-(serif|tech|modern|lancaster)/.test(el.className)));
+}
+
+/* THE LANCASTER THEME'S ONE RULE: Inter for structure, Segoe UI for everything
+   a person reads, and the monospace for money only. Checked at the two places
+   it went wrong - the letterhead used three faces in four lines, and the
+   details grid set the proposal number in the monospace while the project name
+   beside it was not.
+
+   The two are fixed at different layers on purpose. The details grid is fixed
+   in the markup, because nothing but this theme ever wanted that distinction.
+   The letterhead email is fixed in the theme's CSS, because themes 1-12 print
+   it monospaced and documents already sent to clients were printed under them:
+   taking the class off the element would rewrite those too. jsdom does not
+   apply the linked stylesheet, so that half is asserted against app.css. */
+{
+  Proposal.set('selectedStyle', 13);
+  const doc = U.$('proposalDoc');
+  const mono = el => el && /\bfont-mono\b/.test(el.className);
+  const appCss = fs.readFileSync(path.join(ROOT, 'assets/app.css'), 'utf8');
+
+  check('no details-grid value is set apart in the monospace',
+    ![...doc.querySelectorAll('.meta-value')].some(mono),
+    [...doc.querySelectorAll('.meta-value')].map(e => e.className).join(' / '));
+  check('so the project name and the proposal number match',
+    new Set([...doc.querySelectorAll('.meta-value')].map(e => e.className)).size === 1);
+
+  check('the letterhead name is not pulled into the heading face',
+    /\.doc-lancaster \.lh-name \{[^}]*font-family: inherit/.test(appCss));
+  check('and the email is not left in the monospace',
+    /\.doc-lancaster \.lh-email \{[^}]*font-family: inherit/.test(appCss));
+  check('while the themes that print it monospaced keep the class',
+    mono(doc.querySelector('.lh-email')));
+
+  // Money keeps the monospace: a column of figures that lines up on the digit
+  // is the one thing it is for.
+  check('but the prices and the total are still monospaced',
+    mono(doc.querySelector('.scope-price')) && mono(doc.querySelector('.total-amount')));
+}
+
 Proposal.set('selectedStyle', 1);
 
 console.log('\n--- scope lock survives regeneration ---');
@@ -809,8 +1330,10 @@ check('scopeHrs renamed to assignedHrs',
 check('engineer field backfilled', fixed.bids[0].engineer === '');
 check('the old "Submitted" status was reworded',
   fixed.bids[0].status === 'Submitted to review', fixed.bids[0].status);
-check('a bid that predates promotion is treated as already active',
-  fixed.bids[0].active === true);
+// Schema 9 marks it active so the tab does not empty on upgrade; schema 15
+// takes it back off, because a bid with no proposal number was never picked up.
+check('a bid that predates promotion does not stay on the working list',
+  fixed.bids[0].active === false, String(fixed.bids[0].active));
 check('and gains an empty proposal number', fixed.bids[0].proposalNo === '');
 check('bidHrs preserved on historical records', fixed.bids[0].bidHrs === 1);
 check('product type list seeded on migration',
@@ -826,6 +1349,58 @@ check('a bid with no product migrates to an empty array', (function () {
   const m = Store.migrate({ bids: [{ id: 2, project: 'No product' }] });
   return Array.isArray(m.bids[0].products) && m.bids[0].products.length === 0;
 })());
+
+console.log('\n--- bids nobody picked up come off the working list (schema 15) ---');
+{
+  /* Migration 9 marked every record active so Active Bids would not empty on
+     upgrade. It put the whole intake register on the working list; this takes
+     back off it everything that has no sign of ever having been picked up. */
+  const before = { schemaVersion: 14, bids: [
+    { id: 1, project: 'Never picked up', status: 'Not Started',
+      active: true, activatedAt: null, proposalNo: '',
+      assignments: [{ id: 'a1', engineer: 'AF', estHrs: 4, asgnHrs: 0, days: [] }],
+      history: [{ id: 'h1', kind: 'edit' }] },
+    { id: 2, project: 'Picked up', status: 'Not Started',
+      active: true, activatedAt: '2026-09-01', proposalNo: 'DIS-26-0001' },
+    { id: 3, project: 'Won', status: 'Awarded',
+      active: true, activatedAt: null, proposalNo: '',
+      awardNo: 'DIS-26-0009', awardedAt: '2026-08-01' },
+    { id: 4, project: 'Stamped but never numbered', status: 'Not Started',
+      active: true, activatedAt: '2026-09-02', proposalNo: '' },
+    // An award that was applied and later reversed leaves the date behind. The
+    // status is what says whether a bid has an outcome, so this one has not.
+    { id: 5, project: 'Award reversed', status: 'Not Started',
+      active: true, activatedAt: '2026-09-02', proposalNo: '',
+      awardNo: null, awardedAt: '2026-09-02' },
+    { id: 6, project: 'Lost one', status: 'Lost',
+      active: true, activatedAt: null, proposalNo: '' }
+  ] };
+  const after = Store.migrate(JSON.parse(JSON.stringify(before)));
+  const bid = n => after.bids.filter(b => b.id === n)[0];
+
+  check('a bid with no proposal number comes off the working list',
+    bid(1).active === false, String(bid(1).active));
+  check('but keeps everything on it - nothing is deleted',
+    bid(1).assignments.length === 1 && bid(1).assignments[0].estHrs === 4 &&
+    bid(1).history.length === 1, JSON.stringify(bid(1).assignments));
+  check('one that was picked up stays, with its date',
+    bid(2).active === true && bid(2).activatedAt === '2026-09-01', String(bid(2).active));
+  check('a decided bid is never quietly taken off a list',
+    bid(3).active === true, String(bid(3).active));
+  check('an activation date without a number is not enough on its own',
+    bid(4).active === false, String(bid(4).active));
+  check('and that date is cleared, so picking it up later is a fresh promotion',
+    bid(4).activatedAt === null, String(bid(4).activatedAt));
+  check('a stale award date does not count as an outcome - the status does',
+    bid(5).active === false, String(bid(5).active));
+  check('and a Lost bid stays, because Lost is an outcome',
+    bid(6).active === true, String(bid(6).active));
+  check('running it again does not put anything back',
+    Store.migrate(JSON.parse(JSON.stringify(after))).bids
+      .filter(b => b.active).map(b => b.id).join(',') === '2,3,6',
+    Store.migrate(JSON.parse(JSON.stringify(after))).bids
+      .filter(b => b.active).map(b => b.id).join(','));
+}
 
 console.log('\n--- add/edit bid form ---');
 check('Total LF field removed from the form', U.$('mLF') === null);
@@ -868,7 +1443,93 @@ check('Due Date is a text field, not a native date input',
   U.$('mDueDate').type === 'text', U.$('mDueDate').type);
 check('Due Date placeholder states the format',
   U.$('mDueDate').placeholder === 'MM-DD-YYYY');
-check('calendar picker companion exists', !!U.$('mDueDate__picker'));
+// The hidden native <input type="date"> is gone: it was only ever there to
+// borrow the browser's calendar, which renders in the browser's locale order
+// and so disagreed with the field in front of it. See js/datepicker.js.
+check('no native date input is left to disagree with the field',
+  !U.$('mDueDate__picker') &&
+  !win.document.querySelector('input[type="date"]'),
+  String(win.document.querySelectorAll('input[type="date"]').length));
+
+console.log('\n--- the calendar ---');
+{
+  const DP = win.DatePicker;
+
+  // The arithmetic first: 42 cells, whole weeks, Sunday-first.
+  const g = DP.grid('2026-02-10');
+  check('a month is six whole weeks, so nothing jumps as you page',
+    g.length === 42, String(g.length));
+  check('starting on a Sunday',
+    win.U.parseDate(g[0].date).getDay() === 0, g[0].date);
+  check('February 2026 has 28 days of its own',
+    g.filter(c => !c.outside).length === 28,
+    String(g.filter(c => !c.outside).length));
+  check('and February 2028 has 29 - a leap year is not special-cased anywhere',
+    DP.grid('2028-02-10').filter(c => !c.outside).length === 29,
+    String(DP.grid('2028-02-10').filter(c => !c.outside).length));
+  check('the days past the end belong to the next month and say so',
+    g[41].outside && !g[27].outside, g[27].date + ' / ' + g[41].date);
+  // May 2026 starts on a Friday, so it has a leading run from April.
+  const may = DP.grid('2026-05-10');
+  check('and the days before the start belong to the previous one',
+    may[0].outside && may[0].date === '2026-04-26', may[0].date);
+  check('weekends are known', g[0].weekend && g[6].weekend && !g[1].weekend);
+
+  // Paging a month off the 31st must not skip one.
+  check('a month forward from the 31st lands in the next month, not the one after',
+    DP.shiftMonths('2026-01-31', 1) === '2026-02-28',
+    DP.shiftMonths('2026-01-31', 1));
+  check('and a month back from the 31st does the same',
+    DP.shiftMonths('2026-03-31', -1) === '2026-02-28',
+    DP.shiftMonths('2026-03-31', -1));
+
+  // Now against a real field.
+  const field = U.$('mDueDate');
+  field.value = '02-10-2026';
+  U.openDatePicker('mDueDate');
+  check('it opens', DP.isOpen());
+  const pop = win.document.body.lastElementChild;
+  check('with the month it is pointed at',
+    /February 2026/.test(pop.textContent), pop.textContent.slice(0, 40));
+  check('and a button per cell', pop.querySelectorAll('[data-date]').length === 42);
+  check('the current value is the selected day',
+    pop.querySelector('[data-date="2026-02-10"]').className.indexOf('bg-brand') >= 0);
+
+  // Picking writes MM-DD-YYYY to the field and fires the change everything
+  // else in the app already listens for.
+  let fired = 0;
+  field.addEventListener('change', () => { fired++; });
+  pop.querySelector('[data-date="2026-02-18"]').click();
+  check('picking a day fills the field the way round it reads',
+    field.value === '02-18-2026', field.value);
+  check('and fires change, so a typed date and a picked one arrive the same way',
+    fired === 1, String(fired));
+  check('and closes', !DP.isOpen());
+
+  U.openDatePicker('mDueDate');
+  win.document.body.lastElementChild.querySelector('[data-act="clear"]').click();
+  check('Clear empties it', field.value === '', field.value);
+
+  // Escape closes without touching the value.
+  field.value = '03-03-2026';
+  U.openDatePicker('mDueDate');
+  win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Escape closes and leaves the value alone',
+    !DP.isOpen() && field.value === '03-03-2026', field.value);
+
+  // The revised due date is chosen against the one it replaces.
+  U.$('mDueDate').value = '03-03-2026';
+  Bids.openRevisedDuePicker();
+  const rev = win.document.body.lastElementChild;
+  check('the revised-due calendar opens on the month it is moving from',
+    /March 2026/.test(rev.textContent), rev.textContent.slice(0, 40));
+  check('with the original date flagged, so the new one is chosen against it',
+    !!rev.querySelector('[data-date="2026-03-03"] span'),
+    rev.querySelector('[data-date="2026-03-03"]').innerHTML);
+  DP.close();
+  U.$('mDueDate').value = '';
+  U.$('mRevisedDueDate').value = '';
+}
 
 Bids.edit(Store.db.bids.filter(b => b.dueDate)[0].id);
 check('editing shows the due date as MM-DD-YYYY',
@@ -973,7 +1634,7 @@ U.$('mDueDate').value = '02-30-2026';
 Bids.save({ preventDefault() {} });
 check('invalid date blocks the save', created.dueDate === '2026-09-15', created.dueDate);
 check('invalid date field is flagged',
-  /border-red-400/.test(U.$('mDueDate').className), U.$('mDueDate').className);
+  /border-danger/.test(U.$('mDueDate').className), U.$('mDueDate').className);
 U.$('mDueDate').value = '09-15-2026';
 Bids.save({ preventDefault() {} });
 check('correcting the date lets the save through', created.dueDate === '2026-09-15');
@@ -1001,6 +1662,25 @@ check('header column count matches body cell count', (function () {
   const cells = gridRows()[0].querySelectorAll('td').length;
   return heads === cells;
 })(), 'header vs body cells');
+
+/* THE NAME OPENS THE PROJECT, AND NOTHING ELSE DOES. With the click on the
+   whole row, every cell was a trapdoor: reading a figure or selecting a
+   proposal number to copy threw the page away. */
+{
+  const row = gridRows()[0];
+  check('the row itself is not a click target',
+    !row.getAttribute('onclick'), String(row.getAttribute('onclick')));
+  const opens = [...row.querySelectorAll('td')]
+    .filter(td => /Project\.open/.test(td.getAttribute('onclick') || ''));
+  check('exactly one cell opens the project', opens.length === 1, String(opens.length));
+  check('and it is the one under the Project heading',
+    [...row.querySelectorAll('td')].indexOf(opens[0]) === headLabels().indexOf('Project'),
+    [...row.querySelectorAll('td')].indexOf(opens[0]) + ' vs ' + headLabels().indexOf('Project'));
+  check('it is reachable and follows on Enter, like the link it is',
+    opens[0].getAttribute('role') === 'link' && opens[0].tabIndex === 0 &&
+    /openOnKey/.test(opens[0].getAttribute('onkeydown') || ''),
+    opens[0].getAttribute('role') + '/' + opens[0].tabIndex);
+}
 
 U.$('searchActive').value = 'af';
 Bids.filterTable();
@@ -1077,7 +1757,7 @@ Bids.edit(legacyProd.id);
 check('legacy value loads as a selected chip',
   Bids.selectedProducts()[0] === legacyValue, JSON.stringify(Bids.selectedProducts()));
 check('legacy chip is styled as a one-off',
-  /amber/.test(U.$('mProductChips').innerHTML));
+  /warn/.test(U.$('mProductChips').innerHTML));
 check('legacy value did not pollute the shared list',
   !Store.db.productTypes.includes(legacyValue));
 Bids.save({ preventDefault() {} });
@@ -1280,6 +1960,46 @@ check('a column hidden on Awarded is still visible on Active',
   goneOnAwarded && BidGrid.activeColumns().some(c => c.key === 'portal'));
 Bids.setView('awarded'); BidGrid.toggleColumn('portal'); Bids.setView('active');
 
+console.log('\n--- a popover can be scrolled ---');
+{
+  /* The dismiss-on-scroll listener is on the capture phase - it has to be, or a
+     scroll inside the table body would never reach it - so it also saw scrolls
+     inside the popover itself. Both scrollable lists in there are taller than
+     their box, and reaching for the scrollbar closed the panel. */
+  // The popover is body-mounted and is the last thing appended to it. Matching
+  // on its classes alone would find one of the modals, which are also fixed and
+  // z-50 and come first in the document.
+  const popoverEl = () => {
+    const last = win.document.body.lastElementChild;
+    return last && last.classList.contains('z-50') && !last.id ? last : null;
+  };
+  const anchor = win.document.querySelector('[onclick="BidGrid.openColumns(event)"]');
+  check('the column chooser has a control to open it', !!anchor);
+  BidGrid.openColumns({ stopPropagation() {}, currentTarget: anchor });
+  const panel = popoverEl();
+  check('and it opens', !!panel && /Columns/.test(panel.textContent));
+
+  const list = panel.querySelector('.overflow-y-auto');
+  check('with a scrollable list of columns', !!list);
+  list.dispatchEvent(new win.Event('scroll', { bubbles: true }));
+  check('scrolling it leaves it open',
+    !!popoverEl());
+
+  win.document.body.dispatchEvent(new win.Event('scroll', { bubbles: true }));
+  check('scrolling anything else still closes it',
+    !popoverEl());
+}
+
+console.log('\n--- the page uses the whole screen ---');
+{
+  const html = fs.readFileSync(HTML, 'utf8');
+  check('the shell is not capped at 1600px any more',
+    !/max-w-\[1600px\]/.test(html));
+  check('but keeps its edge padding, so nothing touches the window',
+    (html.match(/px-4 sm:px-6 lg:px-8/g) || []).length === 4,
+    String((html.match(/px-4 sm:px-6 lg:px-8/g) || []).length));
+}
+
 console.log('\n--- grid layout migration (v6 -> v8) ---');
 {
   // BidGrid.cfg() heals an unknown layout by APPENDING missing keys, so without
@@ -1293,8 +2013,11 @@ console.log('\n--- grid layout migration (v6 -> v8) ---');
   };
   const out = Store.migrate(JSON.parse(JSON.stringify(legacy)));
   const g = out.ui.grids.active;
+  // Job No. used to sit at index 2, so the Hrs pair has shifted left by one
+  // now that it is gone. What matters is that they landed where Hrs was and
+  // not appended after Actions, which is what BidGrid.cfg() would have done.
   check('the two new columns take the old Hrs position, not the end',
-    g.order.indexOf('estHrs') === 4 && g.order.indexOf('assignedHrs') === 6,
+    g.order.indexOf('estHrs') === 3 && g.order.indexOf('assignedHrs') === 5,
     g.order.join(','));
   // v10: each team column lands directly behind the intake one it mirrors.
   check('the team hours sit beside their intake twins',
@@ -1316,18 +2039,24 @@ console.log('\n--- grid layout migration (v6 -> v8) ---');
     g.order.indexOf('proposalNo') === 1, g.order.join(','));
   check('and is shown on Active',
     g.visible.indexOf('proposalNo') >= 0, g.visible.join(','));
-  check('Job No. is offered but off on Active',
-    g.order.indexOf('awardNo') === 2 && g.visible.indexOf('awardNo') < 0, g.visible.join(','));
-  check('Awarded shows the Job No.',
-    out.ui.grids.awarded.visible.indexOf('awardNo') >= 0,
-    out.ui.grids.awarded.visible.join(','));
+  // v13: a project carries ONE number for its whole life, so the Job No.
+  // column that used to sit here would have repeated Proposal No. exactly.
+  // The layout chain has to take it out, or BidGrid.cfg() asks for a column
+  // definition that no longer exists.
+  check('Job No. is gone from every view',
+    ['all', 'active', 'awarded'].every(v =>
+      out.ui.grids[v].order.indexOf('awardNo') < 0 &&
+      out.ui.grids[v].visible.indexOf('awardNo') < 0),
+    ['all', 'active', 'awarded'].map(v => v + ':' + out.ui.grids[v].order.join('/')).join(' '));
+  check('and so is LF, which was a takeoff figure on a bid register',
+    ['all', 'active', 'awarded'].every(v =>
+      out.ui.grids[v].order.indexOf('lf') < 0),
+    out.ui.grids.active.order.join(','));
   // Every view is numbered, because Sr. No. is only the row's position.
   check('Sr. No. is on all three views',
     ['all', 'active', 'awarded'].every(v => out.ui.grids[v].visible.indexOf('sr') >= 0),
     ['all', 'active', 'awarded'].map(v => v + ':' + out.ui.grids[v].visible.join('/')).join(' '));
-  check('All Bids carries no job number',
-    out.ui.grids.all.visible.indexOf('awardNo') < 0,
-    out.ui.grids.all.visible.join(','));
+
   // The layout chain has to take it back out again: BidGrid.cfg() would
   // otherwise ask for a column definition that no longer exists.
   check('Total Hrs is stripped from the migrated layout entirely',
@@ -1394,35 +2123,69 @@ console.log('\n--- project numbers and the awarded job number ---');
   check('no bid carries a projectNo any more',
     Store.db.bids.every(x => x.projectNo === undefined),
     JSON.stringify(Store.db.bids.filter(x => x.projectNo !== undefined).slice(0, 2)));
-  check('and no Job No. until they are awarded',
-    Store.db.bids.filter(x => x.status !== 'Awarded').every(x => !x.awardNo));
+  // THE NUMBER IS ISSUED WHEN THE BID IS PICKED UP, NOT WHEN IT IS WON.
+  // Start from a clean sequence: clear every number the run so far has handed
+  // out, on both fields, or the assertions below chase a moving target.
+  // `active` is deliberately left alone - the tests after this one read Active
+  // Bids, and emptying it here would leave them with nothing to work on.
+  Store.db.bids.forEach(x => {
+    x.proposalNo = ''; x.awardNo = null; x.awardedAt = null;
+  });
 
-  // Clear any award numbers the seed may carry so the sequence starts clean.
-  Store.db.bids.forEach(x => { x.awardNo = null; x.awardedAt = null; });
-
-  const first = Bids.applyAward(a, '2026-03-04');
-  check('the first award of the year is 0001', first === 'DIS-26-0001', first);
-  check('it also sets the status and the award date',
-    a.status === 'Awarded' && a.awardedAt === '2026-03-04');
-  const second = Bids.applyAward(b2, '2026-11-30');
-  check('the next award increments', second === 'DIS-26-0002', second);
+  check('a bid nobody has picked up has no number', !a.proposalNo, a.proposalNo);
+  const first = Bids.issueProjectNo(a, '2026-03-04');
+  check('the first project of the year is 0001', first === 'DIS-26-0001', first);
+  check('and it is the proposal number, not a separate one',
+    a.proposalNo === 'DIS-26-0001', a.proposalNo);
+  const second = Bids.issueProjectNo(b2, '2026-11-30');
+  check('the next project increments', second === 'DIS-26-0002', second);
 
   // A number that has been on paper must never move or be handed out twice.
-  check('re-awarding keeps the original number',
-    Bids.applyAward(a) === 'DIS-26-0001', a.awardNo);
+  check('issuing again keeps the original number',
+    Bids.issueProjectNo(a) === 'DIS-26-0001', a.proposalNo);
+
+  // Awarding confirms the number the project already has; it does not mint one.
+  check('awarding keeps the number the project was picked up under',
+    Bids.applyAward(a, '2026-03-04') === 'DIS-26-0001', a.proposalNo);
+  check('it also sets the status and the award date',
+    a.status === 'Awarded' && a.awardedAt === '2026-03-04');
   a.status = 'Submitted';
-  check('moving out of Awarded does not clear the number', a.awardNo === 'DIS-26-0001');
+  check('moving out of Awarded does not clear the number', a.proposalNo === 'DIS-26-0001');
   check('and re-awarding still does not renumber it',
-    Bids.applyAward(a) === 'DIS-26-0001', a.awardNo);
+    Bids.applyAward(a) === 'DIS-26-0001', a.proposalNo);
 
   check('the sequence restarts each year',
-    Bids.nextAwardNo('2027-01-05') === 'DIS-27-0001', Bids.nextAwardNo('2027-01-05'));
-  // Deleting the highest-numbered job must not free its number for reuse.
-  const held = b2.awardNo;
-  b2.awardNo = null; b2.status = 'Submitted';
-  check('a gap left by a deleted job is not refilled',
-    Bids.nextAwardNo('2026-06-01') === 'DIS-26-0002', Bids.nextAwardNo('2026-06-01'));
-  b2.awardNo = held; b2.status = 'Awarded';
+    Bids.nextProjectNo('2027-01-05') === 'DIS-27-0001', Bids.nextProjectNo('2027-01-05'));
+  // Deleting the highest-numbered project must not free its number for reuse.
+  const held = b2.proposalNo;
+  b2.proposalNo = ''; b2.status = 'Submitted';
+  check('a gap left by a deleted project is not refilled',
+    Bids.nextProjectNo('2026-06-01') === 'DIS-26-0002', Bids.nextProjectNo('2026-06-01'));
+  b2.proposalNo = held;
+
+  // Numbers issued under the old scheme live in awardNo. Handing one of those
+  // out again as a proposal number is the collision the rule exists to stop.
+  const legacy = Store.db.bids.filter(x => x.id !== a.id && x.id !== b2.id)[0];
+  legacy.awardNo = 'DIS-26-0009';
+  check('a number already on paper as a job number is never reissued',
+    Bids.nextProjectNo('2026-06-01') === 'DIS-26-0010', Bids.nextProjectNo('2026-06-01'));
+  legacy.awardNo = null;
+
+  // Picking a bid up is the one place a number is allocated. Put one back into
+  // intake to do it with, and leave it active afterwards - which is where
+  // addToActive itself ends up, so nothing downstream notices.
+  const picked = Store.db.bids.filter(x =>
+    !x.proposalNo && Bids.bucketOf(x) === 'open' && x.id !== a.id && x.id !== b2.id)[0];
+  picked.active = false;
+  picked.activatedAt = null;
+  Bids.addToActive(picked.id);
+  check('picking a bid up gives it its number',
+    /^DIS-\d\d-\d{4}$/.test(picked.proposalNo), picked.proposalNo);
+  const kept = picked.proposalNo;
+  picked.active = false;
+  Bids.addToActive(picked.id);
+  check('and putting it back does not renumber it',
+    picked.proposalNo === kept, picked.proposalNo);
 
   // Awarded and Lost are outcomes of the decision, not values you can type.
   const viaForm = Store.db.bids.filter(x =>
@@ -1447,20 +2210,23 @@ console.log('\n--- project numbers and the awarded job number ---');
   Bids.save({ preventDefault() {} });
   check('and saving does not demote it', decided.status === 'Awarded', decided.status);
 
-  // The confirmation names the number before it is issued.
+  // The confirmation names the number the project is being won under. It is no
+  // longer being issued here - the project has had it since it was picked up.
   const target = Store.db.bids.filter(x => Bids.bucketOf(x) === 'open')[0];
-  const expected = Bids.nextAwardNo();
+  const expected = target.proposalNo || Bids.nextProjectNo();
   Bids.promptDecision(target.id, 'Awarded');
   check('the confirmation is shown rather than awarding straight away',
     !U.$('decisionModal').classList.contains('hidden') && target.status !== 'Awarded');
-  check('and it names the number about to be issued',
+  check('and it names the number it will be awarded under',
     U.$('decisionNumber').textContent === expected, U.$('decisionNumber').textContent);
   Bids.closeDecisionModal();
   check('cancelling leaves the bid alone',
-    target.status !== 'Awarded' && !target.awardNo);
+    target.status !== 'Awarded' && !target.awardedAt);
   Bids.promptDecision(target.id, 'Awarded');
   Bids.confirmDecision();
-  check('confirming awards it', target.status === 'Awarded' && !!target.awardNo);
+  check('confirming awards it', target.status === 'Awarded' && !!target.proposalNo);
+  check('under the number it already had, not a new one',
+    target.proposalNo === expected, target.proposalNo);
 
   Bids.setView('active');
   check('an awarded bid drops off Active Bids',
@@ -1468,17 +2234,23 @@ console.log('\n--- project numbers and the awarded job number ---');
   Bids.setView('awarded');
   check('and appears on Awarded Bids with its number',
     Bids.baseList().some(x => x.id === target.id) &&
-    new RegExp(target.awardNo).test(gridHTML()));
-  check('Awarded leads with Sr. No. then Job No.',
-    BidGrid.activeColumns()[0].key === 'sr' &&
-    BidGrid.activeColumns()[1].key === 'awardNo',
+    new RegExp(target.proposalNo).test(gridHTML()));
+  // Both working views are read by the project number, and it is the same
+  // number on each - there is no separate job number any more.
+  // Actions lead, frozen, so they are reachable without scrolling the
+  // project name off the screen. The identity block follows.
+  check('Awarded leads with Actions, Sr. No., then the project number',
+    BidGrid.activeColumns().slice(0, 3).map(c => c.key).join(',') ===
+      'actions,sr,proposalNo',
     BidGrid.activeColumns().map(c => c.key).join(','));
   Bids.setView('active');
-  check('Active leads with Sr. No. then Proposal No., no Job No.',
-    BidGrid.activeColumns()[0].key === 'sr' &&
-    BidGrid.activeColumns()[1].key === 'proposalNo' &&
-    !BidGrid.activeColumns().some(c => c.key === 'awardNo'),
+  check('Active leads the same way',
+    BidGrid.activeColumns().slice(0, 3).map(c => c.key).join(',') ===
+      'actions,sr,proposalNo',
     BidGrid.activeColumns().map(c => c.key).join(','));
+  check('and no view offers a Job No. column at all',
+    !BidGrid.COLUMNS.some(c => c.key === 'awardNo'),
+    BidGrid.COLUMNS.map(c => c.key).join(','));
 }
 
 console.log('\n--- Sr. No. is a row counter; Proposal No. is the identity ---');
@@ -1525,7 +2297,7 @@ console.log('\n--- Sr. No. is a row counter; Proposal No. is the identity ---');
     String(two.proposalNo));
   check('and the form stays open on the offending field',
     !U.$('bidModal').classList.contains('hidden') &&
-    U.$('mProposalNo').classList.contains('border-red-400'));
+    U.$('mProposalNo').classList.contains('border-danger'));
 
   U.$('mProposalNo').value = 'DIS-P-OTHER';
   Bids.save({ preventDefault() {} });
@@ -1783,11 +2555,21 @@ console.log('\n--- team sheet: hours per engineer per task ---');
   Assign.set(b.id, r1.id, 'engineer', 'af');       // lower case on purpose
   Assign.set(b.id, r1.id, 'taskType', 'Shop drawings');
   Assign.set(b.id, r1.id, 'estHrs', '12');
-  Assign.set(b.id, r1.id, 'asgnHrs', '4');
   Assign.set(b.id, r2.id, 'engineer', 'AF');       // same person, second task
   Assign.set(b.id, r2.id, 'taskType', 'Site measure');
   Assign.set(b.id, r2.id, 'estHrs', '6.5');
-  Assign.set(b.id, r2.id, 'asgnHrs', '2');
+
+  // Assigned hours are booked against days now, and the row total is their
+  // sum - so they go in through the day cells, not the total.
+  const clearDays = r => Assign.dayRows(r).forEach(d =>
+    Assign.setDay(b.id, r.id, d.date, ''));
+  clearDays(r1); clearDays(r2);
+  Assign.setDay(b.id, r1.id, Assign.dayRows(r1)[0].date, '4');
+  Assign.setDay(b.id, r2.id, Assign.dayRows(r2)[0].date, '2');
+  check('a row total is the sum of its day cells',
+    r1.asgnHrs === 4 && r2.asgnHrs === 2, `${r1.asgnHrs}/${r2.asgnHrs}`);
+  check('and the total cannot be written directly',
+    (Assign.set(b.id, r1.id, 'asgnHrs', '99'), r1.asgnHrs === 4), String(r1.asgnHrs));
 
   check('initials normalise to the register\'s casing', r1.engineer === 'AF', r1.engineer);
   const t = Assign.totals(b);
@@ -1915,13 +2697,17 @@ console.log('\n--- Proposal No. flows from the bid ---');
     BidGrid.activeColumns().some(c => c.key === 'proposalNo') &&
     /DIS-P-7799/.test(gridHTML()));
   Bids.setView('all');
-  // The proposal number identifies the project from the moment it is entered,
-  // so it is on the intake register too. The job number is not - that only
-  // exists once the bid is won.
-  check('All Bids shows the Proposal No. but not the Job No.',
-    BidGrid.activeColumns().some(c => c.key === 'proposalNo') &&
-    !BidGrid.activeColumns().some(c => c.key === 'awardNo'),
+  // All Bids is an arrival register: nothing on it has been picked up, so
+  // nothing on it has a number yet. It is read in the order things came in.
+  check('All Bids shows Created where the number would be, not the number',
+    BidGrid.activeColumns()[2].key === 'createdAt' &&
+    !BidGrid.activeColumns().some(c => c.key === 'proposalNo'),
     BidGrid.activeColumns().map(c => c.key).join(','));
+  check('and the working views show the number rather than Created',
+    (Bids.setView('active'), BidGrid.activeColumns().some(c => c.key === 'proposalNo') &&
+      !BidGrid.activeColumns().some(c => c.key === 'createdAt')),
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  Bids.setView('all');
   Bids.setView('active');
 }
 
@@ -2049,7 +2835,44 @@ console.log('\n--- the settings page ---');
   check('a region can be added from the panel',
     Store.db.regions.length === regionsBefore + 1 &&
     Store.db.regions.includes('Test County'));
-  Bids.removeRegion('Test County');
+  check('the panel offers an editable field, not static text',
+    U.$('regionList').innerHTML.includes('Bids.renameRegion'));
+
+  /* A misspelled county is otherwise only fixable by deleting the entry, which
+     strands the value on every bid already filed under it. */
+  const filed = Store.db.bids[0];
+  const wasRegion = filed.region;
+  filed.region = 'Test County';
+  Bids.renameRegion('Test County', 'Tested County');
+  check('renaming a region updates the list',
+    Store.db.regions.includes('Tested County') &&
+    !Store.db.regions.includes('Test County'));
+  check('and carries onto the bids filed under it',
+    filed.region === 'Tested County', filed.region);
+  check('without changing how many regions there are',
+    Store.db.regions.length === regionsBefore + 1, String(Store.db.regions.length));
+
+  // A case-only correction is the whole point - "beachwood, oh" to
+  // "Beachwood, OH" - so it must not be refused as a duplicate of itself.
+  Bids.renameRegion('Tested County', 'TESTED COUNTY');
+  check('a case-only correction is accepted',
+    Store.db.regions.includes('TESTED COUNTY'), JSON.stringify(
+      Store.db.regions.filter(r => r.toLowerCase() === 'tested county')));
+  check('and moves the bids with it, despite the casing',
+    filed.region === 'TESTED COUNTY', filed.region);
+
+  const clash = Store.db.regions.find(r => r !== 'TESTED COUNTY');
+  Bids.renameRegion('TESTED COUNTY', clash.toLowerCase());
+  check('renaming onto another region is refused',
+    Store.db.regions.includes('TESTED COUNTY') &&
+    Store.db.regions.filter(r => r.toLowerCase() === clash.toLowerCase()).length === 1);
+
+  Bids.renameRegion('TESTED COUNTY', '   ');
+  check('and clearing the field leaves the region alone',
+    Store.db.regions.includes('TESTED COUNTY'));
+
+  filed.region = wasRegion;
+  Bids.removeRegion('TESTED COUNTY');
   check('and removed again', Store.db.regions.length === regionsBefore);
 
   App.switchTab('company');
@@ -2351,6 +3174,1529 @@ console.log('\n--- the proposal is dealt into numbered pages ---');
       (pieces.match(/<ul>/g) || []).length === 2, pieces);
     check('with all four items intact', (pieces.match(/<li>/g) || []).length === 4, pieces);
   }
+}
+
+console.log('\n--- timestamps are IST, and the right day ---');
+{
+  // THE BUG THIS EXISTS FOR. 20:30 UTC is 02:00 the NEXT day in IST, so taking
+  // the date off the front of the ISO string - which is what every reader used
+  // to do - showed the previous day. For five and a half hours out of every
+  // twenty-four, the Created column was simply wrong.
+  const iso = '2026-09-06T20:30:00.000Z';
+  check('an instant is read on the IST calendar, not the UTC one',
+    U.stampDate(iso) === '09-07-2026', U.stampDate(iso));
+  check('the naive slice it replaced gave the day before',
+    U.date(iso.slice(0, 10)) === '09-06-2026', U.date(iso.slice(0, 10)));
+  check('the time comes with it', U.stampTime(iso) === '02:00', U.stampTime(iso));
+  check('and it says which clock it is on',
+    U.stamp(iso) === '09-07-2026 02:00 IST', U.stamp(iso));
+
+  // Fixed to Asia/Kolkata, not the machine. A laptop that has travelled must
+  // not quietly restate when something happened.
+  check('the same instant reads the same whatever the machine is set to',
+    U.stamp(iso) === '09-07-2026 02:00 IST' &&
+    U.stamp(new Date(iso)) === '09-07-2026 02:00 IST');
+
+  // A due date is a calendar day, not an instant, and must never be shifted.
+  check('a plain stored date is not put through a timezone',
+    U.date('2026-07-22') === '07-22-2026', U.date('2026-07-22'));
+  check('nothing renders a bare date as a moment', U.stamp('2026-07-22') !== '-');
+  check('and rubbish still gives a dash',
+    U.stamp('') === '-' && U.stamp('not a date') === '-' && U.stampDate(null) === '-');
+
+  // The Created column carries both, and sorts on the raw ISO.
+  Bids.setView('all');
+  Bids.filterTable();
+  const createdCol = BidGrid.COLUMNS.filter(c => c.key === 'createdAt')[0];
+  const withStamp = { createdAt: iso };
+  check('the Created cell shows the IST date and time',
+    /09-07-2026/.test(createdCol.render(withStamp)) &&
+    /02:00/.test(createdCol.render(withStamp)), createdCol.render(withStamp));
+  check('it sorts on the raw ISO, which orders correctly as a string',
+    createdCol.value(withStamp) === iso, createdCol.value(withStamp));
+  check('and filters on what is actually on screen',
+    createdCol.text(withStamp) === '09-07-2026', createdCol.text(withStamp));
+  check('an inferred date shows no time it cannot vouch for',
+    !/\d\d:\d\d/.test(createdCol.render({ createdAt: iso, createdAtInferred: true })),
+    createdCol.render({ createdAt: iso, createdAtInferred: true }));
+}
+
+console.log('\n--- the newest bid is at the top ---');
+{
+  // Asserted on the Created column the grid actually rendered, on All Bids
+  // where it is visible. Mapping rows back to bid records by project name does
+  // not work here - seeded names repeat, which is why the duplicate-name
+  // warning exists - so this reads the dates straight off the screen.
+  Bids.setView('all');
+  BidGrid.cfg().sort = null;
+  Bids.filterTable();
+  {
+    const createdIdx = BidGrid.activeColumns().findIndex(c => c.key === 'createdAt');
+    const cells = [...gridRows()].map(tr =>
+      tr.querySelectorAll('td')[createdIdx].textContent.trim());
+    // An observed arrival prints a time under the date; an inferred one is
+    // prefixed with ~ and has none. Observed first, then the inferred backlog.
+    // An observed arrival is the only one that prints a time under the date.
+    // Everything else is backlog: a ~ guessed from the due date, or an em-dash
+    // where even that was missing. Observed first, backlog after.
+    const observed = cells.map(t => /\d\d:\d\d/.test(t));
+    const firstBacklog = observed.indexOf(false);
+    check('all: observed arrivals lead, the backlog follows',
+      firstBacklog < 0 || !observed.slice(firstBacklog).some(Boolean),
+      'row ' + firstBacklog + ': ' +
+        cells.slice(0, 4).map(c => c.replace(/\s+/g, ' ')).join(' | '));
+    check('and the observed ones run newest to oldest',
+      cells.filter(t => !t.startsWith('~')).length >= 1);
+  }
+
+  // On the other two the column is hidden, so the invariant checked is the one
+  // that matters: whatever the grid put first is the newest thing in the view.
+  for (const view of ['active', 'awarded']) {
+    Bids.setView(view);
+    BidGrid.cfg().sort = null;
+    Bids.filterTable();
+    const list = Bids.baseList();
+    if (list.length < 2) continue;
+    const best = list.slice().sort((a, b) => {
+      const ai = !!a.createdAtInferred, bi = !!b.createdAtInferred;
+      if (ai !== bi) return ai ? 1 : -1;
+      const at = String(a.createdAt || ''), bt = String(b.createdAt || '');
+      return at === bt ? (b.id || 0) - (a.id || 0) : (at < bt ? 1 : -1);
+    })[0];
+    // textContent, not innerHTML: a project named "X & Y" is "X &amp; Y" in
+    // the markup and would never match.
+    check(view + ': the newest bid is the first row',
+      gridRows()[0].textContent.indexOf(best.project) >= 0,
+      best.project + '  |  got: ' + gridRows()[0].textContent.trim().slice(0, 60));
+  }
+
+  Bids.setView('all');
+  BidGrid.cfg().sort = null;
+  Bids.openAdd();
+  U.$('mProject').value = 'Newest bid on the list';
+  U.$('mPortal').value = 'PlanHub';
+  U.$('mRegion').value = Store.db.regions[0];
+  U.$('mStatus').value = 'Not Started';
+  Bids.save({ preventDefault() {} });
+  Bids.setView('all');
+  Bids.filterTable();
+  check('a bid just entered is the first row',
+    /Newest bid on the list/.test(gridRows()[0].innerHTML),
+    gridRows()[0].textContent.trim().slice(0, 60));
+
+  // An explicit sort still wins, and clearing it comes back here rather than
+  // dropping into seed order.
+  BidGrid.toggleSort('project');
+  const names = [...gridRows()].map(tr =>
+    tr.querySelector('td:nth-child(4)').textContent.trim().split('\n')[0]);
+  check('sorting by a column overrides it',
+    names.every((n, i) => i === 0 || names[i - 1].localeCompare(n) <= 0),
+    names.slice(0, 3).join(' | '));
+  BidGrid.toggleSort('project'); BidGrid.toggleSort('project');   // asc -> desc -> off
+  check('and the third click returns to newest-first, not seed order',
+    BidGrid.cfg().sort === null &&
+    /Newest bid on the list/.test(gridRows()[0].innerHTML),
+    gridRows()[0].textContent.trim().slice(0, 60));
+}
+
+console.log('\n--- a charge has a quantity and a unit ---');
+{
+  const tk = Store.db.takeoffs[Store.db.ui.lastTakeoffId] ||
+             Store.db.takeoffs[Object.keys(Store.db.takeoffs)[0]];
+  Takeoff.openTakeoff(tk.id);
+  const p = tk.products[0];
+  Takeoff.selectProduct(p.id);
+
+  const baseline = M.computeTakeoff(tk).total;
+
+  // A flat amount, which is what every charge already in the database is.
+  Takeoff.addExtra();
+  const flat = p.extras[p.extras.length - 1];
+  Takeoff.setExtra(p.extras.length - 1, 'amount', '500');
+  check('a flat amount still totals as itself',
+    M.extraAmount(flat) === 500, String(M.extraAmount(flat)));
+
+  // Quantity times unit price, which is what most of them actually are.
+  Takeoff.addExtra();
+  const i = p.extras.length - 1;
+  const priced = p.extras[i];
+  Takeoff.setExtra(i, 'label', 'Scissor lift');
+  Takeoff.setExtra(i, 'qty', '2');
+  Takeoff.setExtra(i, 'um', 'Wks');
+  Takeoff.setExtra(i, 'unitPrice', '1000');
+  check('a priced charge is qty x unit price',
+    M.extraAmount(priced) === 2000, String(M.extraAmount(priced)));
+  check('and keeps the unit it was quoted in', priced.um === 'Wks', priced.um);
+  check('the flat amount is dropped once it is priced',
+    priced.amount === null, String(priced.amount));
+
+  // 500 flat + 2 x 1000 priced = 2500 of extras on this product.
+  const calc = M.computeTakeoff(tk).products.find(x => x.product.id === p.id).calc;
+  check('both charges reach the product extras total',
+    calc.extrasTotal === 2500, String(calc.extrasTotal));
+  const after = M.computeTakeoff(tk).total;
+  check('and the takeoff total carries them, with markup on top',
+    after > baseline + 2500, baseline + ' -> ' + after);
+
+  // The unit on a standard row is the estimator's to set.
+  check('a standard row starts on its default unit',
+    M.rowUnit(p, 'supervisor') === 'Hrs', M.rowUnit(p, 'supervisor'));
+  Takeoff.setRowUnit('supervisor', 'Wks');
+  check('and can be changed', M.rowUnit(p, 'supervisor') === 'Wks', M.rowUnit(p, 'supervisor'));
+  check('storing only the exception',
+    p.rowUnits.supervisor === 'Wks' && p.rowUnits.forklift === undefined,
+    JSON.stringify(p.rowUnits));
+  Takeoff.setRowUnit('supervisor', '');
+  check('clearing it puts the default back',
+    M.rowUnit(p, 'supervisor') === 'Hrs' && p.rowUnits.supervisor === undefined,
+    M.rowUnit(p, 'supervisor'));
+
+  // Cleanup so the proposal totals later in the run are not thrown off.
+  p.extras.splice(p.extras.length - 2, 2);
+  Takeoff.render();
+}
+
+console.log('\n--- editing a field where you are reading it ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open')[0];
+  Project.openFrom(b.id, 'active');
+  Project.render();
+
+  const host = () => [...win.document.querySelectorAll('#section-project [data-edit]')]
+    .find(el => JSON.parse(el.dataset.edit).field === 'price');
+
+  check('a typed field is marked editable', !!host(), 'no price field');
+  check('a computed one is not',
+    ![...win.document.querySelectorAll('#section-project [data-edit]')]
+      .some(el => ['products', 'material', 'lf'].includes(JSON.parse(el.dataset.edit).field)),
+    [...win.document.querySelectorAll('#section-project [data-edit]')]
+      .map(el => JSON.parse(el.dataset.edit).field).join(','));
+
+  // Double-click swaps the value for a control carrying the raw value.
+  const el = host();
+  UI.beginEdit(el);
+  const input = el.querySelector('input');
+  check('double-clicking gives you an input', !!input);
+  check('holding the raw value, not the formatted one',
+    input.value === String(b.price), input.value + ' vs ' + b.price);
+
+  input.value = '123456';
+  input.dispatchEvent(new win.Event('blur'));
+  check('committing writes it through', b.price === 123456, String(b.price));
+
+  // Escape reverts, and nothing is written.
+  Project.render();
+  const el2 = host();
+  UI.beginEdit(el2);
+  el2.querySelector('input').value = '999';
+  el2.querySelector('input').dispatchEvent(
+    new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Escape leaves the record alone', b.price === 123456, String(b.price));
+  check('and puts the display back', !el2.querySelector('input'));
+
+  // The same rules the form applies apply here - a refused edit is not silently
+  // dropped, and the record is not changed.
+  const other = Bids.baseList().filter(x => x.id !== b.id && x.proposalNo)[0];
+  if (other) {
+    const before = b.proposalNo;
+    Bids.saveField(b.id, 'proposalNo', other.proposalNo, 'text', null);
+    check('a duplicate project number is refused here too',
+      b.proposalNo === before, b.proposalNo);
+  }
+  const beforeDate = b.dueDate;
+  Bids.saveField(b.id, 'dueDate', '02-30-2026', 'date', null);
+  check('and so is a date that does not exist', b.dueDate === beforeDate, b.dueDate);
+
+  /* A DATE THAT DOES NOT EXIST IS REFUSED IN FRONT OF THE PERSON WHO TYPED IT.
+     It used to be handed to saveField from inside a blur handler, which had no
+     way to say no - so it was dropped, the old value came back, and nothing was
+     said. Now the editor stays open and marked. */
+  Project.render();
+  const dateHost = () => [...win.document.querySelectorAll('#section-project [data-edit]')]
+    .find(el => JSON.parse(el.dataset.edit).field === 'dueDate');
+  const dh = dateHost();
+  UI.beginEdit(dh);
+  const dateInput = dh.querySelector('input');
+  check('a date field edits as MM-DD-YYYY',
+    dateInput.value === U.dateToInput(b.dueDate), dateInput.value);
+  check('with a calendar button beside it',
+    !!dh.querySelector('.fa-calendar-alt'));
+
+  dateInput.value = '02-30-2026';
+  dateInput.dispatchEvent(new win.Event('blur'));
+  check('a date that cannot exist keeps the editor open',
+    !!dh.querySelector('input'), dh.innerHTML.slice(0, 60));
+  check('says so', /Not a date/.test(dh.textContent), dh.textContent);
+  check('and marks the field',
+    dh.querySelector('input').className.indexOf('border-danger') >= 0);
+  check('while the record is untouched', b.dueDate === beforeDate, b.dueDate);
+
+  // Typing again clears the complaint, and a good value commits.
+  dateInput.value = '12-01-2026';
+  dateInput.dispatchEvent(new win.Event('input'));
+  check('correcting it clears the mark',
+    dh.querySelector('.text-danger').classList.contains('hidden'));
+  dateInput.dispatchEvent(new win.Event('blur'));
+  check('and then it saves', b.dueDate === '2026-12-01', b.dueDate);
+
+  // Save and cancel are on the editor, not only on the keyboard.
+  Project.render();
+  const h3 = host();
+  UI.beginEdit(h3);
+  check('the editor offers Save and Cancel',
+    h3.querySelectorAll('button[title="Save"], button[title="Cancel"]').length === 2,
+    String(h3.querySelectorAll('button').length));
+  h3.querySelector('button[title="Cancel"]')
+    .dispatchEvent(new win.MouseEvent('mousedown', { bubbles: true }));
+  check('Cancel puts it back', !h3.querySelector('input'));
+
+  // A field is reachable and openable from the keyboard, not only by clicking.
+  Project.render();
+  check('an editable field is in the tab order', host().tabIndex === 0);
+  check('and says a single click opens it',
+    /Click to edit/.test(host().getAttribute('title')), host().getAttribute('title'));
+
+  // Changing the due date has to re-file the bid under the right month.
+  Bids.saveField(b.id, 'dueDate', '11-05-2026', 'date', null);
+  check('editing the due date re-files the month', b.month === 10, String(b.month));
+}
+
+console.log('\n--- how a bid got where it is ---');
+{
+  Bids.setView('all');
+  const b = Store.db.bids.filter(x =>
+    !x.active && Bids.bucketOf(x) === 'open')[0] ||
+    (() => { const x = Bids.baseList()[0]; x.active = false; x.activatedAt = null;
+             x.history = []; return x; })();
+  b.history = [];
+
+  // Picking it up is the first thing that happens to a bid. Bids.promoteBid is
+  // the transition itself; Bids.addToActive is the id-taking wrapper that may
+  // stop at the duplicate-project-name warning first.
+  Bids.promoteBid(b);
+  check('picking a bid up is recorded',
+    History.entries(b).length === 1, JSON.stringify(History.entries(b)));
+  const first = History.entries(b)[0];
+  check('with where it came from and where it went',
+    first.from === 'intake' && first.to === 'active',
+    first.from + '->' + first.to);
+  check('and the stage it is at now agrees',
+    History.stageOf(b) === 'active', History.stageOf(b));
+  const numberIssued = b.proposalNo;
+
+  // Awarding it is the second.
+  b.status = 'Submitted to review';
+  Bids.applyAward(b, '2026-05-01');
+  check('awarding is recorded too', History.entries(b).length === 2);
+  const award = History.entries(b)[1];
+  check('and remembers the status it moved from',
+    award.fromStatus === 'Submitted to review', String(award.fromStatus));
+
+  // Reversing restores the recorded state rather than guessing at one.
+  check('an awarded bid can be moved back to Active',
+    History.previousStage(b) === 'active', String(History.previousStage(b)));
+  History.reverse(b, 'client rescinded the award');
+  check('reversing puts the status back to what it actually was',
+    b.status === 'Submitted to review', b.status);
+  check('the award markers are cleared',
+    !b.awardedAt && !b.awardNo, b.awardedAt + '/' + b.awardNo);
+  check('but the project number never moves', b.proposalNo === numberIssued,
+    b.proposalNo + ' vs ' + numberIssued);
+  check('and the reversal is itself an entry, with its comment',
+    History.entries(b).length === 3 &&
+    History.entries(b)[2].reversal === true &&
+    /rescinded/.test(History.entries(b)[2].comment),
+    JSON.stringify(History.entries(b)[2]));
+
+  // Back once more, to intake.
+  History.reverse(b, '');
+  check('an active bid goes back to intake',
+    History.stageOf(b) === 'intake' && !b.active, History.stageOf(b));
+  check('still keeping its number', b.proposalNo === numberIssued);
+  check('and there is nowhere further back to go',
+    History.previousStage(b) === null, String(History.previousStage(b)));
+
+  // A move that changes nothing is not a move.
+  const before = History.entries(b).length;
+  History.record(b, 'intake', 'intake', {});
+  check('a transition to the same stage is not recorded',
+    History.entries(b).length === before);
+
+  // Deleting an entry leaves a mark that it happened.
+  const doomed = History.entries(b)[0];
+  History.promptDelete(b.id, doomed.id);
+  History.confirm();
+  check('a deleted entry is gone',
+    !History.entries(b).some(e => e.id === doomed.id));
+  check('but the deletion is recorded in its place',
+    History.entries(b).some(e => e.deletion === true),
+    JSON.stringify(History.entries(b).map(e => e.comment)));
+
+  check('the card lists the moves',
+    /History/.test(History.card(b)) && /Active Bids/.test(History.card(b)));
+}
+
+console.log('\n--- hours are booked against days ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open')[0];
+  Project.openFrom(b.id, 'active');
+  Assign.add(b.id);
+  const r = Assign.rows(b).slice(-1)[0];
+
+  check('a new row opens with three working days',
+    Assign.dayRows(r).length === 3, String(Assign.dayRows(r).length));
+  check('none of them a weekend',
+    Assign.dayRows(r).every(d => !Assign.isWeekend(d.date)),
+    Assign.dayRows(r).map(d => d.date).join(','));
+  check('and it starts on the day the task was created',
+    r.startDate === Assign.dayRows(r)[0].date, r.startDate);
+  check('with nothing booked yet', r.asgnHrs === 0, String(r.asgnHrs));
+
+  const days = Assign.dayRows(r).map(d => d.date);
+  Assign.setDay(b.id, r.id, days[0], '5');
+  Assign.setDay(b.id, r.id, days[1], '3');
+  check('the row total is the sum of its days', r.asgnHrs === 8, String(r.asgnHrs));
+  Assign.setDay(b.id, r.id, days[0], '');
+  check('and follows a cell being cleared', r.asgnHrs === 3, String(r.asgnHrs));
+
+  // Add day steps over the weekend.
+  const beforeAdd = Assign.dayRows(r).length;
+  Assign.addDay(b.id, r.id);
+  check('Add day appends one more', Assign.dayRows(r).length === beforeAdd + 1);
+  check('and never lands on a weekend',
+    Assign.dayRows(r).every(d => !Assign.isWeekend(d.date)),
+    Assign.dayRows(r).map(d => d.date).join(','));
+  check('each one after the last',
+    Assign.dayRows(r).every((d, i, a) => i === 0 || d.date > a[i - 1].date),
+    Assign.dayRows(r).map(d => d.date).join(','));
+
+  // Moving the start slides the whole booking without changing its shape.
+  const shape = Assign.dayRows(r).map(d => d.hrs);
+  const total = r.asgnHrs;
+  Assign.set(b.id, r.id, 'startDate', '11-02-2026');   // a Monday
+  check('moving the start slides every day with it',
+    Assign.dayRows(r)[0].date === '2026-11-02', Assign.dayRows(r)[0].date);
+  check('keeping the hours on the same day of the task',
+    JSON.stringify(Assign.dayRows(r).map(d => d.hrs)) === JSON.stringify(shape),
+    JSON.stringify(Assign.dayRows(r).map(d => d.hrs)));
+  check('and the total unchanged', r.asgnHrs === total, String(r.asgnHrs));
+
+  // THE START DATE IS A FIELD ON THE CARD, and it has to write through.
+  // It was rendered without a change handler, so typing a date into it did
+  // nothing at all: the booking stayed where it was and there was no sign the
+  // field had been ignored.
+  Project.openFrom(b.id, 'active');
+  const startField = U.$('asg-start-' + r.id);
+  check('the row shows its start date', !!startField && startField.value === '11-02-2026',
+    startField ? startField.value : 'no field');
+  startField.value = '11-09-2026';
+  startField.dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('and typing a new one moves the booking',
+    Assign.dayRows(r)[0].date === '2026-11-09', Assign.dayRows(r)[0].date);
+
+  // A row that reaches the card without a booking - synced from a session
+  // running the older code, or restored from a backup taken before the day
+  // strip existed - is laid out rather than left with nowhere to type.
+  delete r.days;
+  delete r.startDate;
+  Assign.render(b);
+  check('a row with no days at all is given some',
+    Assign.dayRows(r).length === 3, String(Assign.dayRows(r).length));
+  check('starting from the day the task was created',
+    r.startDate === Assign.defaultStart(b), r.startDate + ' vs ' + Assign.defaultStart(b));
+  check('and blank, because nobody has booked anything to them',
+    Assign.dayRows(r).every(d => d.hrs == null) && r.asgnHrs === 0,
+    JSON.stringify(Assign.dayRows(r)));
+  check('which the card then offers as empty boxes',
+    U.$('asg-day-' + r.id + '-' + Assign.dayRows(r)[0].date).value === '',
+    U.$('asg-day-' + r.id + '-' + Assign.dayRows(r)[0].date).value);
+
+  // The card totals still read the same figure as the grid and the export.
+  check('the project card total matches the rows',
+    Assign.totals(b).asgn ===
+      Assign.rows(b).reduce((s, x) => s + x.asgnHrs, 0),
+    String(Assign.totals(b).asgn));
+
+  Assign.remove(b.id, r.id);
+}
+
+console.log('\n--- the Employee view ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open')[0];
+
+  // Two engineers on one bid, booked across the same three days.
+  Assign.rows(b).slice().forEach(r => Assign.remove(b.id, r.id));
+  Assign.add(b.id);
+  const r1 = Assign.rows(b).slice(-1)[0];
+  Assign.set(b.id, r1.id, 'engineer', 'AF');
+  Assign.add(b.id);
+  const r2 = Assign.rows(b).slice(-1)[0];
+  Assign.set(b.id, r2.id, 'engineer', 'MGJ');
+
+  // Put both on a known Monday so the week and month buckets are predictable.
+  Assign.set(b.id, r1.id, 'startDate', '11-02-2026');
+  Assign.set(b.id, r2.id, 'startDate', '11-02-2026');
+  const d1 = Assign.dayRows(r1).map(d => d.date);
+  Assign.setDay(b.id, r1.id, d1[0], '5');
+  Assign.setDay(b.id, r1.id, d1[1], '5');
+  Assign.setDay(b.id, r2.id, Assign.dayRows(r2)[0].date, '3');
+
+  // ---- the window: the zoom says how much calendar, the anchor says where.
+  const wed = '2026-11-04';                       // the Wednesday of that week
+
+  const days = Schedule.periods('day', wed);
+  check('the Day zoom shows one day - the one it is pointed at',
+    days.length === 1 && days[0].start === wed, JSON.stringify(days.map(p => p.start)));
+
+  const week = Schedule.periods('week', wed);
+  check('the Week zoom shows that whole week', week.length === 7, String(week.length));
+  check('starting on the Monday',
+    week[0].start === '2026-11-02' && week[0].isWeekStart, week[0].start);
+  check('and marking its weekend',
+    week.filter(p => p.isWeekend).length === 2, week.map(p => p.label).join(','));
+
+  const month = Schedule.periods('month', wed);
+  check('the Month zoom shows the whole month, day by day',
+    month.length === 30 && month[0].start === '2026-11-01' &&
+    month[29].start === '2026-11-30', month.length + ' from ' + month[0].start);
+
+  // Columns are days at every zoom, so hours land in one place and one only.
+  check('an engineer\'s hours land on the right day',
+    Schedule.hoursFor(b, 'AF', week[0]) === 5 &&
+    Schedule.hoursFor(b, 'MGJ', week[0]) === 3,
+    Schedule.hoursFor(b, 'AF', week[0]) + '/' + Schedule.hoursFor(b, 'MGJ', week[0]));
+  check('and not on somebody else\'s',
+    Schedule.hoursFor(b, 'MGJ', week[1]) === 0, String(Schedule.hoursFor(b, 'MGJ', week[1])));
+  const sum = list => list.reduce((s, p) => s + Schedule.bidHoursFor(b, p), 0);
+  check('the week and the month agree on the total',
+    sum(week) === 13 && sum(month) === 13, `${sum(week)}/${sum(month)}`);
+  check('every column half-open, so nothing is counted twice',
+    week[0].start === '2026-11-02' && week[0].end === '2026-11-03',
+    week[0].start + '..' + week[0].end);
+
+  // Paging: back and forward by one of whatever is on screen.
+  check('a day steps a day', Schedule.step('day', wed, 1) === '2026-11-05');
+  check('a week steps to the next Monday',
+    Schedule.step('week', wed, 1) === '2026-11-09', Schedule.step('week', wed, 1));
+  check('and back to the last one',
+    Schedule.step('week', wed, -1) === '2026-10-26', Schedule.step('week', wed, -1));
+  check('a month steps a month, off the 1st rather than the 31st',
+    Schedule.step('month', '2026-01-31', 1) === '2026-02-01',
+    Schedule.step('month', '2026-01-31', 1));
+  check('the window says which one it is',
+    Schedule.windowLabel('month', wed) === 'November 2026',
+    Schedule.windowLabel('month', wed));
+  check('and knows whether today is in it',
+    Schedule.isNowWindow('day', Schedule.today()) &&
+    !Schedule.isNowWindow('day', '2026-11-04') === (Schedule.today() !== '2026-11-04'));
+
+  // A day is judged against a day's capacity, at every zoom, because a column
+  // IS a day at every zoom.
+  check('an ordinary day is not flagged',
+    Schedule.loadLevel(4, week[0], 1) === 1, String(Schedule.loadLevel(4, week[0], 1)));
+  check('an overbooked day is',
+    Schedule.loadLevel(12, week[0], 1) === 3, String(Schedule.loadLevel(12, week[0], 1)));
+  check('one person, one day, eight hours',
+    Schedule.capacityOf(week[0], 1) === 8, String(Schedule.capacityOf(week[0], 1)));
+
+  // Only what is booked in the window belongs in it.
+  check('a bid booked in the window is in it', Schedule.hasWorkIn(b, 'week', wed));
+  check('and is not in the week before',
+    !Schedule.hasWorkIn(b, 'week', '2026-10-28'));
+
+  // ---- now the view itself.
+  BidGrid.setDensity('employee');
+  BidGrid.setZoom('week');
+  BidGrid.setAnchor(wed);
+  const grid = U.$('bidsGridHost');
+
+  check('the Employee view is offered on Active Bids',
+    /setDensity\('employee'\)/.test(grid.innerHTML));
+  check('the calendar is a week of days',
+    grid.querySelectorAll('thead th.sched-col').length === 7,
+    String(grid.querySelectorAll('thead th.sched-col').length));
+  check('with the window named above it',
+    /Wk 45/.test(grid.textContent) && /Nov 2 - 8 2026/.test(grid.textContent),
+    Schedule.windowLabel('week', wed));
+
+  // Every column the person has arranged is here, not a fixed four.
+  const keys = BidGrid.activeColumns().map(c => c.key);
+  check('it shows the columns this view is set to, like every other view',
+    keys.length > 4 && keys.indexOf('portal') >= 0, keys.join(','));
+  check('with Engineer among them, because the calendar is a line per engineer',
+    keys.indexOf('team') >= 0, keys.join(','));
+  check('and Engineer last of them, hard against the calendar',
+    keys[keys.length - 1] === 'team', keys.slice(-3).join(','));
+  check('so the header runs ... Status, Engineer, then the dates',
+    (function () {
+      const th = [...grid.querySelectorAll('thead th')];
+      const first = th.findIndex(h => h.classList.contains('sched-col'));
+      return th[first - 1].classList.contains('sched-name');
+    })(), [...grid.querySelectorAll('thead th')].map(h => h.textContent.trim().slice(0, 6)).join('|'));
+  check('the identity block stays put while the dates scroll under it',
+    grid.querySelectorAll('thead th.col-sticky').length === 3,
+    String(grid.querySelectorAll('thead th.col-sticky').length));
+  check('which is the row controls, the counter and the project',
+    keys.slice(0, 3).join(',') === 'actions,sr,project', keys.slice(0, 3).join(','));
+
+  // Rearranging the rest does not dislodge it - it is placed, not ordered.
+  BidGrid.moveColumn('status', -1);
+  check('rearranging the other columns leaves Engineer at the edge',
+    BidGrid.activeColumns().slice(-1)[0].key === 'team',
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  BidGrid.moveColumn('status', 1);
+
+  // The column chooser drives it, the same as anywhere else.
+  BidGrid.toggleColumn('portal');
+  check('unticking a column takes it off the schedule too',
+    BidGrid.activeColumns().map(c => c.key).indexOf('portal') < 0,
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  BidGrid.toggleColumn('portal');
+
+  // THE SCHEDULE LISTS EVERY ACTIVE BID, booked or not - the same list as
+  // Comfortable and Compact, with a calendar beside it.
+  check('every active bid is on the schedule, booked or not',
+    schedRows().length === Bids.baseList().length,
+    schedRows().length + ' of ' + Bids.baseList().length);
+  check('and the bar says how many of them have anybody on them',
+    /1 of \d+ booked/.test(grid.textContent), grid.textContent.slice(0, 120));
+
+  // A bid with two engineers renders two aligned lines in every cell.
+  const row = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  const nameLines = row.querySelectorAll('td.sched-name .sched-line').length;
+  const cellLines = row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length;
+  check('two engineers give two lines in the Engineer column',
+    nameLines === 2, String(nameLines));
+  check('and the same number in every calendar cell, so they line up',
+    cellLines === nameLines, cellLines + ' vs ' + nameLines);
+  check('with a heavier rule between projects than between people',
+    row.classList.contains('sched-row'), row.className);
+
+  check('there is a totals row', grid.querySelectorAll('tr.sched-totals').length === 1);
+
+  /* THE DUE DATE, ON THE CALENDAR. A row of hours means nothing without the
+     date it is working towards, and the schedule drew one and not the other. */
+  b.dueDate = '2026-11-05';                       // the Thursday of that week
+  b.revisedDueDate = '';
+  Bids.filterTable();
+  const dueRow = () => schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  const dueCells = () => [...dueRow().querySelectorAll('td.sched-cell')];
+  check('the deadline is marked on its own day',
+    dueCells()[3].querySelector('.sched-due') && !dueCells()[2].querySelector('.sched-due'),
+    dueCells().map(c => c.querySelector('.sched-due') ? 'X' : '.').join(''));
+  check('and the heading says how many are due that day',
+    /flag-checkered/.test([...grid.querySelectorAll('thead th.sched-col')][3].innerHTML));
+
+  // A moved deadline is the one the project works to.
+  b.revisedDueDate = '2026-11-06';
+  Bids.filterTable();
+  check('a revised due date moves the marker',
+    dueCells()[4].querySelector('.sched-due') && !dueCells()[3].querySelector('.sched-due'),
+    dueCells().map(c => c.querySelector('.sched-due') ? 'X' : '.').join(''));
+
+  check('a deadline still weeks off reads as ahead',
+    !!dueCells()[4].querySelector('.due-ahead'),
+    dueCells()[4].innerHTML.slice(0, 80));
+
+  /* Overdue and due-this-week are different news and are coloured differently.
+     Measured against today, so the calendar is pointed at today's week for
+     these rather than at the fixed November one above. */
+  const shiftFromToday = n => {
+    const d = win.U.parseDate(Schedule.today());
+    d.setDate(d.getDate() + n);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+      '-' + String(d.getDate()).padStart(2, '0');
+  };
+  BidGrid.goToday();
+  b.revisedDueDate = '';
+  b.dueDate = shiftFromToday(-1);
+  Bids.filterTable();
+  check('yesterday reads as overdue',
+    !!dueRow().querySelector('.due-over'), dueRow().innerHTML.indexOf('due-') );
+  b.dueDate = shiftFromToday(1);
+  Bids.filterTable();
+  check('tomorrow reads as due soon',
+    !!dueRow().querySelector('.due-soon'));
+  BidGrid.setAnchor(wed);
+  b.dueDate = '2026-11-05';
+  b.revisedDueDate = '2026-11-06';
+  Bids.filterTable();
+
+  // A deadline off the edge of the window is not silently absent.
+  b.revisedDueDate = '';
+  b.dueDate = '2027-01-15';
+  Bids.filterTable();
+  check('a deadline past the end of the window shows on the last column',
+    !!dueCells()[6].querySelector('.sched-due-off') &&
+    !dueCells().some(c => c.querySelector('.sched-due')),
+    dueCells().map(c => c.querySelector('.sched-due-off') ? '>' : '.').join(''));
+  b.dueDate = '2026-11-05';
+  b.revisedDueDate = '';
+  Bids.filterTable();
+
+  /* HOURS BOOKED TO A ROW WITH NOBODY ON IT.
+     They were counted in the totals row and drawn nowhere - a cell reading 8
+     above a total of 13, with five hours unaccounted for on screen. */
+  Assign.add(b.id);
+  const r3 = Assign.rows(b).slice(-1)[0];
+  Assign.set(b.id, r3.id, 'startDate', '11-02-2026');
+  Assign.setDay(b.id, r3.id, '2026-11-02', '5');
+  check('a booking with no engineer on it is still a booking',
+    r3.engineer === '' && r3.asgnHrs === 5, r3.engineer + '/' + r3.asgnHrs);
+
+  const row3 = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  const names = [...row3.querySelectorAll('td.sched-name .sched-line')].map(s => s.textContent);
+  const monday = row3.querySelectorAll('td.sched-cell')[0];
+  const figures = [...monday.querySelectorAll('.sched-line')].map(s => s.textContent);
+  check('it gets a line of its own, after the named ones',
+    names.length === 3 && names[2] === 'unassigned', names.join('|'));
+  check('and its hours are shown on that line',
+    figures.length === 3 && figures[2] === '5', figures.join('|'));
+  check('so the cell now accounts for every hour the totals row counts',
+    figures.reduce((s, t) => s + (parseFloat(t) || 0), 0) === 13, figures.join('|'));
+  const mondayTotal = grid.querySelector('tr.sched-totals td.sched-cell').textContent.trim();
+  check('which is what the totals row says', mondayTotal === '13', mondayTotal);
+
+  Assign.remove(b.id, r3.id);
+
+  // Paging the calendar moves the window and takes the rows with it.
+  BidGrid.stepWindow(-1);
+  check('a step back lands on the week before',
+    BidGrid.anchor() === '2026-10-26', BidGrid.anchor());
+  check('where nothing is booked - but the bids are still listed',
+    /0 of \d+ booked/.test(U.$('bidsGridHost').textContent) &&
+    schedRows().length === Bids.baseList().length,
+    schedRows().length + ' rows');
+  BidGrid.stepWindow(1);
+  check('and forward again brings the hours back',
+    schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0)
+      .querySelector('td.sched-cell').textContent.indexOf('5') >= 0);
+
+  BidGrid.setZoom('month');
+  check('the Month zoom draws the whole month',
+    U.$('bidsGridHost').querySelectorAll('thead th.sched-col').length === 30,
+    String(U.$('bidsGridHost').querySelectorAll('thead th.sched-col').length));
+  check('and sizes its columns for it',
+    /grid-table sched-month/.test(U.$('bidsGridHost').innerHTML));
+
+  BidGrid.setZoom('day');
+  check('the Day zoom draws one column',
+    U.$('bidsGridHost').querySelectorAll('thead th.sched-col').length === 1,
+    String(U.$('bidsGridHost').querySelectorAll('thead th.sched-col').length));
+
+  // Today is always one control away, and the zoom is what is remembered.
+  BidGrid.goToday();
+  check('Today comes back to now', BidGrid.anchor() === Schedule.today(), BidGrid.anchor());
+  check('the zoom is remembered', BidGrid.cfg().zoom === 'day', BidGrid.cfg().zoom);
+  check('but where you had paged to is not - it opens on today',
+    BidGrid.cfg().anchor === undefined, String(BidGrid.cfg().anchor));
+
+  // It is an Active Bids view, and heals if a layout names it elsewhere.
+  Bids.setView('all');
+  BidGrid.cfg().density = 'employee';
+  Bids.filterTable();
+  check('a layout naming it on another tab falls back',
+    !U.$('bidsGridHost').querySelector('.sched-col'),
+    U.$('bidsGridHost').querySelectorAll('.sched-col').length + ' period columns on All Bids');
+  check('and All Bids does not offer it',
+    !/setDensity\('employee'\)/.test(U.$('bidsGridHost').innerHTML));
+  BidGrid.cfg().density = 'comfortable';
+
+  // Switching back restores the columns that were arranged, untouched.
+  Bids.setView('active');
+  BidGrid.setDensity('comfortable');
+  check('switching back restores the saved columns',
+    BidGrid.activeColumns().length > 4,
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  check('which the Employee view never wrote over',
+    BidGrid.cfg().visible.indexOf('portal') >= 0,
+    BidGrid.cfg().visible.join(','));
+  check('including where Engineer sits - it is only moved on the schedule',
+    BidGrid.activeColumns().slice(-1)[0].key !== 'team',
+    BidGrid.activeColumns().map(c => c.key).join(','));
+}
+
+console.log('\n--- one colour per person ---');
+{
+  /* Three grey initials over a column of grey figures means counting lines to
+     work out whose hours those are. Every person carries a colour instead, and
+     it has to be the SAME colour in the name column and on the hours - which is
+     the whole of what these checks are for. */
+  const reg = Store.db.engineers;
+  const af = Bids.findEngineer('AF') || Bids.addEngineer('AF', 'A Fitter');
+  const mgj = Bids.findEngineer('MGJ') || Bids.addEngineer('MGJ', 'M G Jadhav');
+
+  check('everybody in the register has a colour without anybody setting one',
+    /^pal-\d+$/.test(Bids.colorClass('AF')), Bids.colorClass('AF'));
+  check('and two people do not share one',
+    Bids.colorClass('AF') !== Bids.colorClass('MGJ'),
+    Bids.colorClass('AF') + ' vs ' + Bids.colorClass('MGJ'));
+  check('the whole register is inside the palette',
+    reg.every(e => Bids.colorOf(e) >= 1 && Bids.colorOf(e) <= Bids.PALETTE),
+    reg.map(e => Bids.colorOf(e)).join(','));
+  check('the first fourteen entries are fourteen different colours',
+    new Set(reg.slice(0, Bids.PALETTE).map(e => Bids.colorOf(e))).size ===
+      Math.min(reg.length, Bids.PALETTE),
+    reg.slice(0, Bids.PALETTE).map(e => Bids.colorOf(e)).join(','));
+  check('somebody the register has never heard of is grey, not a fifteenth colour',
+    Bids.colorClass('ZZZ') === 'pal-none', Bids.colorClass('ZZZ'));
+
+  // Choosing one by hand, and going back to the one they were given.
+  const auto = Bids.colorOf(af);
+  Bids.setEngineerColor(af.id, 9);
+  check('a colour chosen by hand wins', Bids.colorClass('AF') === 'pal-9',
+    Bids.colorClass('AF'));
+  check('and is on the record, so it reaches every other browser',
+    Store.db.engineers.filter(e => e.id === af.id)[0].color === 9);
+  Bids.setEngineerColor(af.id, 0);
+  check('Auto puts them back on the colour they were given',
+    Bids.colorOf(af) === auto, Bids.colorOf(af) + ' vs ' + auto);
+  check('with nothing left on the record to explain',
+    Store.db.engineers.filter(e => e.id === af.id)[0].color === undefined);
+
+  // ---- and now on the schedule, which is what it is for.
+  Bids.setView('active');
+  BidGrid.setDensity('employee');
+  BidGrid.setZoom('week');
+  BidGrid.setAnchor('2026-11-04');
+  Bids.filterTable();
+
+  const row = [...U.$('bidsGridHost').querySelectorAll('tr.sched-row')]
+    .find(tr => /AF/.test(tr.textContent) && /MGJ/.test(tr.textContent));
+  check('the Engineer column labels each person with their colour',
+    row && row.querySelectorAll('td.sched-name .person-chip').length === 2,
+    row ? row.querySelector('td.sched-name').innerHTML.slice(0, 120) : 'no row');
+
+  const chipClass = i => [...row.querySelectorAll('td.sched-name .person-chip')][i]
+    .className.match(/pal-\S+/)[0];
+  const booked = [...row.querySelectorAll('td.sched-cell .sched-line.is-booked')];
+  check('and the hours booked to them carry the same colour',
+    booked.length > 0 && booked.every(s =>
+      s.className.indexOf(chipClass(0)) >= 0 || s.className.indexOf(chipClass(1)) >= 0),
+    booked.map(s => s.className.match(/pal-\S+/)[0]).join(','));
+  check('a day with nothing booked stays clear, so the load wash still reads',
+    [...row.querySelectorAll('td.sched-cell .sched-line')]
+      .filter(s => s.textContent.trim() === '·')
+      .every(s => !s.classList.contains('is-booked')));
+
+  // The line height is what makes the frozen column and the calendar agree; a
+  // label that added to it would put every figure in the month out of step.
+  check('the label does not make the line taller than the figures beside it',
+    row.querySelectorAll('td.sched-name .sched-line').length ===
+      row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length,
+    row.querySelectorAll('td.sched-name .sched-line').length + ' vs ' +
+      row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length);
+
+  // The same colour wherever the person is named.
+  check('the bid table names them in the same colour',
+    Bids.personChip('MGJ').indexOf(Bids.colorClass('MGJ')) >= 0,
+    Bids.personChip('MGJ'));
+
+  BidGrid.setDensity('comfortable');
+  Bids.filterTable();
+}
+
+console.log('\n--- every change is recorded, by whom and when ---');
+{
+  Bids.setView('all');
+  Bids.openAdd();
+  U.$('mProject').value = 'Audit trail test';
+  U.$('mPortal').value = 'PlanHub';
+  U.$('mRegion').value = Store.db.regions[0];
+  U.$('mStatus').value = 'Not Started';
+  U.$('mPrice').value = '1000';
+  Bids.save({ preventDefault() {} });
+  const b = Store.db.bids.filter(x => x.project === 'Audit trail test')[0];
+
+  check('creating a bid is recorded',
+    History.entries(b).length === 1 && History.entries(b)[0].kind === 'created',
+    JSON.stringify(History.entries(b)));
+  check('stamped at the moment it was created',
+    History.entries(b)[0].at === b.createdAt, History.entries(b)[0].at);
+
+  // Through the form: one Save that moved three fields is one entry naming all
+  // three, not three entries.
+  Bids.edit(b.id);
+  U.$('mPrice').value = '2000';
+  U.$('mComments').value = 'client called';
+  U.$('mStatus').value = 'In Progress';
+  Bids.save({ preventDefault() {} });
+  const formEdit = History.entries(b)[History.entries(b).length - 1];
+  check('a form save records one entry for the whole save',
+    formEdit.kind === 'edit' && formEdit.changes.length === 3,
+    JSON.stringify(formEdit.changes));
+  check('naming each field with its before and after',
+    formEdit.changes.some(c => c.label === 'Bid Price' && /1,000/.test(c.from) && /2,000/.test(c.to)),
+    JSON.stringify(formEdit.changes));
+  check('and dates read in the format the rest of the app uses',
+    (Bids.saveField(b.id, 'dueDate', '11-05-2026', 'date', null),
+     History.entries(b).slice(-1)[0].changes[0].to === '11-05-2026'),
+    JSON.stringify(History.entries(b).slice(-1)[0].changes));
+
+  // Through the inline editor, and the coalescing that keeps it readable.
+  const before = History.entries(b).length;
+  Bids.saveField(b.id, 'link', 'https://one.example', 'text', null);
+  Bids.saveField(b.id, 'link', 'https://two.example', 'text', null);
+  check('two quick edits to one field become one entry',
+    History.entries(b).length === before + 1, String(History.entries(b).length - before));
+  const merged = History.entries(b).slice(-1)[0];
+  check('keeping the original value and the latest one',
+    merged.changes[0].from === '' && merged.changes[0].to === 'https://two.example',
+    JSON.stringify(merged.changes));
+
+  Bids.saveField(b.id, 'comments', 'a different field', 'textarea', null);
+  check('but a different field is its own entry',
+    History.entries(b).length === before + 2);
+
+  // Typed something, thought better of it, put it back: nothing happened.
+  const settled = History.entries(b).length;
+  Bids.saveField(b.id, 'portal', 'PennBid', 'select', null);
+  Bids.saveField(b.id, 'portal', 'PlanHub', 'select', null);
+  check('an edit undone within the window leaves no entry',
+    History.entries(b).length === settled, String(History.entries(b).length - settled));
+  check('and the record really is back to where it started',
+    b.portal === 'PlanHub', b.portal);
+
+  // The two cards each summarise themselves into one readable line.
+  Bids.promoteBid(b);
+  const teamBefore = History.entries(b).length;
+  Assign.add(b.id);
+  const row = Assign.rows(b)[0];
+  Assign.set(b.id, row.id, 'engineer', 'AF');
+  const teamEntry = History.entries(b).slice(-1)[0];
+  check('a team change is recorded as one readable line',
+    teamEntry.kind === 'edit' && teamEntry.changes[0].label === 'Team & Hours' &&
+    /AF/.test(teamEntry.changes[0].to),
+    JSON.stringify(teamEntry.changes));
+  check('rather than as a blob of JSON',
+    !/[{[]/.test(teamEntry.changes[0].to), teamEntry.changes[0].to);
+  check('and the team change did produce entries', History.entries(b).length > teamBefore);
+
+  Products.add(b.id);
+  const pl = Products.rows(b).slice(-1)[0];
+  Products.onProductChange({ value: 'Bollard' }, b.id, pl.id);
+  const prodEntry = History.entries(b).slice(-1)[0];
+  check('so is a product change',
+    prodEntry.changes[0].label === 'Products & Materials' &&
+    /Bollard/.test(prodEntry.changes[0].to),
+    JSON.stringify(prodEntry.changes));
+
+  // Old entries predate `kind` and were all stage moves.
+  const legacy = { id: 'h-old', at: '2026-01-02T03:04:05.000Z', by: 'MGJ',
+                   from: 'intake', to: 'active' };
+  b.history.unshift(legacy);
+  check('an entry written before kind existed still renders',
+    /Moved to/.test(History.card(b)) || History.entries(b).length > 0);
+  b.history = b.history.filter(e => e.id !== 'h-old');
+
+  // Every entry carries who and when.
+  check('every entry has a timestamp',
+    History.entries(b).every(e => /^\d{4}-\d{2}-\d{2}T/.test(e.at)),
+    History.entries(b).map(e => e.at).join(','));
+  check('and the card shows them in IST, newest first',
+    /IST/.test(History.card(b)), History.card(b).slice(0, 200));
+}
+
+console.log('\n--- products carry their own materials ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList()[0];
+
+  // Every bid was migrated from the flat fields into rows.
+  check('a seeded bid has product rows',
+    Array.isArray(b.productLines), JSON.stringify(b.productLines));
+  check('one row per product it already had',
+    b.productLines.length === b.products.filter(Boolean).length,
+    b.productLines.length + ' vs ' + b.products.length);
+
+  // The flat fields are a projection now, rewritten from the rows.
+  Products.add(b.id);
+  const row = b.productLines[b.productLines.length - 1];
+  Products.onProductChange({ value: 'Bollard' }, b.id, row.id);
+  check('adding a product row reaches bid.products',
+    b.products.indexOf('Bollard') >= 0, b.products.join('|'));
+
+  Products.toggleMaterial(b.id, row.id, 'Aluminum');
+  Products.toggleMaterial(b.id, row.id, 'Glass');
+  check('a product can carry more than one material',
+    Products.materialsOf(row).join('|') === 'Aluminum|Glass',
+    Products.materialsOf(row).join('|'));
+  check('and both reach bid.material',
+    /Aluminum/.test(b.material) && /Glass/.test(b.material), b.material);
+
+  Products.toggleMaterial(b.id, row.id, 'Glass');
+  check('toggling one off removes it again',
+    Products.materialsOf(row).join('|') === 'Aluminum', Products.materialsOf(row).join('|'));
+
+  // Two products in the same material is one material, not two - or the
+  // Material column's filter would offer it twice.
+  const second = (Products.add(b.id), b.productLines[b.productLines.length - 1]);
+  Products.onProductChange({ value: 'Railing' }, b.id, second.id);
+  Products.toggleMaterial(b.id, second.id, 'Aluminum');
+  check('a material shared by two products is listed once',
+    (b.material.match(/Aluminum/g) || []).length === 1, b.material);
+
+  Products.remove(b.id, second.id);
+  check('removing a row takes its product off the bid',
+    b.products.indexOf('Railing') < 0 || b.productLines.some(r => r.product === 'Railing'),
+    b.products.join('|'));
+
+  // The bid form is the quick intake path and must not flatten pairings the
+  // card was used to make.
+  Bids.edit(b.id);
+  Bids.save({ preventDefault() {} });
+  check('saving the bid form keeps the materials the card set',
+    b.productLines.some(r => r.product === 'Bollard' &&
+      Products.materialsOf(r).indexOf('Aluminum') >= 0),
+    JSON.stringify(b.productLines));
+
+  // Renaming a material in Settings carries onto every row using it.
+  const before = Products.countMaterial('Aluminum');
+  check('the material is counted across bids', before >= 1, String(before));
+  Products.renameMaterial('Aluminum', 'Aluminium');
+  check('a rename reaches the rows',
+    Products.countMaterial('Aluminium') === before &&
+    Products.countMaterial('Aluminum') === 0,
+    Products.countMaterial('Aluminium') + '/' + Products.countMaterial('Aluminum'));
+  check('and the derived field follows it', /Aluminium/.test(b.material), b.material);
+  Products.renameMaterial('Aluminium', 'Aluminum');
+
+  check('materials are a managed list like regions and task types',
+    Array.isArray(Store.db.materials) && Store.db.materials.length >= 6,
+    JSON.stringify(Store.db.materials));
+}
+
+console.log('\n--- a revised due date is the date that counts ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open')[0];
+
+  Bids.edit(b.id);
+  U.$('mDueDate').value = '06-10-2026';
+  U.$('mRevisedDueDate').value = '';
+  Bids.save({ preventDefault() {} });
+  check('with no revision, the due date stands',
+    Bids.effectiveDueDate(b) === '2026-06-10', Bids.effectiveDueDate(b));
+  check('and the bid is filed under that month', b.month === 5, String(b.month));
+
+  Bids.edit(b.id);
+  U.$('mRevisedDueDate').value = '07-22-2026';
+  Bids.save({ preventDefault() {} });
+  check('a revised date overrides it',
+    Bids.effectiveDueDate(b) === '2026-07-22', Bids.effectiveDueDate(b));
+  check('the original is kept, not overwritten', b.dueDate === '2026-06-10', b.dueDate);
+  check('and the bid moves to the revised month', b.month === 6, String(b.month));
+
+  // The grid sorts and reads on the effective date, and shows both.
+  Bids.filterTable();
+  const dueCol = BidGrid.COLUMNS.filter(c => c.key === 'dueDate')[0];
+  check('the grid column reads the effective date',
+    dueCol.value(b) === '2026-07-22', dueCol.value(b));
+  check('and its cell shows what it was revised from',
+    /07-22-2026/.test(dueCol.render(b)) && /06-10-2026/.test(dueCol.render(b)),
+    dueCol.render(b));
+  /* NEITHER DATE IS CROSSED OUT. The original used to be struck through under
+     the revised one, which reads as cancelled - it is not, it is the date on
+     the record and the reason the revision is worth knowing about. */
+  check('with neither of them struck through',
+    !/line-through/.test(dueCol.render(b)), dueCol.render(b));
+
+  // The project page shows each field as itself: Due Date is the due date, not
+  // a derived "whichever is in force" with the other crossed out beside it.
+  Project.openFrom(b.id, 'active');
+  Project.render();
+  const cell = key => [...win.document.querySelectorAll('#section-project [data-edit]')]
+    .find(el => JSON.parse(el.dataset.edit).field === key);
+  check('the Due Date field shows the due date, plainly',
+    cell('dueDate').textContent.trim() === '06-10-2026',
+    cell('dueDate').textContent.trim());
+  check('the Revised Due field shows the revision',
+    /07-22-2026/.test(cell('revisedDueDate').textContent),
+    cell('revisedDueDate').textContent.trim());
+  check('and says which of the two the app works to',
+    /in force/.test(cell('revisedDueDate').textContent));
+  check('with nothing struck through on either',
+    !/line-through/.test(cell('dueDate').innerHTML + cell('revisedDueDate').innerHTML));
+
+  // And the schedule flags the revised date, since that is the one in force.
+  check('the Employee schedule counts down to the revised date',
+    Bids.effectiveDueDate(b) === '2026-07-22', Bids.effectiveDueDate(b));
+
+  // A date that cannot exist must be refused, not stored as ''.
+  Bids.edit(b.id);
+  U.$('mRevisedDueDate').value = '02-30-2026';
+  Bids.save({ preventDefault() {} });
+  check('an impossible revised date blocks the save',
+    b.revisedDueDate === '2026-07-22', b.revisedDueDate);
+  check('and the field is flagged',
+    /border-danger/.test(U.$('mRevisedDueDate').className));
+
+  // Clearing it puts the original back in force.
+  Bids.edit(b.id);
+  U.$('mRevisedDueDate').value = '';
+  Bids.save({ preventDefault() {} });
+  check('clearing the revision restores the original',
+    Bids.effectiveDueDate(b) === '2026-06-10', Bids.effectiveDueDate(b));
+}
+
+console.log('\n--- every bid records when it arrived ---');
+{
+  Bids.openAdd();
+  U.$('mProject').value = 'Arrival stamp test';
+  U.$('mPortal').value = 'PlanHub';
+  U.$('mRegion').value = Store.db.regions[0];
+  U.$('mStatus').value = 'Not Started';
+  Bids.save({ preventDefault() {} });
+  const fresh = Store.db.bids.filter(x => x.project === 'Arrival stamp test')[0];
+  check('a new bid is stamped with a full timestamp',
+    /^\d{4}-\d{2}-\d{2}T/.test(fresh.createdAt), String(fresh.createdAt));
+  check('and is not marked as inferred', !fresh.createdAtInferred);
+  check('a new bid starts in intake with no number',
+    !fresh.active && !fresh.proposalNo, String(fresh.proposalNo));
+
+  // Seeded bids predate the field, so theirs is inferred and says so.
+  const seeded = Store.db.bids.filter(x => x.id !== fresh.id)[0];
+  check('an existing bid was backfilled', seeded.createdAt !== undefined);
+  check('and is marked as a guess rather than an observation',
+    seeded.createdAtInferred === true, String(seeded.createdAtInferred));
+}
+
+console.log('\n--- the dashboard ---');
+{
+  App.switchTab('dashboard');
+
+  const kpi = id => U.$(id).textContent;
+  check('the KPI row counts every bid', kpi('kpiTotal') === String(Store.db.bids.length),
+    kpi('kpiTotal'));
+  // Each figure carries the one fact that makes it mean something; a blank
+  // note means the tile is back to being a number with no context.
+  check('and every tile says something underneath it',
+    ['kpiTotal', 'kpiSubmitted', 'kpiProgress', 'kpiAwarded', 'kpiValue']
+      .every(id => U.$(id + 'Note').textContent.trim().length > 0));
+
+  const strip = U.$('monthGrid');
+  check('the month strip has one bar per month', strip.children.length === 12,
+    String(strip.children.length));
+  check('and every bar can be clicked to filter',
+    [...strip.children].every(el => /selectMonth/.test(el.getAttribute('onclick'))));
+
+  check('needs-attention rendered something', U.$('attentionList').innerHTML.length > 0);
+
+  /* NEEDS ATTENTION IS A TO-DO LIST, so it may not hide its tail and it may not
+     nag about work that is finished.
+
+     The panel used to print four rows and "and N more" under a count of eight,
+     which is the worst of both: it tells you there is something you cannot
+     reach. It now renders every row and the card scrolls. And Completed sits in
+     the `open` bucket - done, but not yet won or lost - so a finished job went
+     on reporting itself overdue until somebody archived it. */
+  {
+    const panel = U.$('attentionList');
+    const due = [...panel.querySelectorAll('div')]
+      .find(d => /Due within 7 days/i.test(d.textContent));
+    const rowsFor = () => {
+      const heads = [...panel.children];
+      const group = heads.find(g => /Due within 7 days/i.test(g.textContent));
+      return group ? [...group.querySelectorAll('button')] : [];
+    };
+    const countFor = () => {
+      const group = [...panel.children].find(g => /Due within 7 days/i.test(g.textContent));
+      return group ? Number(group.querySelector('span.tabular-nums').textContent) : 0;
+    };
+    check('the due list has a heading with a count', !!due && countFor() > 0,
+      String(countFor()));
+    check('and shows every row it counts, not the first four',
+      rowsFor().length === countFor(), `${rowsFor().length} rows, count says ${countFor()}`);
+    check('so nothing is stranded behind an "and N more"',
+      !/and \d+ more/.test(panel.innerHTML));
+
+    // Take the most overdue bid and mark it done; it should leave the list.
+    const overdue = rowsFor()[0];
+    const id = Number(/Project\.open\((\d+)\)/.exec(overdue.getAttribute('onclick'))[1]);
+    const bid = Store.db.bids.find(b => b.id === id);
+    const before = countFor();
+    const wasStatus = bid.status;
+    bid.status = 'Completed';
+    Bids.refresh();
+    check('a bid marked Completed stops being reported as due',
+      countFor() === before - 1 &&
+      !rowsFor().some(r => r.getAttribute('onclick').includes('open(' + id + ')')),
+      `${before} -> ${countFor()}`);
+    bid.status = wasStatus;
+    Bids.refresh();
+    check('and comes back when it is reopened', countFor() === before,
+      `${countFor()} vs ${before}`);
+  }
+
+  // The redundant Monthly Bid Volume chart went; the month strip is the same
+  // twelve numbers and is also the filter.
+  check('there is no second copy of the month figures', U.$('monthChart') === null);
+}
+
+console.log('\n--- the bids grid ---');
+{
+  App.switchTab('active');
+  const grid = U.$('bidsGridHost');
+
+  // Scrolling right used to take the project name off the screen, so THAT is
+  // the column that has to be frozen - checking "something is frozen" passes
+  // happily while Sr. No. is pinned on its own and Project sails away.
+  const heads = [...grid.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  const frozenHeads = [...grid.querySelectorAll('thead th.col-sticky')]
+    .map(th => th.textContent.trim());
+  check('the project name is frozen', frozenHeads.some(h => /^Project/.test(h)),
+    JSON.stringify(frozenHeads));
+  check('and the frozen ones lead the table',
+    heads.slice(0, frozenHeads.length).join('|') === frozenHeads.join('|'),
+    JSON.stringify(heads.slice(0, 4)));
+
+  const frozen = [...grid.querySelectorAll('tbody tr:first-child .col-sticky')];
+  check('every row freezes the same columns', frozen.length === frozenHeads.length,
+    frozen.length + ' vs ' + frozenHeads.length);
+  check('and each one is told where its left edge is',
+    frozen.every(td => /left:\d+px/.test(td.getAttribute('style') || '')));
+  check('the last frozen column carries the edge',
+    grid.querySelectorAll('tbody tr:first-child .col-sticky-edge').length === 1);
+
+  // Every row the same height, whatever is in it.
+  const rowClasses = [...grid.querySelectorAll('tbody tr')].map(tr => tr.className);
+  check('every row is given the same height',
+    rowClasses.length > 1 && new Set(rowClasses.map(c => /h-\[\d+px\]/.exec(c)?.[0])).size === 1,
+    JSON.stringify([...new Set(rowClasses)].slice(0, 3)));
+
+  // Actions lead the row and are one button, not a cluster of six at the far
+  // right that you had to scroll the project name away to reach.
+  check('Actions is the first column',
+    BidGrid.activeColumns()[0].key === 'actions',
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  check('and is frozen with the identity block',
+    !!grid.querySelector('thead th.col-sticky') &&
+    grid.querySelectorAll('thead th')[0].classList.contains('col-sticky'));
+
+  const cell = Bids.actionCell(Store.db.bids[0]);
+  const buttons = (cell.match(/<button|<a /g) || []).length;
+  check('a row offers exactly one control', buttons === 1, String(buttons));
+  check('and everything else is behind its menu', /openRowMenu/.test(cell));
+  check('the menu names its actions in words, not just icons',
+    /Edit bid/.test(Bids.rowMenu(Store.db.bids[0])), Bids.rowMenu(Store.db.bids[0]));
+
+  // Column widths: per view, persisted with the rest of the layout, and fed
+  // back into the frozen block's left offsets.
+  check('every header offers a resize grip',
+    grid.querySelectorAll('thead .col-resize').length ===
+      BidGrid.activeColumns().length,
+    grid.querySelectorAll('thead .col-resize').length + ' of ' +
+      BidGrid.activeColumns().length);
+
+  BidGrid.cfg().widths.project = 320;
+  Bids.filterTable();
+  const projIdx = BidGrid.activeColumns().findIndex(c => c.key === 'project');
+  const projTh = U.$('bidsGridHost').querySelectorAll('thead th')[projIdx];
+  check('a set width reaches the header cell',
+    /width:\s*320px/.test(projTh.getAttribute('style') || ''),
+    projTh.getAttribute('style'));
+  // Project is frozen, so everything frozen to its right shifts with it.
+  const after = [...U.$('bidsGridHost').querySelectorAll('thead th.col-sticky')];
+  const lefts = after.map(th => /left:(\d+)px/.exec(th.getAttribute('style') || '')?.[1]);
+  check('the frozen offsets are recomputed from it',
+    lefts.every(v => v !== undefined) &&
+    lefts.map(Number).every((v, i, a) => i === 0 || v > a[i - 1]),
+    lefts.join(','));
+
+  check('widths are remembered per view, not globally',
+    (Bids.setView('all'), !BidGrid.cfg().widths.project));
+  Bids.setView('active');
+  check('and are still there on the view they were set on',
+    BidGrid.cfg().widths.project === 320);
+
+  BidGrid.resetWidths();
+  check('Reset widths clears them',
+    Object.keys(BidGrid.cfg().widths).length === 0);
+  check('and leaves the columns themselves alone',
+    BidGrid.activeColumns().some(c => c.key === 'project'));
+
+  Bids.filterTable();
+  check('the density toggle is on the table', /setDensity/.test(grid.innerHTML));
+  BidGrid.setDensity('compact');
+  check('and compact really is shorter',
+    /h-\[36px\]/.test(U.$('bidsGridHost').innerHTML));
+  check('which is remembered with the rest of the layout',
+    Store.db.ui.grids.active.density === 'compact');
+  BidGrid.setDensity('comfortable');
+}
+
+console.log('\n--- where the app opens ---');
+{
+  /* Opening the app and reloading it are different events and want opposite
+     answers. The marker is per tab, so it tells them apart. */
+  const SECTION = 'dv.tab.section';
+  const BID = 'dv.tab.bid';
+  const before = Store.db.ui.section;
+
+  win.sessionStorage.clear();
+  Store.db.ui.section = 'proposal';        // where this person last was
+  check('a fresh tab opens on the Dashboard, not where anybody was last',
+    Nav.initialSection() === 'dashboard', Nav.initialSection());
+
+  // Navigating writes the marker, so a reload of this tab stays put.
+  Bids.setView('all');
+  App.switchTab('all');
+  check('navigating remembers the page for this tab',
+    win.sessionStorage.getItem(SECTION) === 'all',
+    win.sessionStorage.getItem(SECTION));
+  check('and a reload comes back to it',
+    Nav.initialSection() === 'all', Nav.initialSection());
+
+  // On a project, the project itself is remembered too - ui.projectBidId is
+  // shared by every tab and so is whichever one moved last.
+  const b = Bids.baseList()[0];
+  Project.openFrom(b.id, 'all');
+  check('a project page remembers which project',
+    Nav.tabBidId() === b.id, String(Nav.tabBidId()));
+  // Leaving the project page keeps it: this is the project THIS tab was last
+  // looking at, and it is only ever a hint for what to reopen. The page it
+  // lands on is the marker above, so a reload here comes back to All Bids -
+  // with the same project behind it if you go back in.
+  App.switchTab('all');
+  check('leaving the project page keeps which project it was',
+    Nav.tabBidId() === b.id && win.sessionStorage.getItem(SECTION) === 'all',
+    Nav.tabBidId() + ' / ' + win.sessionStorage.getItem(SECTION));
+
+  // A page the role cannot open is never landed on.
+  check('an unknown marker is ignored',
+    (win.sessionStorage.setItem(SECTION, 'nonsense'), Nav.initialSection() === 'dashboard'),
+    Nav.initialSection());
+
+  /* THE BOOT PATH ITSELF, not just the function that decides.
+     Reopening the last takeoff and proposal is part of starting up, and each of
+     them navigates to its own page on the way - which wrote this tab's marker.
+     So the proposal set the marker to 'proposal' and the landing decision, read
+     afterwards, found it there. Every load opened the proposal, whatever you
+     had been doing; going somewhere else first did not help, because the next
+     boot overwrote the marker again before reading it.
+
+     Asserting through App.resumeLastSession because the ordering IS the fix -
+     testing Nav.initialSection alone is what let this through. */
+  const hasProposal = Object.keys(Store.db.proposals)[0];
+  Store.db.ui.lastProposalId = hasProposal;
+  Store.db.ui.lastTakeoffId = Object.keys(Store.db.takeoffs)[0];
+
+  win.sessionStorage.clear();
+  App.resumeLastSession();
+  check('a fresh tab still opens on the Dashboard with a proposal to reopen',
+    App.currentTab === 'dashboard', App.currentTab);
+
+  win.sessionStorage.setItem(SECTION, 'all');
+  App.resumeLastSession();
+  check('and a reload comes back to the page you were on, not the proposal',
+    App.currentTab === 'all', App.currentTab);
+  check('which is what the marker still says afterwards',
+    win.sessionStorage.getItem(SECTION) === 'all',
+    win.sessionStorage.getItem(SECTION));
+
+  Store.db.ui.lastProposalId = null;
+  Store.db.ui.lastTakeoffId = null;
+
+  win.sessionStorage.removeItem(SECTION);
+  win.sessionStorage.removeItem(BID);
+  Store.db.ui.section = before;
+  Bids.setView('active');
+  App.switchTab('active');
+}
+
+console.log('\n--- the user guide ---');
+{
+  const { Guide } = win;
+  check('the guide has sections', Guide.SECTIONS.length >= 10, String(Guide.SECTIONS.length));
+  check('each one says what it is and gives details',
+    Guide.SECTIONS.every(s => s.key && s.title && s.blurb && s.points.length),
+    Guide.SECTIONS.filter(s => !(s.blurb && s.points.length)).map(s => s.key).join(','));
+  check('and it is honest about the modules that are not built',
+    /not built/i.test(Guide.SECTIONS.map(s => s.title + ' ' + s.blurb).join(' ')));
+
+  // The sign-in page shows the headline half of the same document, so the two
+  // cannot drift apart.
+  const lead = Guide.SECTIONS.filter(s => s.lead);
+  check('the sign-in page shows the lead sections', lead.length >= 3, String(lead.length));
+  const landing = Guide.landing();
+  check('and draws every one of them',
+    lead.every(s => landing.indexOf(U.esc(s.title)) >= 0), landing.slice(0, 120));
+
+  Guide.open();
+  const modal = U.$('guideModal');
+  check('Help opens the full guide', !modal.classList.contains('hidden'));
+  check('with every section in it',
+    Guide.SECTIONS.every(s => modal.querySelector('#guide-' + s.key)),
+    Guide.SECTIONS.filter(s => !modal.querySelector('#guide-' + s.key)).map(s => s.key).join(','));
+  check('and a way out', /Guide.close\(\)/.test(modal.innerHTML));
+  Guide.close();
+  check('which closes it', modal.classList.contains('hidden'));
+
+  check('the Help button is in the header',
+    /Guide.open\(\)/.test(U.$('headerActions').innerHTML));
+
+  // The sign-in screen. The harness runs with no server, so the gate never
+  // opens on its own - this is what it would draw.
+  const gate = win.Auth.gateHTML();
+  check('the sign-in page carries the form',
+    /authUsername/.test(gate) && /authPassword/.test(gate) &&
+    /Auth.submitLogin/.test(gate), gate.slice(0, 100));
+  check('and says what the app is, rather than only asking who you are',
+    lead.every(s => gate.indexOf(U.esc(s.title)) >= 0));
+  check('with a way into the guide before signing in',
+    /Guide.openFromGate\(\)/.test(gate));
+
+  /* THE WELD. The scene is drawn from js/intro.js and animated with the same
+     spark engine as the banner. jsdom has no layout and no canvas, so what can
+     be checked here is that the scene is built, that it degrades to the
+     finished mark rather than throwing, and that the guards hold. */
+  check('the sign-in page welds the mark rather than just showing it',
+    /introStage/.test(gate) && /introSparks/.test(gate) && /intro-arc/.test(gate));
+  check('and carries the company\'s own words, not invented ones',
+    /Trust Through Quality Work/.test(gate) && /Safety is our foundation/.test(gate));
+  check('with the buttons under it',
+    /Intro.play\(\)/.test(gate) && /User guide/.test(gate) && /About this app/.test(gate));
+
+  // Mounting it with no layout must settle to the finished mark and touch no
+  // canvas - which is what stops the test harness reporting a jsdom error.
+  U.$('bootOverlay').innerHTML = gate;
+  win.Intro.mount();
+  check('with no layout engine it settles instead of animating',
+    U.$('introStage').classList.contains('is-welded'));
+  check('and the words are up rather than waiting for an animation that cannot run',
+    U.$('introWords').classList.contains('is-in'));
+  check('the spark engine was never asked for a drawing context',
+    !win.Sparks.isRunning());
+
+  // The password field.
+  check('the password is hidden to start with',
+    U.$('authPassword').type === 'password', U.$('authPassword').type);
+  win.Auth.toggleReveal('authPassword');
+  check('and can be shown, because a password you cannot see is one you mistype',
+    U.$('authPassword').type === 'text', U.$('authPassword').type);
+  check('the button says what it will do next',
+    /eye-slash/.test(U.$('authPasswordEye').innerHTML) &&
+    U.$('authPasswordEye').getAttribute('aria-label') === 'Hide the password');
+  win.Auth.toggleReveal('authPassword');
+  check('and hides it again', U.$('authPassword').type === 'password');
+  check('the reveal button is out of the tab order - Tab belongs to Sign in',
+    U.$('authPasswordEye').tabIndex === -1, String(U.$('authPasswordEye').tabIndex));
+
+  // Caps Lock, the most common cause of "the password does not work".
+  const caps = on => win.Auth.capsCheck({ getModifierState: k => k === 'CapsLock' && on });
+  caps(true);
+  check('Caps Lock is called out', !U.$('capsWarn').classList.contains('hidden'));
+  caps(false);
+  check('and the warning clears with it', U.$('capsWarn').classList.contains('hidden'));
+
+  U.$('bootOverlay').innerHTML = '';
+}
+
+console.log('\n--- who else is on this project ---');
+{
+  const { Presence } = win;
+  const b = Bids.baseList()[0];
+  const other = Bids.baseList()[1];
+
+  // What the server sends: one entry per connection, ours included.
+  Presence.adopt([
+    { clientId: 1, userId: 7, name: 'Meera Joshi', initials: 'MGJ',
+      where: { bidId: b.id, section: 'takeoff' } },
+    { clientId: 2, userId: 9, name: 'Ravi Kumar', initials: null,
+      where: { bidId: other.id, section: 'project' } },
+    { clientId: 3, userId: 7, name: 'Meera Joshi', initials: 'MGJ',
+      where: { bidId: b.id, section: 'proposal' } }
+  ]);
+
+  check('somebody else on this project is seen',
+    Presence.on(b.id).length === 1, JSON.stringify(Presence.on(b.id)));
+  check('one person with two windows on it is still one person',
+    Presence.on(b.id)[0].initials === 'MGJ');
+  check('and somebody on another project is not on this one',
+    Presence.on(other.id).length === 1 && Presence.on(other.id)[0].name === 'Ravi Kumar');
+  check('a project nobody has open is quiet',
+    Presence.on(-1).length === 0);
+
+  const chip = Presence.headerChip(b.id);
+  check('the project header says who is here', /MGJ/.test(chip), chip);
+  check('and names them in full on hover', /Meera Joshi/.test(chip));
+  check('the bids table marks the row', /fa-eye/.test(Presence.rowMark(b.id)));
+  check('and leaves the others alone', Presence.rowMark(-1) === '');
+  check('somebody with no initials still gets a badge',
+    /RK/.test(Presence.headerChip(other.id)), Presence.headerChip(other.id));
+
+  // Nobody is told about themselves.
+  Presence.adopt([{ clientId: 4, userId: null, name: 'Anon', initials: null,
+                    where: { bidId: b.id, section: 'project' } }]);
+  check('an empty list clears the marks',
+    (Presence.adopt([]), Presence.rowMark(b.id) === '' && Presence.headerChip(b.id) === ''));
+}
+
+console.log('\n--- the theme is a setting, not a stylesheet ---');
+{
+  const html = win.document.documentElement;
+  // Cycling is light -> dark -> auto, and lands on the class the CSS keys off.
+  Store.db.ui.theme = 'light';
+  App.cycleTheme();
+  check('cycling from light gives dark', Store.db.ui.theme === 'dark', Store.db.ui.theme);
+  check('and puts the class on <html>', html.classList.contains('dark'));
+
+  App.cycleTheme();
+  check('cycling again gives auto', Store.db.ui.theme === 'auto', Store.db.ui.theme);
+  // jsdom reports no colour-scheme preference, so auto resolves to light here.
+  check('auto follows the machine, which is light in jsdom',
+    !html.classList.contains('dark'));
+
+  App.cycleTheme();
+  check('and round-trips back to light', Store.db.ui.theme === 'light', Store.db.ui.theme);
+  check('with the class taken off again', !html.classList.contains('dark'));
+
+  // The <head> script reads this before the database has opened, so it is what
+  // actually prevents the white flash on a dark app.
+  check('the choice is mirrored where the boot script can see it',
+    win.localStorage.getItem('dv.theme') === 'light',
+    String(win.localStorage.getItem('dv.theme')));
+
+  Store.db.ui.theme = 'dark';
+  check('resetting the table layout does not turn the lights back on',
+    (Store.resetLayout(), Store.db.ui.theme === 'dark'), Store.db.ui.theme);
+
+  // Nothing in the app should be carrying its own dark-mode variants: the
+  // colours are CSS variables and .dark redefines them in one file.
+  const sources = localScripts.map(p => fs.readFileSync(path.join(ROOT, p), 'utf8')).join('');
+  check('and no module carries a dark: variant of its own',
+    !/\bdark:[a-z-]/.test(sources));
+
+  /* THE GHOST ON THE SIGN-IN PAGE. The specular sweep is masked to the logo,
+     and a mask travels with the element it is on - so translating it slid a
+     logo-shaped white highlight off the plate and painted a copy of the mark on
+     the panel beside it. The element must stay put and the gradient move
+     inside it. jsdom will not run the animation, so this is read off the
+     stylesheet, which is where the bug was. */
+  const css = fs.readFileSync(path.join(ROOT, 'assets/app.css'), 'utf8');
+  const glossFrames = (css.match(/@keyframes intro-gloss \{[^}]*\}/) || [''])[0];
+  check('the logo highlight moves its gradient, not itself',
+    /background-position/.test(glossFrames) && !/transform/.test(glossFrames),
+    glossFrames.replace(/\s+/g, ' '));
+  check('so nothing masked to the mark can be drawn outside it',
+    /\.intro-gloss \{[^}]*background-position/.test(css));
+  check('and the strapline sits centred under the logo',
+    /\.intro-words \{[^}]*text-align: center/.test(css));
+
+  // Fourteen colours, and js/bids.js hands out exactly that many.
+  check('every colour the code can hand out is defined in the stylesheet',
+    Array.from({ length: win.Bids.PALETTE }, (_, i) => i + 1)
+      .every(n => new RegExp('\\.pal-' + n + '\\s*\\{').test(css)),
+    'PALETTE=' + win.Bids.PALETTE);
+  check('and none of them are dark - they sit behind initials and figures',
+    (css.match(/^\.pal-\d+\s*\{ --pal:\s*(\d+) (\d+) (\d+);/gm) || [])
+      .every(line => {
+        const [r, g, b] = line.match(/--pal:\s*(\d+) (\d+) (\d+)/).slice(1).map(Number);
+        return (r * 299 + g * 587 + b * 114) / 1000 > 100;   // perceived brightness
+      }));
 }
 
 console.log('\n' + (failures === 0

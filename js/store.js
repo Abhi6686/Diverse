@@ -23,18 +23,26 @@
   var IDB_NAME = 'diverse-bid';
   var IDB_VERSION = 1;
   var STATE_KEY = 'db';
-  var SCHEMA_VERSION = 11;
+  var SCHEMA_VERSION = 16;
   /* Column layouts version separately from the records. They have to: since
      accounts arrived they live in the server's user_prefs table and reach the
      app on their own route, so a migration gated on the record schema never
      sees them. See migrateUI. */
-  var UI_VERSION = 12;
+  var UI_VERSION = 13;
   var SAVE_DEBOUNCE_MS = 400;
 
   /* Bid-level product categories for the Add/Edit Bid form. Deliberately
      coarser than the takeoff sheet types in rates.js - this answers "what kind
      of job is this", the takeoff answers "which sheet am I estimating". */
   var DEFAULT_PRODUCT_TYPES = ['Railing', 'Metal Platform', 'Bollard', 'Metal Stairs'];
+
+  /* What a product is made from. These were six <option> tags hardcoded in the
+     Add/Edit Bid form until a product could carry more than one of them; now
+     they are a managed list like regions and task types, editable from
+     Settings > Materials. */
+  var DEFAULT_MATERIALS = [
+    'Carbon steel', 'Aluminum', 'Stainless steel', 'Glass', 'Wood', 'Galvanized Steel'
+  ];
 
   /* What an engineer's time on an active bid gets booked against. Managed from
      Settings > Task Types; these are only the starting list. */
@@ -85,13 +93,96 @@
     return out;
   }
 
+  /* THE SHAPE OF A STORED RECORD LIVES HERE, not in the module that owns the
+     screen for it.
+
+     Both of the things below are needed by migrate() and by the seed path, and
+     neither of those may depend on a module loaded after this one -
+     js/products.js and js/assignments.js both are. Those modules call back into
+     these, so there is still one definition of each. tests/verify-lancaster.js
+     loads store.js without either of them and used to crash here. */
+
+  /* The statuses that mean a bid has been decided - the non-open buckets of the
+     STATUSES table in js/bids.js. Kept here as plain strings because migrate()
+     must not depend on a module loaded after this one. */
+  var DECIDED_STATUSES = ['Awarded', 'Lost', 'No Scope'];
+
+  /* Working-day arithmetic. Assign re-exports the same rules for the card. */
+  function todayISO() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+      '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function shiftISO(iso, n) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    var d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date();
+    d.setDate(d.getDate() + n);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+      '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function isWeekendISO(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    if (!m) return false;
+    var n = new Date(+m[1], +m[2] - 1, +m[3]).getDay();
+    return n === 0 || n === 6;
+  }
+
+  /* `count` working days from the start, weekends skipped. */
+  function workingRunISO(startISO, count) {
+    var out = [], day = startISO || todayISO(), guard = 0;
+    while (isWeekendISO(day) && guard++ < 7) day = shiftISO(day, 1);
+    while (out.length < count) {
+      out.push(day);
+      day = shiftISO(day, 1);
+      guard = 0;
+      while (isWeekendISO(day) && guard++ < 7) day = shiftISO(day, 1);
+    }
+    return out;
+  }
+
+  /* A bid's products and its single material become one row per product, each
+     carrying that material. */
+  function productLinesFromFlat(bid) {
+    var materials = String(bid.material == null ? '' : bid.material)
+      .split(',').map(function (m) { return m.trim(); }).filter(Boolean);
+    return (bid.products || []).filter(Boolean).map(function (p) {
+      return { id: uid('pl'), product: p, materials: materials.slice() };
+    });
+  }
+
+  /* The seeded bids are a starting register written before several of the
+     fields a bid now carries existed, so they need the same treatment migrate()
+     gives historical records.
+
+     It has to happen HERE as well as in migrate(), and that is the whole point:
+     a brand new database is stamped with the current schemaVersion, so it never
+     runs a single migration step. Anything added to a bid needs a line in both
+     places or it is missing on precisely the databases nobody thought to test -
+     the new ones. */
+  function prepareSeedBids(bids) {
+    bids.forEach(function (b) {
+      // When the enquiry arrived. Inferred, and flagged as inferred, so the
+      // Created column can say "about" rather than presenting a guess as fact.
+      if (b.createdAt === undefined) {
+        b.createdAt = b.dueDate || null;
+        b.createdAtInferred = true;
+      }
+      // One row per product, each carrying its own materials - see js/products.js.
+      if (!Array.isArray(b.productLines)) b.productLines = productLinesFromFlat(b);
+    });
+    return bids;
+  }
+
   function freshDB() {
-    var bids = JSON.parse(JSON.stringify(root.SEED_BIDS || []));
+    var bids = prepareSeedBids(JSON.parse(JSON.stringify(root.SEED_BIDS || [])));
     return {
       schemaVersion: SCHEMA_VERSION,
       regions: (root.SEED_REGIONS || []).slice(),
       productTypes: DEFAULT_PRODUCT_TYPES.slice(),
       taskTypes: DEFAULT_TASK_TYPES.slice(),
+      materials: DEFAULT_MATERIALS.slice(),
       engineers: seedEngineers(bids),
       references: JSON.parse(JSON.stringify(root.REFERENCE_SEED || [])),
       bids: bids,
@@ -103,8 +194,36 @@
       ui: { version: UI_VERSION,
             collapsed: {}, lastTakeoffId: null, lastProposalId: null,
             grids: {}, module: 'bids', section: 'active',
-            projectBidId: null, settingsSection: 'ratelib' }
+            projectBidId: null, settingsSection: 'ratelib',
+            // 'auto' | 'light' | 'dark' - see App.cycleTheme. Listed here so
+            // adoptUI() carries it back off the server with everything else.
+            theme: 'auto' }
     };
+  }
+
+  /* A drawing-takeoff column heading used to carry its unit as prose -
+     'Top Rail_1-1/2" Pipe (LF)'. The unit is a field of its own now, because a
+     material row divides by it and cannot read English.
+
+     It lives here, in the lowest-level module, rather than in
+     js/takeoff.model.js where it is mostly used: the schema-16 migration needs
+     it, and migrate() runs on a database loaded by store.js, which the browser
+     parses before takeoff.model.js exists. TakeoffModel.splitColumnUnit is this
+     function - see the delegation there - so there is still one definition.
+
+     Only a recognised unit is taken. '(LF)' is a unit; '(typ.)' and
+     '(see detail 3)' are notes on the drawing, and stripping those out of a
+     heading would lose what it said. */
+  var COLUMN_UNITS = ['EA', 'LF', 'FT', 'IN', 'SF', 'SY', 'LB', 'PKT', 'BOX',
+                      'ROLL', 'SHT', 'SET', 'PR', 'STK', 'GAL', 'HRS'];
+
+  function splitColumnUnit(label) {
+    var s = String(label == null ? '' : label).trim();
+    var m = /^([\s\S]*?)\s*\(\s*([A-Za-z\/]{1,4})\s*\)\s*$/.exec(s);
+    if (m && COLUMN_UNITS.indexOf(m[2].toUpperCase()) >= 0) {
+      return { label: m[1].trim(), um: m[2].toUpperCase() };
+    }
+    return { label: s, um: '' };
   }
 
   /* The single Hrs column became Est Hrs + Assigned Hrs, and one saved layout
@@ -320,12 +439,19 @@
      already had them would undo their own work - migrateBidNoColumns would put
      back the Project No. column that migrateSrColumn removed.
 
-     An unversioned layout is treated as 12-minus-one rather than zero for the
-     same reason: it can only have been written by a build that already applied
-     the whole shipped chain. */
+     An unversioned layout is treated as 11 rather than zero: version stamping
+     started at 12, so a layout without one was written by the build immediately
+     before it, which had already applied the pre-12 steps inside migrate().
+
+     This is a FIXED number, not UI_VERSION - 1. Deriving it from the current
+     version means every future bump silently moves the floor up with it, and
+     the step that was just added is the one step those old layouts never
+     get - which is exactly the layout that needs it most. */
+  var UI_VERSION_BEFORE_STAMPING = 11;
+
   function migrateUI(ui) {
     if (!ui || typeof ui !== 'object') return ui;
-    var v = ui.version == null ? UI_VERSION - 1 : ui.version;
+    var v = ui.version == null ? UI_VERSION_BEFORE_STAMPING : ui.version;
 
     if (v < 12) {
       // Estm Hrs + Asgn Hrs measure the same work two ways, so their sum was
@@ -333,6 +459,16 @@
       // layout that still names them would otherwise ask BidGrid for a column
       // that no longer exists.
       dropColumns(ui, ['totalHrs', 'activeTotalHrs']);
+    }
+
+    if (v < 13) {
+      /* Job No. is gone because a project now has one number for its whole life
+         - the column would have repeated Proposal No. exactly. LF is gone
+         because it is a takeoff figure and was a column of dashes on the
+         register. Both have to come out of every saved layout, along with any
+         sort or filter pointing at them: a sort on a column that no longer has
+         a value silently reorders the table by nothing. */
+      dropColumns(ui, ['awardNo', 'lf']);
     }
 
     ui.version = UI_VERSION;
@@ -543,6 +679,194 @@
       db.schemaVersion = 11;
     }
 
+    if (v < 12) {
+      /* ONE NUMBER FOR THE PROJECT'S LIFE.
+
+         DIS-<yy>-<0001> used to be issued at award, as a job number, which was
+         too late to be any use: the proposal that won the job had already gone
+         out under whatever Proposal No. somebody typed. It is now issued when a
+         bid is picked up, and it IS the Proposal No.
+
+         So a bid that already carries one carries it in the wrong field. It is
+         moved across, because that number is what the project is already known
+         by - on paper, and to the people who sent it. awardNo keeps a copy: the
+         server has a unique index on it and the XLSX export still lists it, and
+         a bid that was awarded genuinely does have an award number - it just is
+         not a *different* number any more.
+
+         A bid whose Proposal No. was typed by hand keeps it. It is already on a
+         document somewhere, and renumbering it here would make that document
+         refer to nothing. */
+      (db.bids || []).forEach(function (b) {
+        var award = String(b.awardNo || '').trim();
+        if (award && !String(b.proposalNo || '').trim()) b.proposalNo = award;
+
+        if (b.revisedDueDate === undefined) b.revisedDueDate = '';
+
+        /* When the enquiry arrived. Nothing recorded it before, so it is
+           inferred from the earliest thing that did happen to the bid, and
+           `createdAtInferred` marks it as a guess - the Created column says so
+           rather than showing a made-up timestamp as if it were observed. */
+        if (b.createdAt === undefined) {
+          var known = [b.activatedAt, b.awardedAt, b.decidedAt]
+            .filter(function (d) { return d; }).sort();
+          b.createdAt = known[0] || b.dueDate || null;
+          b.createdAtInferred = true;
+        }
+      });
+      db.schemaVersion = 12;
+    }
+
+    if (v < 13) {
+      /* Products and materials were two unrelated fields: a list of products,
+         and one material beside it. On a project with three products in two
+         materials nothing recorded which was which - the pairing existed in the
+         estimator's head and nowhere else.
+
+         They are rows now, one product per row carrying its own materials.
+         Every existing bid is turned into rows by pairing each of its products
+         with the single material it had, which is the only reading of the old
+         data that is definitely true.
+
+         products and material stay on the record and stay accurate: they are
+         rewritten from the rows by Products.sync, which is also what keeps the
+         grid columns and their filters working untouched. */
+      (db.bids || []).forEach(function (b) {
+        if (Array.isArray(b.productLines)) return;
+        b.productLines = productLinesFromFlat(b);
+      });
+      db.schemaVersion = 13;
+    }
+
+    if (v < 14) {
+      /* Assignment rows gained a day-by-day booking, and asgnHrs became its
+         sum rather than a figure typed on its own.
+
+         Every existing row already carries a total somebody typed, and that
+         total is real work somebody recorded - so it is spread across three
+         working days from the bid's start rather than discarded. The figure
+         each row reports is therefore unchanged by this migration, which is
+         what keeps the bids table, the project card and the export reading the
+         same numbers they did yesterday.
+
+         Three days is a guess about the shape of the work, not about its size,
+         and the estimator can re-spread it. Zeroing the totals to avoid making
+         that guess would have thrown away the size as well. */
+      (db.bids || []).forEach(function (b) {
+        (b.assignments || []).forEach(function (r) {
+          if (Array.isArray(r.days)) return;
+          // Through IST rather than sliced: createdAt is a moment, and its UTC
+          // date is the previous day for anything entered before 05:30. See
+          // U.stampISO.
+          r.startDate = r.startDate || b.activatedAt ||
+            (root.U ? root.U.stampISO(b.createdAt) : '') || todayISO();
+          var run = workingRunISO(r.startDate, 3);
+          var total = Number(r.asgnHrs) || 0;
+          // Split three ways, with the remainder on the first day so the sum is
+          // exact rather than out by a cent of an hour.
+          var each = Math.round((total / run.length) * 100) / 100;
+          r.days = run.map(function (d, i) {
+            return { date: d, hrs: i === 0 ? Math.round((total - each * (run.length - 1)) * 100) / 100 : each };
+          });
+          r.asgnHrs = r.days.reduce(function (s, d) { return s + (Number(d.hrs) || 0); }, 0);
+        });
+      });
+      db.schemaVersion = 14;
+    }
+
+    if (v < 15) {
+      /* UNDOING THE BLANKET ACTIVE FLAG.
+
+         Migration 9 marked every existing bid active when the three tabs became
+         three stages, so that Active Bids would not empty out on upgrade. It
+         was the safe guess at the time and it was wrong: it put the entire
+         intake register on the working list, where ninety-odd enquiries nobody
+         had picked up sat alongside the two jobs actually being worked. The
+         giveaway is that almost none of them have an activatedAt - they never
+         went through Bids.addToActive at all.
+
+         A bid is picked up when somebody adds it to Active Bids, and that is
+         what issues its proposal number (see Bids.addToActive and
+         issueProjectNo). So carrying a number is the test for having been
+         picked up, and it is the one used here.
+
+         NOTHING IS DELETED. The bid keeps its team rows, hours, takeoff,
+         proposal and history; it goes back to All Bids, which is where it has
+         been all along, and Add to Active bid brings it back - with a number
+         this time. activatedAt is cleared with the flag so that promotion
+         behaves as the fresh one it would be, rather than stamping the number
+         with a date from a promotion that never happened.
+
+         No history entries. This corrects a flag that was never right; it is
+         not a decision anybody made, and one entry per bid would bury the log
+         under a migration. */
+      (db.bids || []).forEach(function (b) {
+        if (!b.active) return;
+        if (String(b.proposalNo || '').trim()) return;
+        // A bid with an outcome is never quietly taken off a list. The outcome
+        // is the STATUS - the lifecycle's one source of truth, see the STATUSES
+        // table in js/bids.js - and not the award date fields, which can be
+        // left behind by an award that was later reversed. (Named here rather
+        // than read from Bids.bucketOf because migrate() runs before js/bids.js
+        // exists; see the note at the top of this file.)
+        if (DECIDED_STATUSES.indexOf(b.status) >= 0) return;
+        b.active = false;
+        b.activatedAt = null;
+      });
+      db.schemaVersion = 15;
+    }
+
+    if (v < 16) {
+      /* WHAT THE JOB NEEDS, AND WHAT THE VENDOR SELLS.
+       *
+       * A material row held one quantity, and it was the number of things to
+       * buy. The measurement it came from - 76.9 feet of pipe - and the stock
+       * length it was divided by - 21 feet to a stick - existed only on the
+       * estimator's calculator. Nothing in the file recorded either, so nobody
+       * could check the division, and re-measuring a drawing meant redoing it
+       * by hand.
+       *
+       * The two halves are fields now. Every row gets them empty, and empty is
+       * exactly the old behaviour: with no scope and no pack size, orderQty
+       * returns the typed quantity verbatim and the row costs what it always
+       * did. See TakeoffModel.orderQty, which says so at more length and is the
+       * reason tests/verify-lancaster.js still reproduces the workbook without
+       * a line changed.
+       *
+       * Deliberately NOT done here: linking existing rows to scopes by matching
+       * their Feature text to a column heading. It would re-key the quantities
+       * on bids that have already gone out, on the strength of two strings
+       * looking alike. The Materials tab offers the link per row instead, so a
+       * person decides. */
+      Object.keys(db.takeoffs || {}).forEach(function (k) {
+        (db.takeoffs[k].products || []).forEach(function (p) {
+          (p.groups || []).forEach(function (g) {
+            (g.items || []).forEach(function (it) {
+              if (it.scopeKey === undefined) it.scopeKey = null;
+              if (it.packQty === undefined) it.packQty = null;
+              if (it.packUm === undefined) it.packUm = '';
+              if (it.costBasis === undefined) it.costBasis = 'pack';
+            });
+            /* The unit used to be part of the heading - 'Top Rail 1-1/2" Pipe
+               (LF)'. A material row has to divide by it, so it moves out of the
+               prose and into a field. A heading that never carried one is left
+               alone and defaults to EA, which is what an unlabelled count is. */
+            ((g.grid && g.grid.columns) || []).forEach(function (col) {
+              if (col.um !== undefined) return;
+              var split = splitColumnUnit(col.label);
+              col.label = split.label;
+              col.um = split.um || 'EA';
+            });
+          });
+        });
+      });
+      (db.catalog || []).forEach(function (c) {
+        if (c.packQty === undefined) c.packQty = null;
+        if (c.packUm === undefined) c.packUm = '';
+      });
+      db.schemaVersion = 16;
+    }
+
     // Backfill containers a hand-edited or partial file might be missing.
     ['regions', 'bids', 'catalog', 'engineers'].forEach(function (k) {
       if (!Array.isArray(db[k])) db[k] = [];
@@ -553,6 +877,9 @@
     if (!Array.isArray(db.productTypes) || !db.productTypes.length) {
       db.productTypes = DEFAULT_PRODUCT_TYPES.slice();
     }
+    if (!Array.isArray(db.materials) || !db.materials.length) {
+      db.materials = DEFAULT_MATERIALS.slice();
+    }
     if (!Array.isArray(db.references) || !db.references.length) {
       db.references = JSON.parse(JSON.stringify(root.REFERENCE_SEED || []));
     }
@@ -562,7 +889,17 @@
       if (b.proposalNo === undefined) b.proposalNo = '';
       if (b.awardNo === undefined) b.awardNo = null;
       if (b.awardedAt === undefined) b.awardedAt = null;
-      if (b.active === undefined) b.active = true;
+      // NOT active. A record that has never carried the flag has never been
+      // picked up: All Bids is the register of everything received, and a bid
+      // reaches the working list when somebody adds it there.
+      //
+      // This defaulted to true, mirroring migration 9's blanket flag - and
+      // because it runs outside the version gate, on every load, it put the
+      // whole seeded register on Active Bids and would have put it straight
+      // back after migration 15 took it off. Records that really did predate
+      // promotion still have the flag set by migration 9; this only decides
+      // what a bid with no flag at all means.
+      if (b.active === undefined) b.active = false;
       if (b.activatedAt === undefined) b.activatedAt = null;
       if (b.decidedAt === undefined) b.decidedAt = null;
       if (!Array.isArray(b.assignments)) b.assignments = [];
@@ -822,6 +1159,16 @@
       online = up;
       setStatus(up ? 'saved' : 'offline', detail);
     });
+    /* This browser has been away long enough that the server will not send the
+       gap. There is no correct way to patch up from here - what is on screen is
+       older than anything the change log still offers - so the page is reloaded
+       and boots from a fresh snapshot. Anything typed since is flushed first,
+       because a reload would otherwise throw it away. */
+    root.Remote.onReload(function () {
+      setStatus('offline', 'Too far behind to catch up - reloading.');
+      Promise.resolve(flush()).catch(function () { /* reload anyway */ })
+        .then(function () { root.location.reload(); });
+    });
     root.Remote.connect();
   }
 
@@ -1068,6 +1415,8 @@
 
   var Store = {
     SCHEMA_VERSION: SCHEMA_VERSION,
+    UNITS: COLUMN_UNITS,
+    splitColumnUnit: splitColumnUnit,
     UI_VERSION: UI_VERSION,
     /* Exposed so the layout chain can be exercised on its own - it is the half
        that does not travel with the records. */
@@ -1075,6 +1424,9 @@
     DEFAULT_PRODUCT_TYPES: DEFAULT_PRODUCT_TYPES,
     DEFAULT_TASK_TYPES: DEFAULT_TASK_TYPES,
     uid: uid,
+    /* The shape of a bid's product rows. Exported because js/products.js needs
+       the same conversion for the bid form and there must be one definition. */
+    productLinesFromFlat: productLinesFromFlat,
     open: open,
     save: save,
     flush: flush,
@@ -1100,8 +1452,11 @@
        different tab. */
     resetLayout: function () {
       if (!DB) return Promise.resolve();
+      // The theme is kept for the same reason the current tab is: this resets
+      // tables, and somebody who works in the dark did not ask for the lights.
       var keep = { module: DB.ui.module, section: DB.ui.section,
-                   settingsSection: DB.ui.settingsSection, projectBidId: DB.ui.projectBidId };
+                   settingsSection: DB.ui.settingsSection, projectBidId: DB.ui.projectBidId,
+                   theme: DB.ui.theme };
       DB.ui = Object.assign(freshDB().ui, keep);
       prefsSent = null;
       writeLocalUI();
@@ -1183,7 +1538,7 @@
             };
           });
           payload.exportedAt = new Date().toISOString();
-          downloadJSON(payload, 'DiVerse-Bids-' + new Date().toISOString().slice(0, 10) + '.json');
+          downloadJSON(payload, 'DiVerse-Bids-' + root.U.stampDate(new Date()) + '.json');
           return payload.documentIndex.length;
         });
     },

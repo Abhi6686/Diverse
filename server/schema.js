@@ -244,6 +244,31 @@ const STEPS = [
       db.exec('DROP TABLE users');
       db.exec('ALTER TABLE users_new RENAME TO users');
     }
+  },
+
+  {
+    version: 4,
+    name: 'empty oversized bodies out of the change log',
+    up: function (db) {
+      /* The log kept a full copy of the record on every write, and a proposal
+         is the better part of a megabyte. One office's log had reached 98MB of
+         a 107MB database against under 3MB of live records.
+
+         Emptying the body is safe because the log is a sync transport and
+         nothing else: the history the office reads back lives in bid.history,
+         inside the bid record. A client that meets one of these rows fetches
+         the record from /api/records - see logChange in server/db.js, which
+         stops writing them in the first place. 32768 is LOG_BODY_MAX; it is
+         spelled out here because a migration step must mean the same thing
+         forever, even if that constant is retuned later. */
+      db.exec('UPDATE changes SET json = NULL WHERE LENGTH(json) > 32768');
+
+      /* `seq` is INTEGER PRIMARY KEY AUTOINCREMENT, which in SQLite is an alias
+         for the rowid - so this index was a second copy of a B-tree the table
+         already is. It cost a write on every logged change and bought nothing:
+         the only query against it, changesSince, was already using the rowid. */
+      db.exec('DROP INDEX IF EXISTS changes_seq');
+    }
   }
 ];
 
@@ -280,13 +305,20 @@ function currentVersion(db) {
   return row ? Number(row.value) : 0;
 }
 
+/* The same answer for a database that has no meta table yet - a brand-new file,
+   where currentVersion would throw rather than say 0. Used by db.open to tell
+   whether a migration is about to run before it runs. */
+function currentVersionSafe(db) {
+  const hasMeta = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
+  return hasMeta ? currentVersion(db) : 0;
+}
+
 /* Runs every step the database has not seen, each in its own transaction, so a
    step that throws leaves the database on the last version that worked rather
    than half-migrated. */
 function migrate(db, log) {
-  const hasMeta = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
-  let from = hasMeta ? currentVersion(db) : 0;
+  let from = currentVersionSafe(db);
 
   const pending = STEPS.filter(s => s.version > from);
   if (!pending.length) return from;
@@ -323,5 +355,5 @@ function migrate(db, log) {
 module.exports = {
   STEPS, KINDS, COLLECTIONS, SETTING_KEYS,
   LATEST: STEPS[STEPS.length - 1].version,
-  migrate, currentVersion
+  migrate, currentVersion, currentVersionSafe
 };

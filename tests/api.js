@@ -269,6 +269,44 @@ async function run() {
   check('and since 0 replays everything accepted so far',
     r.body.changes.length >= 8, String(r.body.changes.length));
 
+  /* A record too big to copy into the log on every autosave. The log announces
+     that it moved and /api/records carries the body - see logChange in
+     server/db.js for why, and js/remote.js deliver() for the client half. */
+  console.log('\n--- bodies too large for the log ---');
+  const bigMark = (await get('/bootstrap')).body.seq;
+  const big = { id: 11, project: 'Big', filler: 'x'.repeat(64 * 1024) };
+  r = await post('/changes', { changes: [{ kind: 'bid', id: 11, json: big }] });
+  check('an oversized record is accepted', r.status === 200);
+
+  r = await get('/changes?since=' + bigMark);
+  const entry = r.body.changes.find(c => String(c.id) === '11');
+  check('its change is logged', !!entry);
+  check('but without the body', entry && entry.json === null);
+  check('and the log still says what moved and how',
+    entry && entry.kind === 'bid' && entry.op === 'put');
+
+  r = await post('/records', { records: [{ kind: 'bid', id: 11 }] });
+  check('the body is fetchable from /api/records', r.status === 200 &&
+    r.body.records.length === 1 && r.body.records[0].json.filler.length === 64 * 1024);
+  check('and it comes back with the record rev',
+    r.body.records[0].rev >= 1);
+
+  r = await post('/records', { records: [{ kind: 'bid', id: 9999 }] });
+  check('a record that no longer exists is simply absent, not an error',
+    r.status === 200 && r.body.records.length === 0);
+  r = await post('/records', { records: [{ kind: 'not-a-kind', id: 1 }] });
+  check('an unknown kind is ignored rather than refused', r.status === 200);
+  r = await post('/records', { records: 'nope' });
+  check('a non-array is refused', r.status === 400);
+
+  // A small record must still travel with its change, or every edit in the
+  // office would cost a second round trip.
+  r = await get('/changes?since=' + before);
+  check('a small record still carries its body',
+    r.body.changes.some(c => String(c.id) === '10' && c.json && c.json.project === 'Later'));
+
+  await post('/changes', { changes: [{ kind: 'bid', id: 11, op: 'delete' }] });
+
   console.log('\n--- deleting ---');
   r = await post('/changes', { changes: [{ kind: 'bid', id: 10, op: 'delete' }] });
   check('a delete is applied', r.status === 200);
@@ -320,6 +358,69 @@ async function run() {
   });
   await wait(200);
   check('but it does reach everybody else', seenB.length === 1, JSON.stringify(seenB));
+
+  console.log('\n--- who is looking at what ---');
+  {
+    /* The stream always knew who was connected. What it did not know was what
+       any of them had OPEN, which is the part worth telling everybody else. */
+    const heard = [];
+    let idC = null;
+    const streamC = openStream((ev, data) => {
+      if (ev === 'hello') idC = data.clientId;
+      if (ev === 'presence') heard.push(data.online);
+    });
+    await streamC.ready;
+    await wait(150);
+    check('a new connection is announced to everybody',
+      heard.length > 0, String(heard.length));
+
+    heard.length = 0;
+    await post('/where', { clientId: myClientId, bidId: 11, section: 'takeoff' });
+    await wait(200);
+    const last = heard[heard.length - 1] || [];
+    const mine = last.filter(c => c.clientId === myClientId)[0];
+    check('saying where you are reaches the other connections',
+      !!mine && mine.where && mine.where.bidId === 11,
+      JSON.stringify(last));
+    check('with the page as well as the project',
+      mine && mine.where.section === 'takeoff', JSON.stringify(mine));
+    check('and who you are, so the marker can say a name',
+      !!mine && !!mine.name, JSON.stringify(mine));
+    check('everybody else is still reported as nowhere in particular',
+      last.filter(c => c.clientId !== myClientId).every(c => !c.where),
+      JSON.stringify(last));
+
+    // Repeating a position must not repaint every screen in the office.
+    heard.length = 0;
+    await post('/where', { clientId: myClientId, bidId: 11, section: 'takeoff' });
+    await wait(150);
+    check('saying the same thing twice broadcasts nothing',
+      heard.length === 0, JSON.stringify(heard));
+
+    // Leaving is a position too - it is how the marker clears.
+    heard.length = 0;
+    await post('/where', { clientId: myClientId, bidId: null });
+    await wait(200);
+    const after = heard[heard.length - 1] || [];
+    check('and leaving a project clears it',
+      after.filter(c => c.clientId === myClientId).every(c => !c.where),
+      JSON.stringify(after));
+
+    // A client whose stream has just dropped is ordinary, not an error.
+    const r2 = await post('/where', { clientId: 999999, bidId: 11 });
+    check('an unknown connection is ignored rather than refused',
+      r2.status === 200, String(r2.status));
+
+    // Closing a window is the other way a marker clears, and nobody sends
+    // anything to say so - the server notices the socket go.
+    seen.length = 0;
+    streamC.close();
+    await wait(250);
+    const heardByA = seen.filter(s => s.ev === 'presence').pop();
+    check('disconnecting takes you off everybody else\'s list',
+      !!heardByA && !heardByA.data.online.some(c => c.clientId === idC),
+      JSON.stringify(heardByA && heardByA.data.online));
+  }
 
   streamB.close();
   stream.close();

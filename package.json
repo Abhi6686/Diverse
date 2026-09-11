@@ -6,25 +6,34 @@
   "main": "serve.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning serve.js",
+    "build:css": "tailwindcss -i assets/tailwind.src.css -o assets/tailwind.css --minify",
+    "watch:css": "tailwindcss -i assets/tailwind.src.css -o assets/tailwind.css --watch",
     "import": "node --disable-warning=ExperimentalWarning tools/import-json.js",
-    "test": "node --disable-warning=ExperimentalWarning tests/api.js && node tests/verify-lancaster.js && node tests/smoke.js && node --disable-warning=ExperimentalWarning tests/sync.js",
+    "test": "node --disable-warning=ExperimentalWarning tests/api.js && node tests/verify-lancaster.js && node tests/estimate-xlsx.js && node tests/smoke.js && node --disable-warning=ExperimentalWarning tests/sync.js",
     "test:api": "node --disable-warning=ExperimentalWarning tests/api.js",
     "test:sync": "node --disable-warning=ExperimentalWarning tests/sync.js",
     "test:ui": "node tests/smoke.js",
-    "test:costs": "node tests/verify-lancaster.js"
+    "test:costs": "node tests/verify-lancaster.js",
+    "test:xlsx": "node tests/estimate-xlsx.js",
+    "build:xlsx-template": "node tools/build-xlsx-template.js"
   },
   "engines": {
     "node": ">=22.5.0"
   },
-  "dependencies": {},
   "devDependencies": {
     "fake-indexeddb": "*",
-    "jsdom": "*"
+    "jsdom": "*",
+    "tailwindcss": "^3.4.19"
   },
   "//": [
     "No runtime dependencies on purpose. SQLite is node:sqlite, built into Node 22;",
     "the HTTP server and Server-Sent Events are node:http. jsdom and fake-indexeddb",
     "are only needed to run the browser tests: npm install --no-save jsdom fake-indexeddb",
+    "",
+    "tailwindcss is a build-time dependency, not a runtime one: it compiles",
+    "assets/tailwind.css, which IS committed. So `node serve.js` on a machine that has",
+    "never run npm install still serves a fully styled app. Run npm run build:css after",
+    "adding or changing a class name - only what the scanner can see gets shipped.",
     "",
     "--disable-warning=ExperimentalWarning silences the one notice node:sqlite prints.",
     "It is not silencing anything else, and the flag becomes unnecessary on Node 24",

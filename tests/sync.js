@@ -25,11 +25,11 @@ function check(label, cond, detail) {
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 const FILES = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js',
-  'js/proposal.styles.js', 'js/proposal.defaults.js', 'js/util.js', 'js/auth.js', 'js/remote.js',
+  'js/proposal.styles.js', 'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/remote.js',
   'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js', 'js/bidgrid.js',
   'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js', 'js/takeoff.js',
-  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/project.js',
-  'js/settings.js', 'js/sparks.js', 'js/app.js'];
+  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
+  'js/settings.js', 'js/app.js'];
 
 const HTML = fs.readFileSync(path.join(ROOT, 'Bid_Proposal_Manager_2026.html'), 'utf8')
   .replace(/<script src="https:[^"]*"><\/script>/g, '')
@@ -264,6 +264,31 @@ async function main() {
       B.Store.db.taskTypes.includes('Weld inspection'),
       JSON.stringify(B.Store.db.taskTypes));
 
+    /* A record too big to travel with its own change. The server withholds the
+       body from both the log and the stream, and js/remote.js fetches it from
+       /api/records before anything downstream sees the change - so from here
+       this must look exactly like any other edit arriving. */
+    console.log('\n--- a large record still travels, the long way round ---');
+    const heavy = A.Store.db.bids[2];
+    const heavyId = heavy.id;
+    heavy.project = 'Heavy on machine A';
+    heavy.notes = 'n'.repeat(64 * 1024);
+    A.Store.save();
+    await wait(1800);
+
+    const logged = db.changesSince(0).rows.filter(r => String(r.entity_id) === String(heavyId));
+    check('the server logged the change without its body',
+      logged.length > 0 && logged[logged.length - 1].json === null,
+      JSON.stringify(logged.length && (logged[logged.length - 1].json || '').slice(0, 40)));
+
+    const heavyOnB = B.Store.db.bids.find(b => b.id === heavyId);
+    check('but B still received the edit',
+      heavyOnB && heavyOnB.project === 'Heavy on machine A',
+      heavyOnB && heavyOnB.project);
+    check('with the large field intact, fetched from /api/records',
+      heavyOnB && heavyOnB.notes && heavyOnB.notes.length === 64 * 1024,
+      String(heavyOnB && heavyOnB.notes && heavyOnB.notes.length));
+
     console.log('\n--- one person\'s column layout is their own ---');
     // db.ui is deliberately not shared: it is a preference, not a record.
     A.Bids.setView('active');
@@ -290,10 +315,14 @@ async function main() {
 
     console.log('\n--- what the employee\'s screen offers ---');
     check('an Employee may not delete a bid', B.Auth.can('bid.delete') === false);
-    check('so the row has no delete button',
-      B.Bids.actionCell(B.Store.db.bids[0]).indexOf('promptDelete') < 0);
-    check('the Admin\'s row does have one',
-      A.Bids.actionCell(A.Store.db.bids[0]).indexOf('promptDelete') >= 0);
+    // Delete lives in the row's overflow menu now rather than as a bare icon on
+    // the row, so the menu is where the permission has to be checked.
+    check('so the row menu has no delete button',
+      B.Bids.rowMenu(B.Store.db.bids[0]).indexOf('promptDelete') < 0);
+    check('the Admin\'s row menu does have one',
+      A.Bids.rowMenu(A.Store.db.bids[0]).indexOf('promptDelete') >= 0);
+    check('and no row shows delete on the row itself',
+      A.Bids.actionCell(A.Store.db.bids[0]).indexOf('promptDelete') < 0);
     check('Settings is not offered to them', B.Nav.firstSectionOf('settings') === null,
       String(B.Nav.firstSectionOf('settings')));
     check('but it is to the Admin', A.Nav.firstSectionOf('settings') === 'ratelib',

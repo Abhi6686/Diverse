@@ -1,10 +1,14 @@
-/* sparks.js - welding sparks behind the banner logo, on hover.
+/* sparks.js - the welding spark engine.
  *
- * Decorative only. Three rules it must not break, because this sits on every
- * screen in the app all day:
+ * Two things use it: the banner logo throws sparks on hover, and the sign-in
+ * page welds the mark into existence (js/intro.js). It is one particle model
+ * rather than two, so a spark behaves the same wherever it comes off.
  *
- *   1. Nothing runs unless the pointer is on the banner. The rAF loop starts on
- *      enter and stops itself once the last particle has died - there is no
+ * Decorative only. Three rules it must not break, because the banner sits on
+ * every screen in the app all day:
+ *
+ *   1. Nothing runs unless something is asking for it. The rAF loop starts on
+ *      demand and stops itself once the last particle has died - there is no
  *      idle timer ticking in the background.
  *   2. prefers-reduced-motion: reduce means no animation at all, not a slower
  *      one. The banner is simply still.
@@ -20,6 +24,7 @@
   var EMIT_PER_FRAME = 5;     // new sparks per frame while hovering
   var GRAVITY = 0.055;
   var DRAG = 0.985;
+  var BOUNCE = 0.34;          // how much of the fall survives hitting the floor
 
   var canvas, ctx, stage;
   var particles = [];
@@ -27,6 +32,11 @@
   var hovering = false;
   var dpr = 1;
   var w = 0, h = 0;
+  /* Where the sparks are emitted from while `hovering`, and whether they land.
+     The banner leaves both alone; the intro moves the source along the weld and
+     turns the floor on so they bounce off the bottom of the plate. */
+  var source = null;          // null = the banner's own origin()
+  var floor = false;
 
   function reduceMotion() {
     return root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -56,6 +66,12 @@
   /* Sparks come off the mark itself, low and to the left, the way they would
      off a bead being run. */
   function origin() {
+    if (source) {
+      // A little scatter around the arc, or every spark leaves from one pixel
+      // and the stream reads as a line rather than a weld.
+      return { x: source.x + (Math.random() - 0.5) * 6,
+               y: source.y + (Math.random() - 0.5) * 6 };
+    }
     return { x: w * 0.10 + Math.random() * w * 0.14, y: h * 0.62 };
   }
 
@@ -106,6 +122,18 @@
       p.y += p.vy;
       p.life -= p.decay;
 
+      /* Sparks that reach the floor bounce and skitter rather than falling
+         through it - which is what they do off a shop floor, and what makes the
+         intro read as a place rather than as particles on a screen. One bounce
+         each: a spark that keeps bouncing looks like a rubber ball. */
+      if (floor && p.vy > 0 && p.y >= h - 2 && !p.bounced) {
+        p.bounced = 1;
+        p.y = h - 2;
+        p.vy = -p.vy * BOUNCE;
+        p.vx *= 0.7;
+        p.decay *= 1.6;                 // and they die off quickly after landing
+      }
+
       if (p.life <= 0 || p.y > h + 12 || p.x < -20 || p.x > w + 20) {
         if (p.crackle && p.life <= 0 && p.y < h) {
           spawn(3 + Math.floor(Math.random() * 3), { x: p.x, y: p.y }, p.crackle);
@@ -150,6 +178,19 @@
     start();                        // let the sparks in flight finish and die
   }
 
+  /* Point the engine at a different canvas. The intro calls this with its own
+     pair; the banner is attached by init() below. One at a time is enough -
+     they are never both on screen, since the sign-in page covers the app. */
+  function attach(o) {
+    canvas = o.canvas;
+    stage = o.stage || o.canvas;
+    ctx = null;                          // the context belongs to the old canvas
+    particles.length = 0;
+    source = null;
+    floor = !!o.floor;
+    return ensureCtx() ? (resize(), true) : false;
+  }
+
   function init() {
     canvas = document.getElementById('sparkCanvas');
     stage = document.getElementById('bannerStage');
@@ -185,5 +226,30 @@
     init();
   }
 
-  root.Sparks = { spawn: spawn, isRunning: function () { return raf != null; } };
+  root.Sparks = {
+    spawn: spawn,
+    attach: attach,
+    resize: resize,
+    reduceMotion: reduceMotion,
+    isRunning: function () { return raf != null; },
+
+    /* The intro drives the arc: it moves the source along the weld and asks for
+       a steady stream, then stops asking. `emit` false lets the sparks already
+       in flight finish rather than cutting them off mid-air. */
+    weld: function (x, y, emit) {
+      if (!ensureCtx()) return;
+      source = { x: x, y: y };
+      hovering = !!emit;
+      start();
+    },
+    /* One burst, at a point - the strike at the start, and the button press. */
+    burst: function (x, y, n, energy) {
+      if (!ensureCtx()) return;
+      spawn(n || 24, { x: x, y: y }, energy || 1.2);
+      start();
+    },
+    stop: function () { hovering = false; source = null; start(); },
+    /* For tests, which have no canvas and no rAF worth waiting on. */
+    count: function () { return particles.length; }
+  };
 })(window);

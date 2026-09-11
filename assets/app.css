@@ -1,0 +1,956 @@
+/* app.css - the rules that are genuinely CSS rather than utility classes:
+ * the printed proposal's page geometry, the shell's chrome modes, the data
+ * table's gridlines, and the status badges.
+ *
+ * Lifted out of the <style> block in Bid_Proposal_Manager_2026.html so that
+ * (a) it is not re-parsed as part of the document every load and (b) the
+ * colours could be moved onto the tokens in assets/tokens.css, which is what
+ * makes the dark theme possible without touching any of these rules again.
+ *
+ * Loaded after assets/tailwind.css so a rule here beats a utility class.
+ */
+
+body { font-family: 'Inter', sans-serif; background: rgb(var(--c-canvas)); color: rgb(var(--c-ink)); }
+
+/* .glass, .card-hover, .month-card, .table-row and .truncate-2 were all here
+   and are all gone: the dashboard was their only caller, and its redesign
+   replaced the twelve month cards with the bar strip and the frosted KPI tiles
+   with plain ones. The blur in particular was decoration over an opaque
+   background - it cost a repaint and looked like nothing. */
+
+/* STATUS BADGES. On the tone tokens, so each one is legible on a white card in
+   daylight and on a dark card at night without a second set of rules. */
+.status-submitted  { background: rgb(var(--c-brand-soft));   color: rgb(var(--c-brand-ink)); }
+.status-progress   { background: rgb(var(--c-warn-soft));    color: rgb(var(--c-warn-ink)); }
+.status-completed  { background: rgb(var(--c-ok-soft));      color: rgb(var(--c-ok-ink)); }
+.status-notstarted { background: rgb(var(--c-neutral-soft)); color: rgb(var(--c-neutral-ink)); }
+.status-awarded    { background: rgb(var(--c-ok-soft));      color: rgb(var(--c-ok-ink));
+                     border: 1px solid rgb(var(--c-ok)); }
+.status-lost       { background: rgb(var(--c-danger-soft));  color: rgb(var(--c-danger-ink)); }
+.status-noscope    { background: rgb(var(--c-info-soft));    color: rgb(var(--c-info-ink)); }
+
+/* THE ONE CELL THAT OPENS THE PROJECT.
+
+   The click used to be on the whole row, which made every cell a trapdoor -
+   aim at a figure, miss by a pixel, lose the page you were reading. It is the
+   project name now, and it has to LOOK like the thing that does it: underlined
+   on hover, and with a focus ring, since it is in the tab order and answers to
+   Enter. */
+.grid-table td.cell-open:hover .font-semibold { text-decoration: underline; text-underline-offset: 2px; }
+.grid-table td.cell-open:focus-visible {
+  outline: 2px solid rgb(var(--c-brand)); outline-offset: -2px;
+}
+
+/* A Lost bid stays on Active Bids so the work that went into it is still
+   visible, but it must not read as live work sitting in a list of live work. */
+.grid-table tbody tr.row-decided td { opacity: 0.55; }
+.grid-table tbody tr.row-decided:hover td { opacity: 1; }
+
+/* BANNER: the logo sits over a faint ember, present at rest. The sparks
+   themselves are painted on #sparkCanvas by js/sparks.js, on hover only. */
+.banner-stage { isolation: isolate; }
+.banner-stage::before {
+  content: ''; position: absolute; left: -8%; top: 50%;
+  width: 46%; height: 190%; transform: translateY(-50%);
+  background: radial-gradient(ellipse at center, rgba(249,115,22,0.16), rgba(249,115,22,0) 68%);
+  pointer-events: none; z-index: 0;
+}
+.banner-logo {
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));
+  transition: filter 0.35s ease;
+}
+/* A hot edge on the mark while the sparks are flying, so the effect reads as
+   one thing rather than particles floating past an unrelated logo. */
+.banner-stage:hover .banner-logo {
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45)) drop-shadow(0 0 10px rgba(249,146,22,0.55));
+}
+@media (prefers-reduced-motion: reduce) {
+  .banner-logo, .banner-stage:hover .banner-logo { transition: none; }
+}
+
+.animate-fade-in { animation: fadeIn 0.4s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in { animation: none; }
+  .btn-icon, .btn-icon:hover { transition: none; transform: none; }
+}
+
+.tab-active { border-bottom: 3px solid rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); font-weight: 600; }
+.tab-inactive { color: rgb(var(--c-muted)); border-bottom: 3px solid transparent; }
+.tab-inactive:hover { color: rgb(var(--c-brand-ink)); }
+.search-input:focus { outline: none; box-shadow: 0 0 0 3px rgb(var(--c-brand) / 0.15); }
+.modal-overlay { background: rgb(2 6 23 / 0.55); backdrop-filter: blur(4px); }
+input, select, textarea { font-family: 'Inter', sans-serif; }
+.btn-icon { transition: all 0.15s; }
+.btn-icon:hover { transform: scale(1.15); }
+.sticky-header { position: sticky; top: 0; z-index: 10; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Data tables: thin gridlines so columns read as a grid, and cell content
+   that lines up with the heading above it rather than drifting away from it. */
+.grid-table { border-collapse: collapse; }
+.grid-table th, .grid-table td { border: 1px solid rgb(var(--c-line)); }
+.grid-table thead th { background: rgb(var(--c-raised)); position: relative; }
+.grid-table tbody tr:hover td { background: rgb(var(--c-raised)); }
+/* Sticky headers need their own background or rows show through them. */
+.grid-table thead.sticky-header th { background: rgb(var(--c-raised)); }
+/* Alignment is set once per column and applied to the th and its tds
+   together, so a right-aligned figure sits under a right-aligned title. */
+.col-left   { text-align: left; }
+.col-center { text-align: center; }
+.col-right  { text-align: right; }
+
+/* FROZEN COLUMNS. Scrolling right to reach Status used to take the project
+   name off the screen, leaving a table of anonymous figures. Which columns
+   these are, and their left offsets, are decided in js/bidgrid.js - see
+   stickyRun(); all this does is pin them and keep them opaque.
+
+   A sticky cell must paint its own background or the rows sliding underneath
+   show through it, and it must beat the sticky header on the z axis at the one
+   corner where both apply. */
+.grid-table .col-sticky { position: sticky; z-index: 2; background: rgb(var(--c-surface)); }
+.grid-table tbody tr:hover .col-sticky { background: rgb(var(--c-raised)); }
+.grid-table thead .col-sticky,
+.grid-table .col-sticky-head { z-index: 12; background: rgb(var(--c-raised)); }
+
+/* The edge of the frozen block: a hard line, plus a shadow once the table has
+   actually been scrolled sideways - against a flush left edge a shadow is just
+   dirt. A box-shadow rather than a pseudo-element, because the cells clip their
+   own overflow (below) and would cut a pseudo-element off. */
+.grid-table .col-sticky-edge { border-right-color: rgb(var(--c-line-strong)); }
+.grid-scrolled .grid-table .col-sticky-edge {
+  box-shadow: 6px 0 8px -6px rgb(15 23 42 / 0.28);
+}
+
+/* THE RESIZE GRIP. Sits on the right edge of every header cell, inside its
+   padding, so it is grabbable without being visible until you go for it. The
+   header cell is already position:relative (see .grid-table thead th above),
+   which is what this anchors to.
+
+   Wider than it looks - 9px of target for a 2px line - because a 2px hit area
+   is a test of aim, not a control. */
+.grid-table thead th .col-resize {
+  position: absolute; top: 0; right: -4px; bottom: 0; width: 9px;
+  cursor: col-resize; z-index: 3; touch-action: none;
+}
+.grid-table thead th .col-resize::after {
+  content: ''; position: absolute; top: 20%; bottom: 20%; left: 3px; width: 2px;
+  background: rgb(var(--c-line-strong)); border-radius: 1px;
+  opacity: 0; transition: opacity 0.12s ease;
+}
+.grid-table thead th:hover .col-resize::after { opacity: 1; }
+.grid-table thead th .col-resize:hover::after {
+  opacity: 1; background: rgb(var(--c-brand)); top: 0; bottom: 0;
+}
+
+/* While a drag is in progress the cursor must not flicker back to a text beam
+   as it crosses cells, and nothing should get selected behind it. */
+body.col-resizing { cursor: col-resize; user-select: none; }
+body.col-resizing * { cursor: col-resize !important; }
+
+/* THE EMPLOYEE VIEW: a schedule, drawn with the same table.
+
+   The frozen block on the left says which project and whose hours; the calendar
+   to the right of it scrolls. That is the existing frozen-column machinery
+   above, unchanged - these rules only size and tint the period columns.
+
+   Which periods there are, and what is booked in them, is js/schedule.js. */
+.grid-table .sched-col {
+  width: 52px; min-width: 52px; max-width: 52px;
+  text-align: center; padding: 0.375rem 0.25rem;
+}
+/* The zoom is how many days are on screen, so it is also how much room each of
+   them can have. One day gets a comfortable column; a month of thirty-one has
+   to be tighter or the frozen block is all you can see. Set from the table so
+   one rule moves every column rather than each cell carrying a width. */
+.grid-table.sched-day .sched-col { width: 96px; min-width: 96px; max-width: 96px; }
+.grid-table.sched-month .sched-col { width: 44px; min-width: 44px; max-width: 44px; }
+
+/* A rule down each Monday. Without it a month is thirty-one identical columns
+   and finding "the middle of next week" means counting. */
+.grid-table .sched-wkstart { border-left: 1px solid rgb(var(--c-line-strong)); }
+
+/* THE ENGINEER COLUMN, at the join.
+
+   Last of the record columns and hard against the first date, because reading a
+   figure back to the name it belongs to is what you do all day on this view.
+   A fixed width so a stack of initials does not reflow as the table is resized
+   - dragging the column still wins, since that arrives as an inline style - and
+   a heavier right edge so the join between the record and the calendar reads as
+   one boundary rather than as one more column rule. */
+.grid-table .sched-name {
+  width: 132px; min-width: 132px;
+  border-right: 2px solid rgb(var(--c-line-strong));
+}
+
+/* The ordinary columns keep a usable width while a month of calendar is
+   competing with them for the table. Left to itself the browser apportions
+   whatever is spare and Portal ends up two characters wide. The frozen ones are
+   sized in JavaScript and are not touched here. */
+.grid-table.sched-day th:not(.sched-col):not(.col-sticky):not(.sched-name),
+.grid-table.sched-week th:not(.sched-col):not(.col-sticky):not(.sched-name),
+.grid-table.sched-month th:not(.sched-col):not(.col-sticky):not(.sched-name) { min-width: 110px; }
+
+/* One line per engineer, in the frozen block and in every period cell, so a
+   name on the left and its hours on the right sit on the same line. A fixed
+   height rather than natural leading: the two are in different cells and only
+   agree if both are told the same number. */
+.sched-line { display: block; height: 1.25rem; line-height: 1.25rem; }
+
+/* TWO KINDS OF LINE, AND THEY MUST NOT LOOK ALIKE.
+
+   A schedule row is several engineers tall, so the boundary between two
+   projects is drawn heavily and the boundary between two engineers on the same
+   project is drawn faintly. Read down the calendar and the heavy rules are the
+   projects; the hairlines inside them are the people. */
+.grid-table tr.sched-row > td { border-bottom: 2px solid rgb(var(--c-line-strong)); }
+.sched-line + .sched-line { border-top: 1px dotted rgb(var(--c-line)); }
+
+/* Saturday and Sunday are shown so the strip reads as a real calendar, and
+   shaded so they are obviously not working days. */
+.grid-table .sched-weekend { background: rgb(var(--c-raised)); }
+.grid-table tbody tr:hover .sched-weekend { background: rgb(var(--c-line) / 0.5); }
+
+/* Today. A line rather than a fill, so it marks the column without competing
+   with the load washes underneath it. */
+.grid-table .sched-now { box-shadow: inset 2px 0 0 rgb(var(--c-brand)); }
+
+/* HOW LOADED IS THAT. Schedule.loadLevel turns hours into 0-3 against the
+   working capacity of the period, so the same wash means the same thing at day,
+   week and month zoom. Over capacity is the only one that is meant to be
+   noticed from across the room. */
+.grid-table .sched-cell.load-1 { background: rgb(var(--c-brand) / 0.07); }
+.grid-table .sched-cell.load-2 { background: rgb(var(--c-warn) / 0.16); }
+.grid-table .sched-cell.load-3 { background: rgb(var(--c-danger) / 0.20); }
+.grid-table .sched-cell.load-3 span { color: rgb(var(--c-danger-ink)); }
+
+/* The shop's total per period, under everything. */
+.grid-table tr.sched-totals td {
+  border-top: 2px solid rgb(var(--c-line-strong));
+  background: rgb(var(--c-raised));
+  position: sticky; bottom: 0; z-index: 4;
+}
+.grid-table tr.sched-totals .col-sticky { z-index: 6; }
+
+/* Rows are one height, whatever is in them. A bid with three product chips or
+   a two-line status used to stand taller than its neighbours, and the eye lost
+   the line it was reading half way across the table. The overflow is clipped
+   rather than wrapped; the full value is on the cell's tooltip and on the
+   project page. */
+.grid-table tbody td > * { max-width: 100%; }
+.grid-table tbody td { overflow: hidden; }
+
+/* Rich-text areas in the proposal editor and the rendered document. */
+.prose-mini ul, .prose-doc ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+.prose-mini ol, .prose-doc ol { list-style: decimal; padding-left: 1.25rem; margin: 0.25rem 0; }
+.prose-mini li, .prose-doc li { margin: 0.15rem 0; }
+.prose-doc li { line-height: 1.45; }
+.prose-mini:empty::before { content: 'Type details (use the toolbar for bold, lists and indents)';
+                            color: rgb(var(--c-faint)); }
+
+/* THE PROPOSAL, AS PAGES.
+
+   js/proposal.paginate.js measures the document and deals it into these, so
+   each one is a real sheet that knows its own number and carries the running
+   header and footer the printed proposal has. What is on screen is therefore
+   what comes out of the printer - the same breaks, in the same places.
+
+   These deliberately do NOT use the theme tokens: a proposal is paper. It is
+   white under both themes and on the printer, and assets/tokens.css pins
+   color-scheme:light over it for the same reason. */
+.doc-page {
+  width: 8.5in; height: 11in;
+  padding: 0.55in 0.6in 0.45in;
+  display: flex; flex-direction: column;
+  position: relative; overflow: hidden;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.12);
+  margin: 0 auto 1.25rem;
+}
+.doc-page .doc-head { flex: 0 0 auto; padding-bottom: 0.18in; }
+.doc-page .doc-head:not(:empty) { border-bottom: 1px solid rgba(100, 116, 139, 0.25); margin-bottom: 0.22in; }
+.doc-page .doc-body { flex: 1 1 auto; min-height: 0; }
+.doc-page .doc-foot { flex: 0 0 auto; padding-top: 0.14in; margin-top: 0.18in;
+                      border-top: 1px solid rgba(100, 116, 139, 0.25); }
+
+/* THE THREE TYPESET THEMES (10, 11, 12 in js/proposal.styles.js).
+
+   A theme names one of these in its `docFont` key and it is applied to the
+   document host and to every page, including the paginator's hidden probe -
+   which is the important part. The probe is what the page breaks are measured
+   against, so it has to be set in the same typeface as the sheets it is
+   measuring for, or the breaks land in the wrong places.
+
+   System stacks, not webfonts: a proposal is printed, an unloaded webfont
+   prints as its fallback anyway, and the platform serif is hinted for paper.
+
+   Nothing here changes spacing that the paginator depends on. The rule that
+   blocks carry their spacing as padding and never margin (below) still holds -
+   these set typeface, size and leading only. */
+
+.doc-serif {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+/* Headings in the serif, body left to the same face at a lighter weight - the
+   pairing is size and weight rather than two families fighting each other. */
+.doc-serif h1, .doc-serif h2, .doc-serif h3 { letter-spacing: 0.01em; }
+.doc-serif .scope-row { letter-spacing: 0.005em; }
+
+.doc-tech {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  line-height: 1.45;
+}
+/* Every figure, part number and quantity in the monospace, so columns of them
+   line up on the digit the way a drawing schedule does. */
+.doc-tech .font-mono,
+.doc-tech table td:last-child,
+.doc-tech table th:last-child {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.doc-tech table { font-variant-numeric: tabular-nums; }
+
+.doc-modern {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+/* Restraint is the whole idea: headings carry it on tracking and weight rather
+   than on size, so the one accent colour is the only thing that shouts. */
+.doc-modern h1, .doc-modern h2, .doc-modern h3 {
+  letter-spacing: -0.015em; font-weight: 700;
+}
+.doc-modern .font-mono { font-variant-numeric: tabular-nums; }
+
+/* THEME 13, LANCASTER - Style 3 of Bid Proposal v3 1.html, reproduced.
+   ==================================================================
+
+   This is not a taste exercise. Style 3 ("Industrial Technical Grid") is what
+   printed Bid Proposal_Lancaster Township.pdf, the document the shop actually
+   sends to clients, so the target is a known artifact and every number below
+   came from one of two places:
+
+     - the v3 bundle's own class strings, read out of the compiled markup, and
+     - the PDF's content stream: embedded font names, point sizes and text
+       positions, converted at the 1px = 0.75pt that Chrome prints at, which
+       turns 10.5pt body into 14px and the 22.5pt title into 30px.
+
+   The two agree, which is the reason to trust either.
+
+   THE THREE FACES, AND WHERE EACH ONE STOPS.
+   v3 got its typography almost by accident: a base rule set body and h1-h6 in
+   Inter, and the document then asked for `font-sans` - the system stack, which
+   is Segoe UI on the Windows machine this prints from. Headings are elements,
+   so they kept Inter; everything else inherited Segoe. The split is worth
+   keeping, but v3 drew the lines in the wrong places - it put the company name
+   in Inter and the email in the monospace, so a four-line letterhead used three
+   faces. The rule here is narrower and can be stated in one sentence:
+
+     Inter    800      structure only - section headings and scope-item titles.
+     Segoe UI 400-900  everything a person reads: the whole letterhead, the
+                       details grid, BID PROPOSAL, the slogan, all prose.
+     Consolas 400/900  money only - line prices, the total, the divider chip.
+
+   Money is the one place a monospace earns its keep, because a column of
+   figures lines up on the digit. A reference number or a project name is read
+   once, not compared down a column, so it belongs with the prose. Each face
+   therefore means one thing all the way down the page, and a reader can tell
+   what kind of information they are looking at before they read it.
+
+   Segoe UI and Consolas are Windows system faces - the shop's own printer - and
+   the fallbacks are the nearest metric match elsewhere. Inter is already loaded
+   for the app chrome, so none of this adds a network dependency.
+
+   Sizes run larger than the other themes because the printed document is
+   larger: its type block is 680px wide against this page's 700px, so the
+   point sizes carry over very nearly one for one.
+
+   Padding is set in a few places to match the v3 rhythm. That is safe - the
+   paginator measures live and its probe carries this same class, so the
+   breaks it finds are the breaks these sheets get. */
+.doc-lancaster {
+  font-family: 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #000;
+}
+.doc-lancaster .font-mono,
+.doc-lancaster .lh-email {
+  font-family: Consolas, 'Cascadia Mono', ui-monospace, 'DejaVu Sans Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* THE FOUR PANELS, at the exact fills the PDF paints them with - read out of
+   its own colour operators, not sampled off a screenshot:
+
+     letterhead   #f4f4f5 zinc-100  on a zinc-800 hairline, the only dark
+                                    outline in the document
+     details grid #fafafa zinc-50   on a 2px zinc-200
+     slogan pill  #f8fafc slate-50  on slate-300
+     total        #f8fafc slate-50  on zinc-300
+
+   Two greys, not one: the zincs are neutral and the slates lean blue, and the
+   pair is what separates "who we are and what this job is" from "what it
+   costs". Every horizontal rule in the document is zinc-300. */
+.doc-lancaster .doc-letterhead > div {
+  background-color: #f4f4f5; border-color: #27272a;
+}
+
+/* LETTERHEAD, in one face at four weights: name Bold, phone Semibold, address
+   and email Regular. Four lines is not enough room to change typeface twice -
+   v3 did, putting the name in Inter and the email in the monospace, and the
+   block read as three fragments rather than as one address. Weight alone
+   carries the hierarchy now, in the same face as the body, so the letterhead
+   belongs to the page it is printed on.
+
+   `inherit` rather than a stack of its own: both rules exist only to undo a
+   class further up, and naming the face twice is one more place to get it
+   wrong. The logo prints at 64px, as v3 sets it. */
+.doc-lancaster .lh-contact { font-size: 12px; line-height: 1.5; }
+.doc-lancaster .lh-name {
+  font-family: inherit;
+  font-size: 14px; font-weight: 700; letter-spacing: -0.01em;
+}
+.doc-lancaster .lh-phone { font-weight: 600; }
+.doc-lancaster .lh-email { font-family: inherit; font-size: 12px; }
+.doc-lancaster .doc-letterhead img { height: 64px; }
+
+/* BID PROPOSAL: 30px Segoe UI Bold - bold, not black; it is the one heading v3
+   marks `font-sans`, which is precisely why it is not in Inter. Under it a 4px
+   bar the width of the words, not of the page. */
+.doc-lancaster .doc-title h1 {
+  font-weight: 700; font-size: 30px; letter-spacing: 0.12em;
+  color: #18181b; border-bottom-width: 4px; border-bottom-color: #27272a;
+}
+
+/* THE SLOGAN, as a pill rather than a panel - a centred rounded-full badge in
+   Segoe UI Black at 20px. It is the one place in the document that shouts, and
+   the shape is what stops it reading as a second heading. */
+.doc-lancaster .doc-tagline { text-align: center; }
+.doc-lancaster .doc-tagline > div {
+  display: inline-block; border-radius: 9999px; padding: 7px 26px;
+  background-color: #f8fafc; border-color: #cad5e2;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.doc-lancaster .doc-tagline > div > div {
+  font-size: 20px; font-weight: 900; letter-spacing: 0.08em; line-height: 1.4;
+}
+
+/* THE FIVE IDENTIFYING FIELDS. Label a size smaller than its value and both
+   bold, so the pair reads as one line. All five values in the one face: the
+   proposal number used to be monospaced and the project name beside it was not,
+   which made the two halves of the grid look like two different documents. */
+.doc-lancaster .doc-meta > div {
+  border-width: 2px; background-color: #fafafa; border-color: #e4e4e7;
+}
+.doc-lancaster .meta-row { font-size: 12px; line-height: 1.55; }
+.doc-lancaster .meta-label { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; }
+.doc-lancaster .meta-value { font-weight: 700; }
+
+.doc-lancaster .doc-intro { font-size: 14px; font-weight: 500; line-height: 1.65; }
+
+/* SECTION HEADINGS AND SCOPE-ITEM TITLES are the same thing typographically:
+   Inter ExtraBold at body size. The document separates structure from prose by
+   face and weight rather than by making headings bigger, which is what keeps
+   four levels of hierarchy on one page without it looking like a poster. */
+.doc-lancaster .sec-head h2,
+.doc-lancaster .scope-title {
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  font-size: 14px; font-weight: 800;
+}
+.doc-lancaster .sec-head h2 { letter-spacing: 0.1em; }
+.doc-lancaster .scope-title { letter-spacing: 0; }
+
+/* The scope heading is underlined under the words as well as ruled across the
+   page - both lines are in the PDF, 15px apart, and they are doing different
+   jobs: the underline marks the heading, the rule opens the ledger under it.
+   The three contractual headings get the rule only. */
+.doc-lancaster .sec-head-underline h2 {
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px;
+}
+
+.doc-lancaster .scope-row { padding-top: 18px; padding-bottom: 18px; }
+.doc-lancaster .scope-price { font-size: 14px; font-weight: 700; }
+.doc-lancaster .scope-row .prose-doc { font-size: 14px; font-weight: 400; line-height: 1.7; }
+
+.doc-lancaster .total-label { font-size: 14px; font-weight: 900; letter-spacing: 0.1em; }
+.doc-lancaster .total-amount { font-size: 24px; font-weight: 900; letter-spacing: -0.01em; }
+
+/* The chip on the dashed rule. Monospace and small: it is a divider label, not
+   a heading, and setting it in the figures face is what says so. */
+.doc-lancaster .rule-chip {
+  font-family: Consolas, 'Cascadia Mono', ui-monospace, monospace;
+  font-size: 10px; font-weight: 400; letter-spacing: 0.18em; color: #94a3b8;
+}
+
+/* Justified, as the printed terms are: twenty clauses of small print set ragged
+   right look like a list of exceptions, and set justified look like a contract. */
+.doc-lancaster .doc-terms { font-size: 14px; line-height: 1.62; text-align: justify; }
+.doc-lancaster .doc-terms li { line-height: 1.62; }
+.doc-lancaster .doc-accept { font-size: 14px; font-weight: 500; }
+.doc-lancaster .sign-label { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }
+
+/* Running header and footer, in the PDF's slate grey. The header is Semibold
+   and a shade smaller than the footer, which is plain - it repeats on every
+   sheet, so it has to be legible without competing with the letterhead. */
+.doc-lancaster .run-head { font-size: 9px; font-weight: 600; letter-spacing: 0.11em; color: #64748b; }
+.doc-lancaster .run-foot { font-size: 10px; font-weight: 400; color: #64748b; }
+
+/* Blocks carry their spacing as padding, never margin. Two adjacent margins
+   collapse into one, which would make a block's measured height depend on
+   what happened to precede it - and every measurement after a page break
+   would then be wrong. */
+.doc-page .doc-body > * { margin-top: 0; margin-bottom: 0; }
+
+/* The hidden pages the paginator works against. Inside the same host, so the
+   cascade that styles a real page styles these identically. */
+.doc-probe { position: absolute; visibility: hidden; pointer-events: none;
+             left: -10000px; top: 0; }
+
+/* Content is measured in a page that is free to grow, never in a real one.
+   scrollHeight never reports less than clientHeight, so inside a page of
+   fixed height every block short of a full sheet measures as the whole sheet
+   and the arithmetic is meaningless. This one has the same width - which is
+   what decides how text wraps, and therefore how tall it is - and no height
+   at all. */
+.doc-measure { height: auto !important; overflow: visible !important; }
+.doc-measure .doc-body { flex: 0 0 auto; }
+
+/* POP-OUT: a window opened with ?popout=1 shows one page and a slim bar.
+   Driven by a body class so the rules live here rather than in inline styles
+   scattered through js/nav.js. */
+body.popout header.app-header,
+body.popout .module-bar-row,
+body.popout .sub-menu-bar,
+body.popout footer { display: none !important; }
+body:not(.popout) #popoutHeader { display: none !important; }
+body.popout main { padding-top: 1rem !important; }
+
+/* PROJECT VIEW: one project, full screen. While you are estimating a job the
+   other five modules are noise and the takeoff needs the width, so the same
+   treatment as a pop-out - minus the footer, which the project bar replaces. */
+body.projectview header.app-header,
+body.projectview .module-bar-row,
+body.projectview .sub-menu-bar,
+body.projectview footer { display: none !important; }
+body:not(.projectview) #projectHeader { display: none !important; }
+body.projectview main { padding-top: 1rem !important; max-width: none !important; }
+
+/* PRINT: only the proposal document goes on paper. */
+@media print {
+  /* No browser margin: each .doc-page already carries its own, and a second
+     one on top would push every sheet onto the next and leave a trail of
+     blank pages behind it. */
+  @page { size: letter; margin: 0; }
+  body { background: #fff !important; }
+  body.printing-proposal header.app-header,
+  body.printing-proposal #projectHeader,
+  body.printing-proposal .no-print,
+  body.printing-proposal section.month-nav,
+  body.printing-proposal section.kpi-row,
+  body.printing-proposal .tab-bar,
+  body.printing-proposal footer,
+  body.printing-proposal #toastHost { display: none !important; }
+  body.printing-proposal main { padding: 0 !important; max-width: none !important; }
+  body.printing-proposal .no-print-grid { display: block !important; }
+  #proposalDoc {
+    width: auto !important; box-shadow: none !important; margin: 0 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  /* Dark styles must keep their background on paper. */
+  #proposalDoc, #proposalDoc * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* One .doc-page is one sheet. The breaks were decided when the document was
+     measured, so the browser is told exactly where to cut rather than being
+     left to guess - and the last page must not push out an empty one. */
+  .doc-page { box-shadow: none !important; margin: 0 !important; break-after: page; }
+  .doc-page-last { break-after: auto; }
+  .doc-probe { display: none !important; }
+}
+
+/* THE INLINE EDITOR ON THE PROJECT PAGE.
+
+   A field you can edit says so before you touch it - the pencil beside the
+   label is always faintly there - and a click opens it. It used to take a
+   double-click with no visible affordance at all, which is a feature nobody
+   finds unless they are told about it. */
+.edit-field:focus-visible {
+  outline: 2px solid rgb(var(--c-brand));
+  outline-offset: 2px;
+}
+
+/* A save that changed nothing visible is still a save, so it is worth saying so
+   for a moment. Kept to a tint rather than a toast: these are typed one after
+   another, and ten toasts to fill in one card is noise. */
+.edit-saved {
+  animation: edit-saved 0.9s ease-out;
+}
+@keyframes edit-saved {
+  0%   { background: rgb(var(--c-ok) / 0.28); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .edit-saved { animation: none; }
+}
+
+/* THE DUE DATE, ON THE CALENDAR WITH THE WORK.
+
+   A row of hours means nothing without the date it is working towards. The flag
+   sits in the corner of the day cell rather than in the middle of it, so it
+   never competes with the figure it belongs beside, and it is coloured by how
+   close the date is: overdue and due-this-week are different news. */
+.grid-table .sched-cell.has-due { position: relative; }
+.sched-due {
+  position: absolute; top: 1px; right: 2px; line-height: 1; font-size: 8px;
+  pointer-events: auto;
+}
+.sched-due.due-ahead { color: rgb(var(--c-brand)); }
+.sched-due.due-soon  { color: rgb(var(--c-warn)); }
+.sched-due.due-over  { color: rgb(var(--c-danger)); }
+
+/* The whole cell picks up the edge, so the day reads as the deadline at a
+   glance and not only where the little flag is. */
+.grid-table .sched-cell.has-due { box-shadow: inset 0 -2px 0 currentColor; }
+.grid-table .sched-cell.has-due:has(.due-ahead) { color: rgb(var(--c-brand) / 0.75); }
+.grid-table .sched-cell.has-due:has(.due-soon)  { color: rgb(var(--c-warn)); }
+.grid-table .sched-cell.has-due:has(.due-over)  { color: rgb(var(--c-danger)); }
+
+/* A deadline just off the edge of the window, on the edge it lies past. */
+.sched-due-off {
+  position: absolute; top: 0; bottom: 0; right: 1px;
+  display: flex; align-items: center;
+  font-size: 12px; font-weight: 700; color: rgb(var(--c-faint));
+}
+.sched-due-off:hover { color: rgb(var(--c-danger)); }
+
+/* ===================================================================
+   THE SIGN-IN PAGE'S WELDED MARK - see js/intro.js.
+
+   A perspective stage with the plate, the grid, the mark and the spark canvas
+   at different depths. The browser does the projection; nothing here fakes a
+   3D look with skew and a drop shadow. The mark itself has real thickness -
+   ten copies stacked backwards in z - so rotating the stage shows the SIDE of
+   the letters, because there is one.
+   =================================================================== */
+.intro-stage {
+  --tilt-x: 0deg;
+  --tilt-y: 0deg;
+  position: relative;
+  width: 100%;
+  max-width: 27rem;
+  margin-inline: auto;
+  perspective: 900px;
+  perspective-origin: 50% 42%;
+  padding: 2rem 0 0.5rem;
+  isolation: isolate;
+}
+
+/* The plate: brushed steel lit from the upper left, with a slow specular sweep
+   across it. Furthest back, so it moves least - and very slightly out of focus,
+   which is what selling depth actually takes. */
+.intro-plate {
+  position: absolute; inset: -8% -10% -14%;
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(120% 80% at 25% 12%, rgba(255,255,255,0.10), transparent 62%),
+    repeating-linear-gradient(96deg,
+      rgba(255,255,255,0.032) 0 2px, rgba(0,0,0,0.05) 2px 4px),
+    linear-gradient(160deg, #262b33 0%, #15181d 58%, #0d0f12 100%);
+  transform: translateZ(-180px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  filter: blur(0.4px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 40px 80px -30px rgba(0,0,0,0.85);
+}
+.intro-plate::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(105deg, transparent 36%, rgba(255,255,255,0.075) 48%, transparent 61%);
+  animation: intro-sheen 9s ease-in-out infinite;
+}
+@keyframes intro-sheen {
+  0%, 72%  { transform: translateX(-48%); opacity: 0; }
+  82%      { opacity: 1; }
+  100%     { transform: translateX(48%); opacity: 0; }
+}
+
+/* A drawing grid on the plate - this is a fabrication shop, and the mark sits
+   on a drawing before it sits on steel. */
+.intro-grid {
+  position: absolute; inset: -8% -10% -14%;
+  border-radius: 1.25rem;
+  background-image:
+    linear-gradient(rgba(120,170,215,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120,170,215,0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+  transform: translateZ(-120px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  mask-image: radial-gradient(72% 62% at 50% 42%, #000 28%, transparent 76%);
+  -webkit-mask-image: radial-gradient(72% 62% at 50% 42%, #000 28%, transparent 76%);
+}
+
+/* The scene. The pointer sets --tilt-*; the idle float keeps it alive when
+   nobody is moving one, which is most of the time on a sign-in screen. */
+.intro-scene {
+  position: relative;
+  transform-style: preserve-3d;
+  transform: rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.intro-stage.is-welded .intro-scene { animation: intro-float 11s ease-in-out infinite; }
+@keyframes intro-float {
+  0%, 100% { transform: rotateX(calc(var(--tilt-x) + 1.4deg)) rotateY(calc(var(--tilt-y) - 3.5deg)); }
+  50%      { transform: rotateX(calc(var(--tilt-x) - 1.4deg)) rotateY(calc(var(--tilt-y) + 3.5deg)); }
+}
+
+.intro-markwrap {
+  position: relative;
+  transform: translateZ(60px);
+  transform-style: preserve-3d;
+}
+
+.intro-mark, .intro-heat, .intro-layer, .intro-reflection img {
+  display: block; width: 100%; height: auto;
+  user-select: none; -webkit-user-drag: none;
+}
+
+/* THE THICKNESS. Each layer sits 1.6px further back and a shade darker, so the
+   stack reads as an extruded edge catching less light the deeper it goes. */
+.intro-extrude { position: absolute; inset: 0; transform-style: preserve-3d; }
+.intro-layer {
+  position: absolute; inset: 0;
+  transform: translateZ(calc(var(--i) * -1.6px));
+  filter: brightness(calc(1 - var(--i) * 0.085)) saturate(0.65);
+}
+
+.intro-mark {
+  position: relative;
+  filter: drop-shadow(0 14px 30px rgba(0,0,0,0.6));
+}
+
+.intro-heat {
+  position: absolute; inset: 0;
+  filter: brightness(0) invert(1) drop-shadow(0 0 16px rgba(255,190,90,0.95))
+          drop-shadow(0 0 40px rgba(255,120,20,0.8));
+  opacity: 0; pointer-events: none;
+}
+
+/* Light travelling across the face. Clipped to the mark by the wrapper's own
+   mask during the weld, and to the panel afterwards. */
+/* IT DOES NOT MOVE. A mask travels with the element it is on, so translating
+   this slid a logo-shaped white highlight clean off the plate and painted a
+   ghost of the mark on the panel beside it. The element stays where the
+   artwork is and the GRADIENT travels inside it instead - same light crossing
+   the same letters, with no geometry that can leave the mark. */
+.intro-gloss {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(100deg, transparent 42%, rgba(255,255,255,0.30) 50%, transparent 58%);
+  background-size: 260% 100%;
+  background-repeat: no-repeat;
+  background-position: -140% 0;
+  mix-blend-mode: screen;
+  /* Masked to the artwork itself, so the highlight travels ACROSS THE LETTERS
+     rather than as a band over the rectangle they sit in. That difference is
+     the whole of whether it reads as a surface catching light. */
+  mask-image: url('diverse-logo.png');
+  -webkit-mask-image: url('diverse-logo.png');
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+.intro-stage.is-welded .intro-gloss {
+  opacity: 1;
+  animation: intro-gloss 9s ease-in-out infinite;
+}
+@keyframes intro-gloss {
+  0%, 62%   { background-position: -140% 0; }
+  92%, 100% { background-position: 140% 0; }
+}
+
+/* What the mark is standing on. Laid back on the plate rather than mirrored
+   flat, so it reads as a floor and not as a second logo. */
+.intro-reflection {
+  position: absolute; left: 0; right: 0; top: 100%;
+  transform: translateZ(30px) rotateX(-72deg) scaleY(0.55);
+  transform-origin: top center;
+  opacity: 0.16;
+  filter: blur(1.5px);
+  mask-image: linear-gradient(#000, transparent 62%);
+  -webkit-mask-image: linear-gradient(#000, transparent 62%);
+  pointer-events: none;
+}
+
+/* The arc: a bright line at the seam with a bloom around it, riding the mask
+   edge. Positioned by js/intro.js on every frame. */
+.intro-arc {
+  position: absolute; top: 0; left: 0; width: 3px;
+  border-radius: 3px; opacity: 0; pointer-events: none;
+  transform-style: preserve-3d;
+  background: linear-gradient(180deg,
+    rgba(255,255,255,0) 0%, rgba(255,255,255,0.95) 18%,
+    rgba(255,236,190,1) 50%, rgba(255,255,255,0.95) 82%, rgba(255,255,255,0) 100%);
+  box-shadow: 0 0 14px 4px rgba(255,190,90,0.9), 0 0 40px 12px rgba(255,120,20,0.6);
+}
+
+.intro-sparks {
+  position: absolute; inset: -25% -12% -35%;
+  width: 124%; height: 160%;
+  transform: translateZ(90px);
+  pointer-events: none;
+}
+
+/* Centred under the mark, not flush left of it: the two lines are the company's
+   own strapline and they belong to the logo above them, not to the paragraph
+   below. */
+.intro-words {
+  position: relative; margin-top: 1.1rem; text-align: center;
+  opacity: 0; transform: translateY(10px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.intro-words.is-in { opacity: 1; transform: translateY(0); }
+.intro-tagline {
+  font-size: 1rem; font-weight: 700; letter-spacing: 0.02em; color: #fff;
+}
+.intro-sub { font-size: 0.78rem; color: rgba(255,255,255,0.5); margin-top: 0.1rem; }
+
+/* Reduced motion: the finished mark, still. Not a slower weld - no weld, no
+   float, no sweep. The depth stays, because depth is not motion. */
+@media (prefers-reduced-motion: reduce) {
+  .intro-plate::after,
+  .intro-stage.is-welded .intro-scene,
+  .intro-stage.is-welded .intro-gloss { animation: none; }
+  .intro-gloss { opacity: 0; }
+  .intro-scene { transition: none; }
+  .intro-words { opacity: 1; transform: none; transition: none; }
+  .intro-heat, .intro-arc { display: none; }
+}
+
+/* THE SIGN-IN CARD, on the plate rather than beside it: a sheet of glass with a
+   lit top edge, so it reads as sitting above the scene. */
+.auth-card {
+  background: rgb(var(--c-surface) / 0.92);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 24px 60px -18px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.dark .auth-card { background: rgb(var(--c-surface) / 0.82); }
+
+/* The reveal button lives inside the field, so the field keeps room for it. */
+.auth-field { padding-right: 2.75rem; }
+
+/* ===================================================================
+   ONE COLOUR PER PERSON
+
+   The Employee view stacks initials in the Engineer column and a matching
+   stack of figures in every one of thirty date cells. Three grey letters and
+   a column of numbers means counting lines to work out whose four and a half
+   hours those are; a colour makes it a glance.
+
+   Fourteen hues, each one class carrying its own colour as a pair of custom
+   properties. Everything downstream - the chip, the bar under the initials,
+   the pill round the hours, the avatar in Settings - reads `--pal` at its own
+   alpha, so a person's colour is set in exactly one place and cannot drift
+   between the four views that draw it.
+
+   NONE OF THEM ARE DARK. These sit behind initials and under figures that
+   have to stay readable, so the set is mid-light and separated by hue rather
+   than by lightness. `--pal-ink` is the same hue taken down far enough to
+   read as text on its own soft tint.
+
+   The order matters: js/bids.js hands out pal-1..pal-14 by position in the
+   engineers register, so consecutive entries must not look alike. They are
+   interleaved round the wheel rather than run through it.
+   =================================================================== */
+.pal-1  { --pal:  59 130 246; --pal-ink:  29  78 216; }  /* blue      */
+.pal-2  { --pal:  16 185 129; --pal-ink:   4 120  87; }  /* emerald   */
+.pal-3  { --pal: 244 114 182; --pal-ink: 190  24  93; }  /* pink      */
+.pal-4  { --pal: 245 158  11; --pal-ink: 180  83   9; }  /* amber     */
+.pal-5  { --pal: 139  92 246; --pal-ink: 109  40 217; }  /* violet    */
+.pal-6  { --pal: 132 204  22; --pal-ink:  77 124  15; }  /* lime      */
+.pal-7  { --pal:  14 165 233; --pal-ink:   3 105 161; }  /* sky       */
+.pal-8  { --pal: 249 115  22; --pal-ink: 194  65  12; }  /* orange    */
+.pal-9  { --pal:  45 212 191; --pal-ink:  15 118 110; }  /* teal      */
+.pal-10 { --pal: 217  70 239; --pal-ink: 162  28 175; }  /* fuchsia   */
+.pal-11 { --pal: 234  88  88; --pal-ink: 185  28  28; }  /* red       */
+.pal-12 { --pal:  99 102 241; --pal-ink:  67  56 202; }  /* indigo    */
+.pal-13 { --pal: 163 163  92; --pal-ink: 113 113  50; }  /* olive     */
+.pal-14 { --pal: 148 163 184; --pal-ink:  71  85 105; }  /* slate     */
+
+/* In the dark theme the soft tint is a dark wash, so the ink has to come UP to
+   meet it rather than down. One rule: the text tone becomes the hue itself,
+   lightened by the tint it sits on. */
+.dark .pal-1, .dark .pal-2, .dark .pal-3, .dark .pal-4, .dark .pal-5,
+.dark .pal-6, .dark .pal-7, .dark .pal-8, .dark .pal-9, .dark .pal-10,
+.dark .pal-11, .dark .pal-12, .dark .pal-13, .dark .pal-14 { --pal-ink: var(--pal); }
+
+/* THE CHIP. Initials on their own colour, wherever a person is named - the
+   bid tables, the Engineer column, Settings, the who-is-here markers. */
+.person-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgb(var(--pal) / 0.16);
+  color: rgb(var(--pal-ink));
+  font-weight: 700;
+}
+.dark .person-chip { background: rgb(var(--pal) / 0.22); }
+
+/* Somebody the engineers register has never heard of. Grey rather than a
+   fourteenth colour, because "not in the register" is information. */
+.person-chip.pal-none {
+  background: rgb(var(--c-neutral-soft)); color: rgb(var(--c-neutral-ink));
+}
+
+/* THE LABEL UNDER THE INITIALS, in the Employee view's Engineer column.
+
+   Drawn as an inset shadow rather than a border or a block: the frozen column
+   and the calendar cells beside it only line up because both lines are told
+   the same 1.25rem height, and anything that adds height here would put every
+   figure in the month out of step with the name it belongs to. */
+.sched-name .person-chip {
+  box-shadow: inset 0 -3px 0 rgb(var(--pal));
+  padding: 0 0.4rem;
+  border-radius: 0.25rem;
+  line-height: 1rem;
+  min-width: 2.5rem;
+}
+
+/* THE HOURS, in the same colour as the name they belong to - but only on the
+   days something is actually booked. An empty day stays clear so the load
+   washes underneath (load-1/2/3, which say how hard a day is loaded across
+   the whole shop) still read for what they are. */
+.sched-line.is-booked {
+  background: rgb(var(--pal) / 0.18);
+  color: rgb(var(--pal-ink));
+  border-radius: 0.25rem;
+}
+.dark .sched-line.is-booked { background: rgb(var(--pal) / 0.26); }
+
+/* Hours booked to nobody. Grey, because that is what "nobody" should look
+   like next to a row of named colours - and it has no --pal to read. */
+.sched-line.is-booked.pal-none {
+  background: rgb(var(--c-neutral-soft)); color: rgb(var(--c-ink-strong));
+}
+
+/* Over capacity still wins: a day the shop cannot do is the one thing on this
+   view that has to be seen from across the room, so it overrides the person's
+   colour rather than blending with it. */
+.grid-table .sched-cell.load-3 .sched-line.is-booked {
+  background: rgb(var(--c-danger) / 0.22); color: rgb(var(--c-danger-ink));
+}
+
+/* WHO ELSE IS IN HERE, in their own colour. On the dark header a 16% tint is
+   nothing, so these are solid - and the palette is light, so the initials on
+   top of them are dark rather than white. */
+.presence-dot { background: rgb(var(--pal)); color: #0b1220; }
+.presence-dot.pal-none { background: rgb(var(--c-neutral-ink)); color: #fff; }
+.presence-eye { color: rgb(var(--pal-ink)); }
+.dark .presence-eye { color: rgb(var(--pal)); }
+.presence-eye.pal-none { color: rgb(var(--c-muted)); }
+
+/* The swatch grid, in Settings > People and the Engineers register. */
+.pal-swatch {
+  width: 1.5rem; height: 1.5rem; border-radius: 0.375rem;
+  background: rgb(var(--pal));
+  border: 2px solid transparent;
+  transition: transform 0.12s ease;
+}
+.pal-swatch:hover { transform: scale(1.12); }
+.pal-swatch.is-on { border-color: rgb(var(--c-ink)); box-shadow: 0 0 0 2px rgb(var(--c-surface)) inset; }

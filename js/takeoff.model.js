@@ -18,6 +18,17 @@
 
   /* ---- construction ---------------------------------------------------- */
 
+  /* The units anything in the app is measured or sold in. Offered as a
+     datalist rather than a <select>: takeoffs already in the database carry
+     free-typed units ("Sticks", "Lot"), and a hard select would drop them the
+     first time the row was touched.
+
+     Defined in js/store.js, because the schema-16 migration needs both this
+     list and splitColumnUnit before this file has been parsed. Re-exported
+     here so the takeoff code has one place to reach for. */
+  var UNITS = root.Store.UNITS;
+  var splitColumnUnit = root.Store.splitColumnUnit;
+
   function newItem(partial) {
     return Object.assign({
       id: uid('mi'),
@@ -25,6 +36,21 @@
       qty: null, um: 'EA', material: '', grade: '', weightLb: null,
       unitCost: null, catalogId: null,
       qtyMode: 'manual', qtyExpr: '',
+      /* What the drawing takeoff measured, and what the vendor sells it in.
+         See requiredQty/orderQty for how the two become a number to order.
+
+           scopeKey  the drawing-takeoff column this row is measured by, or
+                     null for a row that stands on its own (tax, freight, the
+                     bag of washers nobody draws)
+           packQty   how much of that measure comes in one purchased item -
+                     21 LF to a stick of pipe, 100 EA to a packet of washers
+           packUm    the unit packQty is counted in
+           costBasis 'pack' - unitCost is the price of one purchased item
+                     'unit' - unitCost is the price per LF/EA measured */
+      scopeKey: null, packQty: null, packUm: '', costBasis: 'pack',
+      /* What to order, when it is not what the division came to. Null means
+         the calculation stands - see orderQty. */
+      orderQtyOverride: null,
       // Ticked by default. Untick to keep the row in the cost but off the
       // client-facing proposal. Absent === true, so nothing is written for the
       // normal case.
@@ -87,6 +113,29 @@
     return custom && String(custom).trim() ? custom : defaultRowLabel(p, id);
   }
 
+  /* The unit a row is billed in.
+
+     COST_ROWS names a default - Hrs for labour, Days for equipment - but the
+     shop does not always bill that way: supervision quoted by the week, a truck
+     by the load. p.rowUnits holds only the exceptions, exactly as p.rowLabels
+     holds only the renamed labels, so the ordinary case is an empty object and
+     costs nothing to store.
+
+     Finish is the one row whose unit is already per-product data (it follows
+     the product's own unit), so it reads from finish.um as it always did. */
+  function rowUnit(p, id) {
+    var custom = p.rowUnits && p.rowUnits[id];
+    if (custom && String(custom).trim()) return String(custom).trim();
+    return defaultRowUnit(p, id);
+  }
+
+  function defaultRowUnit(p, id) {
+    var d = costRowDef(id);
+    if (!d) return '';
+    if (d.umPath) return pathGet(p, d.umPath) || '';
+    return d.um || '';
+  }
+
   function isRowHidden(p, id) { return !!(p.hiddenRows && p.hiddenRows[id]); }
 
   /* Hidden rows can never show on the proposal - a line you are not billing is
@@ -98,15 +147,38 @@
 
   function isItemOnProposal(item) { return item.showInProposal !== false; }
 
+  /* What an extra charge comes to.
+
+     It started as a flat amount, because the rows it replaced were ad-hoc sums
+     appended to a formula. But most of them are not flat at all - two lifts at
+     $1,000, four permits at $200 - and typing the product of that by hand loses
+     the quantity, which is the thing anybody reviewing the estimate wants to
+     see. So a row with both a quantity and a unit price is their product.
+
+     A row with only an amount still works and is untouched, which is what makes
+     this safe on every extra already in the database: no migration, and an
+     estimator who wants to type one number still can. */
+  function extraAmount(e) {
+    if (!e) return 0;
+    if (e.qty !== null && e.qty !== undefined && e.qty !== '' &&
+        e.unitPrice !== null && e.unitPrice !== undefined && e.unitPrice !== '') {
+      return n(e.qty) * n(e.unitPrice);
+    }
+    return n(e.amount);
+  }
+
+  function newColumn(label, um) {
+    var split = splitColumnUnit(label);
+    return { key: uid('col'), label: split.label, um: um || split.um || 'EA' };
+  }
+
   function newGroup(name, columns) {
     return {
       id: uid('grp'),
       name: name || 'Items',
       items: [],
       grid: {
-        columns: (columns || []).map(function (label) {
-          return { key: uid('col'), label: label };
-        }),
+        columns: (columns || []).map(function (label) { return newColumn(label); }),
         rows: []
       }
     };
@@ -138,7 +210,7 @@
         forklift: { days: null, rate: r.forkliftPerDay },
         truck: { days: null, rate: r.truckPerDay }
       },
-      /* Ad-hoc charges that don't fit a rate x qty line. The Lancaster Platform
+      /* Ad-hoc charges. The Lancaster Platform
          sheet hid three of these inside formulas (+(1000*2)+(200*2) appended to
          installation, supervisor and truck); as their own rows they show up in
          the total and on the proposal instead of vanishing into a cell. */
@@ -151,6 +223,7 @@
          empty objects and costs nothing to persist. */
       hiddenRows: {},     // { forklift: true }  removed from the table AND the cost
       rowLabels: {},      // { engineering: 'Detailing' }  absent = default label
+      rowUnits: {},       // { supervisor: 'Wks' }  absent = the row's default unit
       proposalRows: {}    // { supervisor: false }  absent = shown on the proposal
     };
   }
@@ -272,7 +345,69 @@
     return isFinite(out) ? out : null;
   }
 
-  function itemQty(item, group) {
+  /* ---- scopes ---------------------------------------------------------- */
+
+  /* A SCOPE is one thing measured off the drawings - "Top Rail 1-1/2\" Pipe".
+     It is named, not keyed: the estimator draws the same scope on two sheets
+     and puts it in two groups, and those are one quantity to order, not two.
+     So the identity is the heading itself, compared the way a person compares
+     them - case, spacing and punctuation set aside.
+
+     Deliberately the same normalisation Catalog.norm uses on part numbers, and
+     for the same reason. */
+  function scopeKey(label) {
+    return String(label == null ? '' : label).toLowerCase()
+      .replace(/[\s\-_.\/]+/g, '').trim();
+  }
+
+  /* Every scope on a product, with its total across all of that product's
+     groups. The one thing the drawing grid, the material rows, the scope
+     picker and the export all read, so they cannot disagree. */
+  function productScopes(p) {
+    var order = [], by = {};
+    ((p && p.groups) || []).forEach(function (g) {
+      var cols = (g.grid && g.grid.columns) || [];
+      var rows = (g.grid && g.grid.rows) || [];
+      cols.forEach(function (col) {
+        var k = scopeKey(col.label);
+        if (!k) return;
+        if (!by[k]) {
+          by[k] = { key: k, name: col.label, um: col.um || '', total: 0, columns: [] };
+          order.push(by[k]);
+        }
+        // The first column to name a scope decides how it is spelled and what
+        // unit it is in; a later one that left its unit blank inherits it.
+        if (!by[k].um && col.um) by[k].um = col.um;
+        by[k].columns.push({ groupId: g.id, colKey: col.key });
+        rows.forEach(function (r) { by[k].total += n(r.values[col.key]); });
+      });
+    });
+    return order;
+  }
+
+  function findScope(p, key) {
+    var all = productScopes(p);
+    for (var i = 0; i < all.length; i++) if (all[i].key === key) return all[i];
+    return null;
+  }
+
+  function scopeTotal(p, key) {
+    var s = key ? findScope(p, key) : null;
+    return s ? s.total : null;
+  }
+
+  /* ---- quantities ------------------------------------------------------ */
+
+  /* Three quantities, and keeping them apart is the whole point:
+
+       requiredQty  what the job needs   - 76.9 LF of pipe
+       packQty      what a vendor sells  - 21 LF to a stick
+       orderQty     what you buy         - 4 sticks
+
+     The app used to hold only the last one, so the division happened on a
+     calculator and went unrecorded. */
+  function requiredQty(item, group, p) {
+    if (item.qtyMode === 'takeoff') return scopeTotal(p, item.scopeKey);
     if (item.qtyMode === 'formula') {
       try { return evalQtyExpr(item.qtyExpr, group); }
       catch (e) { return null; }
@@ -280,20 +415,184 @@
     return item.qty == null || item.qty === '' ? null : n(item.qty);
   }
 
-  function itemQtyError(item, group) {
+  /* Whole items, always - you cannot buy 3.7 sticks of pipe.
+
+     A hand-typed quantity with no pack size is returned exactly as typed. That
+     is not an oversight: every material row that predates this feature is one
+     of those, so the rounding cannot reach back and change a number an
+     estimator already signed off. Rounding starts the moment the row is told
+     what a vendor sells it in, or is measured off the drawings. */
+  function computedOrderQty(item, group, p) {
+    var req = requiredQty(item, group, p);
+    if (req == null) return null;
+    var per = n(item.packQty);
+    if (per > 0) return Math.ceil(req / per);
+    return item.qtyMode === 'takeoff' ? Math.ceil(req) : req;
+  }
+
+  /* WHAT IS ACTUALLY ORDERED, WHICH IS NOT ALWAYS THE ARITHMETIC.
+   *
+   * A stick is already on the shelf; the vendor has a minimum of five; two
+   * offcuts will cover the short run. The division is right and the answer is
+   * still wrong, and the only way to say so used to be unlinking the row from
+   * the drawings - which threw away the measurement that justified the number
+   * in the first place.
+   *
+   * So the calculation stays, visible and still recalculating, and the typed
+   * figure sits on top of it. Absent means the calculation stands, the same
+   * bargain hiddenRows/rowLabels/rowUnits make, which is why no material row
+   * already in the database needed a field written to it. */
+  function orderQty(item, group, p) {
+    var o = item.orderQtyOverride;
+    if (o != null && o !== '') return n(o);
+    return computedOrderQty(item, group, p);
+  }
+
+  /* An override typed when the drawings said one thing, still sitting there
+     now they say another.
+   *
+   * The comparison is against orderQtyBase - what the calculation said at the
+   * moment the number was typed - and NOT against the calculation as it stands.
+   * Those two readings look alike and only one is any use. A row where the
+   * typed 6 differs from the computed 4 is not stale, it is overridden: that
+   * disagreement IS the override, and reporting it would be the row telling
+   * the estimator what they had just that second decided, on every render,
+   * forever. What is worth saying is that the ground has moved since - that the
+   * drawings now come to 5 where they came to 4 when 6 was chosen.
+   *
+   * Reported, never resolved. The estimator may still want their 6.
+   *
+   * A row overridden with no base recorded says nothing rather than guessing:
+   * silence is the safe answer when there is no "before" to compare to. */
+  function orderQtyStale(item, group, p) {
+    var o = item.orderQtyOverride;
+    if (o == null || o === '') return null;
+    if (item.orderQtyBase == null) return null;
+    var calc = computedOrderQty(item, group, p);
+    if (calc == null || calc === n(item.orderQtyBase)) return null;
+    return { typed: n(o), was: n(item.orderQtyBase), computes: calc };
+  }
+
+  /* What the row is costed at. Kept as the name every caller already uses -
+     the tree, the export, the cost roll-up all want the quantity being paid
+     for, which is the quantity ordered. */
+  function itemQty(item, group, p) { return orderQty(item, group, p); }
+
+  function itemQtyError(item, group, p) {
+    if (item.qtyMode === 'takeoff') {
+      if (!item.scopeKey) return 'No drawing scope linked';
+      return findScope(p, item.scopeKey) ? null
+        : 'The drawing scope this row was measured by is gone';
+    }
     if (item.qtyMode !== 'formula') return null;
     try { evalQtyExpr(item.qtyExpr, group); return null; }
     catch (e) { return e.message; }
   }
 
-  function itemTotal(item, group) {
-    var q = itemQty(item, group);
-    if (q == null || item.unitCost == null || item.unitCost === '') return 0;
+  /* A vendor quotes a stick of pipe either way round - $96.73 for the stick,
+     or $4.61 a foot - and which one it is cannot be guessed from the number.
+     costBasis says, so the row can carry the quote as given. */
+  function itemTotal(item, group, p) {
+    if (item.unitCost == null || item.unitCost === '') return 0;
+    var q = item.costBasis === 'unit'
+      ? requiredQty(item, group, p)
+      : orderQty(item, group, p);
+    if (q == null) return 0;
     return q * n(item.unitCost);
+  }
+
+  /* Whether the pack size is measured in the same thing the scope is. A stick
+     of pipe measured in LF against a pack size given in EA is a division that
+     means nothing. Reported, never enforced - the estimator may know something
+     the units do not say. */
+  function unitMismatch(item, group, p) {
+    if (item.qtyMode !== 'takeoff') return null;      // nothing to compare against
+    if (!(n(item.packQty) > 0) || !item.packUm) return null;
+    var s = findScope(p, item.scopeKey);
+    if (!s || !s.um) return null;
+    if (scopeKey(s.um) === scopeKey(item.packUm)) return null;
+    return { from: s.um, to: item.packUm };
+  }
+
+  /* Scope in, material row out.
+   *
+   * Anything measured on the drawings is something that has to be bought, so a
+   * scope with a quantity gets a material row without being asked for one.
+   * What it will NOT do is take anything away: a scope deleted from the grid
+   * leaves its row behind, priced and part-numbered, for somebody to decide
+   * about. Losing a costed line because a column was renamed is not a trade
+   * worth making for the convenience.
+   *
+   * Returns the rows it created, so the caller can say so rather than the
+   * table quietly growing.
+   */
+  function syncScopeRows(p) {
+    if (!p) return [];
+    var linked = {};
+    p.groups.forEach(function (g) {
+      g.items.forEach(function (it) { if (it.scopeKey) linked[it.scopeKey] = true; });
+    });
+
+    var added = [];
+    productScopes(p).forEach(function (s) {
+      if (linked[s.key] || !s.total) return;
+      var owner = p.groups.filter(function (g) {
+        return g.id === s.columns[0].groupId;
+      })[0] || p.groups[0];
+      if (!owner) return;
+      var item = newItem({
+        feature: s.name,
+        um: s.um || 'EA',
+        qtyMode: 'takeoff',
+        scopeKey: s.key
+      });
+      // The rate library knows this scope by name if it has been bought before,
+      // in which case the row arrives priced. Anything less than an exact,
+      // single match is left for the Vendor Part No dropdown to settle.
+      var known = root.Catalog && root.Catalog.byFeature
+        ? root.Catalog.byFeature(s.name) : [];
+      if (known.length === 1) applyCatalogTo(item, known[0]);
+      owner.items.push(item);
+      linked[s.key] = true;
+      added.push(item);
+    });
+    return added;
+  }
+
+  /* Copy a rate-library part onto a material row. Lives here rather than in
+     the UI because syncScopeRows needs it too, and two copies of "what a part
+     fills in" would drift. */
+  function applyCatalogTo(item, c) {
+    if (!item || !c) return item;
+    item.vendor = c.vendor;
+    item.partNo = c.partNo;
+    item.description = c.description;
+    if (c.feature) item.feature = c.feature;
+    if (c.option) item.option = c.option;
+    item.material = c.material;
+    item.grade = c.grade;
+    item.um = c.um || item.um;
+    item.unitCost = c.unitCost;
+    item.catalogId = c.id;
+    if (c.packQty != null && c.packQty !== '') item.packQty = Number(c.packQty);
+    if (c.packUm) item.packUm = c.packUm;
+    return item;
   }
 
   /* ---- drawing grid ---------------------------------------------------- */
 
+  /* Keyed three ways on purpose.
+   *
+   * A TK("...") in a saved quantity formula names a column by the heading it
+   * had when the formula was written, and until schema 16 that heading carried
+   * the unit in it - 'Top Rail_1-1/2" Pipe (LF)'. Moving the unit into a field
+   * of its own would have left every one of those expressions pointing at a
+   * column that no longer answers to that name.
+   *
+   * Rewriting the formulas in the migration was the alternative, and it is the
+   * worse one: it means parsing and re-emitting expressions somebody typed, on
+   * bids that have already gone out, to fix a name we are the ones who changed.
+   * Answering to the old name costs one line. */
   function gridSubtotals(group) {
     var out = {};
     if (!group || !group.grid) return out;
@@ -302,18 +601,88 @@
       group.grid.rows.forEach(function (row) { sum += n(row.values[col.key]); });
       out[col.label] = sum;
       out[col.key] = sum;
+      if (col.um) out[col.label + ' (' + col.um + ')'] = sum;
     });
     return out;
   }
 
+  /* ---- documents ------------------------------------------------------- *
+   *
+   * The drawings a takeoff was measured off, as links rather than as files.
+   * They live in OneDrive, where the people who issue them keep issuing them;
+   * a copy pulled into this database would be a second, quietly older set of
+   * drawings, which is worse than no copy at all.
+   *
+   * One list per takeoff, shared by every product in it - a drawing set is not
+   * a property of the handrail. Created on first read the way projectRates is,
+   * so no takeoff already in the database needed a migration to grow one.
+   *
+   * NOT js/store.js's Docs store: that is an IndexedDB blob store for uploaded
+   * files, keyed by bid, and it cannot exist on the localStorage backend at
+   * all. A link is small enough to live in the record and sync with it.
+   */
+  var DOC_CATEGORIES = ['Drawing set', 'Specification', 'Addendum', 'Other'];
+
+  function documents(t) {
+    if (!Array.isArray(t.documents)) t.documents = [];
+    return t.documents;
+  }
+
+  function newDocument(partial) {
+    return Object.assign({
+      id: uid('doc'), name: '', url: '', category: 'Drawing set',
+      addedAt: new Date().toISOString(), addedBy: ''
+    }, partial || {});
+  }
+
+  function findDocument(t, id) {
+    if (!t || !id) return null;
+    var list = documents(t);
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  /* Which document a drawing reference opens.
+   *
+   * A row with no docId follows the takeoff's drawing set, which is what makes
+   * "all of them point at the one PDF" the default rather than something to be
+   * set up. A row that names a document it no longer has - because somebody
+   * deleted it - resolves to null and is drawn as having no link, rather than
+   * as an anchor pointing nowhere. */
+  function docForRow(t, row) {
+    if (!t) return null;
+    if (row && row.docId) return findDocument(t, row.docId);
+    return findDocument(t, t.drawingDocId);
+  }
+
+  /* How many drawing references across the whole takeoff currently open a
+     given document. Shown beside it, and named in the confirm before it is
+     deleted, so "delete" is never a guess about what it will disconnect. */
+  function docRefCount(t, docId) {
+    var isDefault = t.drawingDocId === docId;
+    var n2 = 0;
+    (t.products || []).forEach(function (p) {
+      (p.groups || []).forEach(function (g) {
+        ((g.grid && g.grid.rows) || []).forEach(function (r) {
+          if (r.docId ? r.docId === docId : isDefault) n2++;
+        });
+      });
+    });
+    return n2;
+  }
+
   /* ---- product roll-up ------------------------------------------------- */
 
-  function groupMaterialCost(group) {
-    return group.items.reduce(function (s, it) { return s + itemTotal(it, group); }, 0);
+  /* `p` is the product the group belongs to, needed by any row measured off a
+     drawing scope - those total across every group, so the row cannot be
+     costed from its own group alone. Optional, and a group whose rows are all
+     hand-typed costs the same without it. */
+  function groupMaterialCost(group, p) {
+    return group.items.reduce(function (s, it) { return s + itemTotal(it, group, p); }, 0);
   }
 
   function computeProduct(p) {
-    var materialCost = p.groups.reduce(function (s, g) { return s + groupMaterialCost(g); }, 0);
+    var materialCost = p.groups.reduce(function (s, g) { return s + groupMaterialCost(g, p); }, 0);
 
     /* Each row's own value is always computed and returned, whether or not it
        is hidden, so restoring a hidden row brings its typed numbers straight
@@ -328,7 +697,7 @@
       if (!isRowHidden(p, def.id)) rowsTotal += t;
     });
 
-    var extrasTotal = (p.extras || []).reduce(function (s, e) { return s + n(e.amount); }, 0);
+    var extrasTotal = (p.extras || []).reduce(function (s, e) { return s + extraAmount(e); }, 0);
 
     var subtotal = materialCost + rowsTotal + extrasTotal;
     var markup = subtotal * n(p.markupPct) / 100;
@@ -434,9 +803,22 @@
   root.TakeoffModel = {
     COST_ROWS: COST_ROWS,
     FINISH_PREFIX: FINISH_PREFIX,
+    UNITS: UNITS,
+    splitColumnUnit: splitColumnUnit, newColumn: newColumn,
+    scopeKey: scopeKey, productScopes: productScopes, findScope: findScope,
+    scopeTotal: scopeTotal, syncScopeRows: syncScopeRows,
+    requiredQty: requiredQty, orderQty: orderQty, unitMismatch: unitMismatch,
+    computedOrderQty: computedOrderQty, orderQtyStale: orderQtyStale,
+    DOC_CATEGORIES: DOC_CATEGORIES,
+    documents: documents, newDocument: newDocument, findDocument: findDocument,
+    docForRow: docForRow, docRefCount: docRefCount,
+    applyCatalogTo: applyCatalogTo,
     costRowDef: costRowDef,
     rowLabel: rowLabel,
     defaultRowLabel: defaultRowLabel,
+    rowUnit: rowUnit,
+    defaultRowUnit: defaultRowUnit,
+    extraAmount: extraAmount,
     isRowHidden: isRowHidden,
     isRowOnProposal: isRowOnProposal,
     isItemOnProposal: isItemOnProposal,

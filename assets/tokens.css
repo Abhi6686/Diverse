@@ -1,0 +1,114 @@
+/* tokens.css - the two themes, and the only file in the app that names a colour.
+ *
+ * Everything else refers to these through the semantic names in
+ * tailwind.config.js: bg-surface, text-muted, border-line, bg-brand. Adding a
+ * third theme is a third block here and nothing else.
+ *
+ * Values are bare "R G B" triples rather than rgb(...) so Tailwind can wrap them
+ * as rgb(var(--c-x) / <alpha-value>) and opacity modifiers (bg-surface/50) keep
+ * working exactly as they do on a normal palette.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Structure */
+  --c-canvas:      241 245 249;   /* the page behind the cards */
+  --c-surface:     255 255 255;   /* a card */
+  --c-raised:      248 250 252;   /* a card's own header strip, table head, footers */
+  --c-line:        226 232 240;   /* borders and gridlines */
+  --c-line-strong: 203 213 225;   /* a border that has to be seen */
+
+  /* Text */
+  --c-ink:         30 41 59;      /* body copy */
+  --c-ink-strong:  15 23 42;      /* headings, figures */
+  --c-muted:       100 116 139;   /* labels, secondary copy */
+  --c-faint:       203 213 225;   /* placeholders, the em-dash for "no value" */
+
+  /* The dark bar at the top of the app, and the project/popout headers. These
+     barely move between themes - the chrome is already dark in daylight - but
+     they go a step deeper at night so the header still reads as chrome and not
+     as another card. */
+  --c-chrome:      15 23 42;
+  --c-chrome-soft: 51 65 85;      /* a button sitting on the chrome */
+  --c-chrome-ink:  226 232 240;
+
+  /* Tones. Each has a solid fill (for a primary action), its hover, a tinted
+     fill (for a quiet action or a badge) and the text that goes on the tint. */
+  --c-brand:        37 99 235;    --c-brand-hover:  59 130 246;
+  --c-brand-soft:   239 246 255;  --c-brand-ink:    29 78 216;
+
+  --c-ok:           5 150 105;    --c-ok-hover:     16 185 129;
+  --c-ok-soft:      209 250 229;  --c-ok-ink:       6 95 70;
+
+  --c-warn:         217 119 6;    --c-warn-hover:   245 158 11;
+  --c-warn-soft:    254 243 199;  --c-warn-ink:     146 64 14;
+
+  --c-danger:       220 38 38;    --c-danger-hover: 239 68 68;
+  --c-danger-soft:  254 226 226;  --c-danger-ink:   153 27 27;
+
+  --c-info:         79 70 229;    --c-info-hover:   99 102 241;
+  --c-info-soft:    237 233 254;  --c-info-ink:     91 33 182;
+
+  --c-neutral:      71 85 105;    --c-neutral-hover: 100 116 139;
+  --c-neutral-soft: 241 245 249;  --c-neutral-ink:  71 85 105;
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
+  --shadow-pop:  0 10px 15px -3px rgb(15 23 42 / 0.10), 0 4px 6px -4px rgb(15 23 42 / 0.10);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --c-canvas:      15 23 42;
+  --c-surface:     30 41 59;
+  --c-raised:      51 65 85;
+  --c-line:        51 65 85;
+  --c-line-strong: 71 85 105;
+
+  --c-ink:         226 232 240;
+  --c-ink-strong:  248 250 252;
+  --c-muted:       148 163 184;
+  --c-faint:       100 116 139;
+
+  --c-chrome:      2 6 23;
+  --c-chrome-soft: 51 65 85;
+  --c-chrome-ink:  226 232 240;
+
+  /* The solid fills stay recognisably the same hue - a primary button must not
+     change identity with the lights. The tints invert: a pale wash on white
+     becomes a deep wash under a dark card, with light text on it. */
+  --c-brand:        37 99 235;    --c-brand-hover:  59 130 246;
+  --c-brand-soft:   30 58 138;    --c-brand-ink:    191 219 254;
+
+  --c-ok:           5 150 105;    --c-ok-hover:     16 185 129;
+  --c-ok-soft:      6 78 59;      --c-ok-ink:       167 243 208;
+
+  --c-warn:         217 119 6;    --c-warn-hover:   245 158 11;
+  --c-warn-soft:    120 53 15;    --c-warn-ink:     253 230 138;
+
+  --c-danger:       220 38 38;    --c-danger-hover: 239 68 68;
+  --c-danger-soft:  127 29 29;    --c-danger-ink:   254 202 202;
+
+  --c-info:         79 70 229;    --c-info-hover:   99 102 241;
+  --c-info-soft:    49 46 129;    --c-info-ink:     199 210 254;
+
+  --c-neutral:      71 85 105;    --c-neutral-hover: 100 116 139;
+  --c-neutral-soft: 51 65 85;     --c-neutral-ink:  203 213 225;
+
+  /* Shadows do almost nothing on a dark background; elevation is carried by the
+     surface being lighter than the canvas, so these only deepen the edge. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.30), 0 1px 3px rgb(0 0 0 / 0.24);
+  --shadow-pop:  0 10px 15px -3px rgb(0 0 0 / 0.45), 0 4px 6px -4px rgb(0 0 0 / 0.40);
+}
+
+/* THE PROPOSAL IS PAPER. It carries its own twelve themes from
+   js/proposal.styles.js, it is measured for print, and it is the one thing in
+   the app that a reader may physically hold - so it never follows the app
+   theme. Pinning color-scheme here also stops the browser tinting form controls
+   inside the document editor. */
+#proposalDoc,
+.doc-page,
+.doc-probe {
+  color-scheme: light;
+}

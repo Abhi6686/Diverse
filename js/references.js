@@ -24,12 +24,12 @@
     host.innerHTML =
       '<div class="flex flex-wrap items-center justify-between gap-3 mb-5">' +
         '<div>' +
-          '<h2 class="text-lg font-bold text-slate-800">Reference Tables</h2>' +
-          '<p class="text-xs text-slate-500 mt-0.5">Estimating rules of thumb. ' +
+          '<h2 class="text-lg font-bold text-ink-strong">Reference Tables</h2>' +
+          '<p class="text-xs text-muted mt-0.5">Estimating rules of thumb. ' +
             'Rates change &mdash; edit any heading or value and it is saved with the project.</p>' +
         '</div>' +
         '<button onclick="References.toggleEdit()" class="px-4 py-2 rounded-lg text-sm font-semibold transition ' +
-          (editing ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-800 hover:bg-slate-700 text-white') + '">' +
+          (editing ? 'bg-ok hover:bg-ok-hover text-white' : 'bg-chrome hover:bg-chrome-soft text-white') + '">' +
           '<i class="fas ' + (editing ? 'fa-check' : 'fa-pen') + ' mr-1.5"></i>' +
           (editing ? 'Done editing' : 'Edit tables') + '</button>' +
       '</div>' +
@@ -37,33 +37,33 @@
         tables().map(renderTable).join('') +
       '</div>' +
       (editing
-        ? '<p class="mt-4 text-[11px] text-slate-400">' +
+        ? '<p class="mt-4 text-2xs text-faint">' +
           'Click any heading, row label or value to change it. Values are free text so ' +
-          'ranges like <code class="bg-slate-100 px-1 rounded">0.15 - 0.25</code> keep their form.</p>'
+          'ranges like <code class="bg-neutral-soft px-1 rounded">0.15 - 0.25</code> keep their form.</p>'
         : '');
   }
 
   function renderTable(t, ti) {
-    return '<div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">' +
+    return '<div class="bg-surface rounded-xl shadow-sm p-6 border border-line">' +
       '<div class="flex items-start justify-between gap-2 mb-4">' +
-        '<h3 class="text-lg font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">' +
-          '<i class="fas ' + U.escAttr(t.icon || 'fa-table') + ' text-blue-500"></i>' +
+        '<h3 class="text-lg font-bold text-ink-strong flex items-center gap-2 flex-1 min-w-0">' +
+          '<i class="fas ' + U.escAttr(t.icon || 'fa-table') + ' text-brand"></i>' +
           (editing
             ? '<input value="' + U.escAttr(t.title) + '" onchange="References.setTitle(' + ti + ',this.value)" ' +
-              'class="flex-1 min-w-0 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-lg font-bold text-slate-800 outline-none focus:border-blue-400">'
+              'class="flex-1 min-w-0 px-2 py-1 bg-warn-soft border border-warn/30 rounded text-lg font-bold text-ink-strong outline-none focus:border-brand">'
             : U.esc(t.title)) +
         '</h3>' +
         (editing
           ? '<button onclick="References.restore(' + ti + ')" title="Restore this table to the shipped defaults" ' +
-            'class="text-[11px] text-slate-400 hover:text-blue-700 underline whitespace-nowrap shrink-0">Restore defaults</button>'
+            'class="text-2xs text-faint hover:text-brand-ink underline whitespace-nowrap shrink-0">Restore defaults</button>'
           : '') +
       '</div>' +
       '<table class="w-full text-sm grid-table"><thead><tr>' +
         t.columns.map(function (c, ci) {
-          return '<th class="px-3 py-2 col-' + c.align + ' font-semibold text-slate-600 text-xs">' +
+          return '<th class="px-3 py-2 col-' + c.align + ' font-semibold text-muted text-xs">' +
             (editing
               ? '<input value="' + U.escAttr(c.label) + '" onchange="References.setColumn(' + ti + ',' + ci + ',this.value)" ' +
-                'class="w-full px-1 py-0.5 bg-amber-50 border border-amber-200 rounded text-xs font-semibold col-' + c.align + ' outline-none focus:border-blue-400">'
+                'class="w-full px-1 py-0.5 bg-warn-soft border border-warn/30 rounded text-xs font-semibold col-' + c.align + ' outline-none focus:border-brand">'
               : U.esc(c.label)) + '</th>';
         }).join('') +
       '</tr></thead><tbody>' +
@@ -76,8 +76,8 @@
             return '<td class="px-3 py-2 col-' + c.align + mono + '">' +
               (editing
                 ? '<input value="' + U.escAttr(v) + '" onchange="References.setCell(' + ti + ',' + ri + ',' + ci + ',this.value)" ' +
-                  'class="w-full px-1 py-0.5 bg-amber-50 border border-amber-200 rounded text-sm col-' + c.align + mono +
-                  ' outline-none focus:border-blue-400">'
+                  'class="w-full px-1 py-0.5 bg-warn-soft border border-warn/30 rounded text-sm col-' + c.align + mono +
+                  ' outline-none focus:border-brand">'
                 : U.esc(v)) + '</td>';
           }).join('') + '</tr>';
         }).join('') +

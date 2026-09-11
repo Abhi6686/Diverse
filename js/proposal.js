@@ -15,13 +15,50 @@
   function current() { return state.id ? db().proposals[state.id] : null; }
   function save() { root.Store.save(); render(); }
 
+  /* ---- what the logo sits on -------------------------------------------- */
+
+  /* A logo is drawn for one background and put on another. One with a white
+     background needs a white card under it on a dark style, or it prints as a
+     white rectangle in the corner; one drawn in white on transparent needs a
+     dark card on a light style, or it disappears entirely. So there are three
+     answers and not two.
+
+     It lives in companyData because it is a property of the logo, which means a
+     new proposal inherits it from the shop's company record for free - see
+     blank(), which copies db().company wholesale.
+
+     The old field was a boolean, `frameLogo` on the proposal itself. It is still
+     read here and still written by exportTemplate, so a document saved before
+     this - or by the v3 app these templates are shared with - opens with its
+     white card exactly as it did. */
+  var LOGO_FRAMES = {
+    none:  { label: 'None',  hint: 'The logo sits directly on the document',
+             swatch: 'bg-transparent border-dashed', card: '' },
+    white: { label: 'White', hint: 'For a logo drawn on a white background',
+             swatch: 'bg-white', card: 'bg-white' },
+    black: { label: 'Black', hint: 'For a logo drawn in white or on a dark background',
+             swatch: 'bg-slate-950', card: 'bg-slate-950 ring-1 ring-white/10' }
+  };
+
+  function frameOf(p) {
+    if (!p) return 'none';
+    var v = p.companyData && p.companyData.logoFrame;
+    if (LOGO_FRAMES[v]) return v;
+    // Nothing chosen: fall back to the boolean this replaced.
+    return p.frameLogo ? 'white' : 'none';
+  }
+
   function blank(bid) {
     return {
       id: root.Store.uid('pro'),
       takeoffId: null,
       bidId: bid ? bid.id : null,
       version: '1.0.0',
-      selectedStyle: 1,
+      // 13 Lancaster: the reproduction of the PDF the shop actually sends out,
+      // so a new proposal comes off the printer looking like the last one did
+      // without anybody having to remember to pick it. Documents already saved
+      // keep whichever style they were written under.
+      selectedStyle: 13,
       frameLogo: true,
       hasManuallyToggledLogoFrame: false,
       showRollupLines: true,
@@ -294,9 +331,35 @@
     }
     return '<div class="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center gap-2">' +
       '<span class="flex-1 text-[11px] text-slate-500">' +
-        (p.generatedAt ? 'Generated from the takeoff on ' + U.esc(U.date(p.generatedAt.slice(0, 10)))
+        (p.generatedAt ? 'Generated from the takeoff on ' + U.esc(U.stamp(p.generatedAt))
                        : 'Linked to a takeoff.') + '</span>' +
       regen + 'bg-slate-100 hover:bg-slate-200 text-slate-700">Regenerate</button></div>';
+  }
+
+  /* Three swatches rather than a checkbox, because the answer is which colour
+     and not whether. Each says what it is for: the choice depends on how the
+     logo file itself was drawn, which is not something you can see from the
+     picture on a white panel. */
+  function logoFrameControl(p) {
+    var on = frameOf(p);
+    return '<div>' +
+      '<label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' +
+        'Background behind the logo</label>' +
+      '<div class="flex items-center gap-1.5">' +
+        Object.keys(LOGO_FRAMES).map(function (key) {
+          var f = LOGO_FRAMES[key];
+          return '<button onclick="Proposal.setLogoFrame(\'' + key + '\')" ' +
+            'title="' + U.escAttr(f.hint) + '" ' +
+            'class="flex-1 flex items-center gap-2 px-2 py-1.5 rounded-lg border text-xs transition ' +
+            (on === key ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-300') + '">' +
+            '<span class="w-4 h-4 rounded border border-slate-300 shrink-0 ' + f.swatch + '"></span>' +
+            f.label + '</button>';
+        }).join('') +
+      '</div>' +
+      '<p class="text-[10px] text-slate-400 mt-1">' + U.esc(LOGO_FRAMES[on].hint) + '. ' +
+        'Kept with the company details, so new proposals start here.</p>' +
+    '</div>';
   }
 
   function renderEditor(p) {
@@ -315,18 +378,16 @@
     function dateField(label, path) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
       var id = 'pd-' + path.replace(/\./g, '-');
+      // U.dateFieldHTML rather than a second copy of it. This was a hand-rolled
+      // duplicate of the same text-box-plus-calendar pair, which meant two
+      // places to fix when the calendar behind it was replaced.
       return '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' +
         label + ' <span class="text-slate-400 font-normal normal-case">(MM-DD-YYYY)</span></label>' +
-        '<div class="relative">' +
-          '<input type="text" id="' + id + '" value="' + U.esc(U.dateToInput(val)) + '" ' +
-            'placeholder="MM-DD-YYYY" maxlength="10" inputmode="numeric" autocomplete="off" ' +
-            'onchange="Proposal.setDate(\'' + path + '\',\'' + id + '\')" ' +
-            'class="w-full px-2.5 py-1.5 pr-8 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400">' +
-          '<input type="date" id="' + id + '__picker" tabindex="-1" aria-hidden="true" class="absolute opacity-0 pointer-events-none w-0 h-0 right-8 bottom-0">' +
-          '<button type="button" onclick="U.openDatePicker(\'' + id + '\')" tabindex="-1" title="Open calendar" ' +
-            'class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600">' +
-            '<i class="fas fa-calendar-alt text-xs"></i></button>' +
-        '</div></div>';
+        U.dateFieldHTML(id, val,
+          'w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm ' +
+          'outline-none focus:border-blue-400',
+          'Proposal.setDate(&quot;' + path + '&quot;,&quot;' + id + '&quot;)') +
+      '</div>';
     }
     function area(label, path, rows) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
@@ -373,9 +434,7 @@
           '</div>' +
           (cd.logoType === 'custom' && cd.logoUrl ? '<img src="' + cd.logoUrl + '" class="mt-2 h-12 object-contain">' : '') +
         '</div>' +
-        '<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" ' +
-          (p.frameLogo ? 'checked' : '') + ' onchange="Proposal.set(\'frameLogo\',this.checked)"> ' +
-          'Frame logo in a white card <span class="text-slate-400 text-xs">(helps logos with white backgrounds on dark styles)</span></label>'
+        logoFrameControl(p)
     };
 
     var tabs = [['content', 'Details'], ['scope', 'Scope Items'], ['terms', 'Terms'], ['company', 'Company']];
@@ -486,38 +545,47 @@
       ? '<img src="' + cd.logoUrl + '" alt="logo" class="h-12 object-contain">'
       : defaultLogo(s);
 
-    add('<div class="pb-6"><div class="flex items-center justify-between gap-6 px-5 py-4 ' +
+    add('<div class="doc-letterhead pb-6"><div class="flex items-center justify-between gap-6 px-5 py-4 ' +
       'rounded-xl border ' + s.borderPrimary + ' ' + s.cardBg + '">' +
-        (p.frameLogo ? '<div class="bg-white rounded-lg p-1.5 shrink-0">' + logo + '</div>'
-                     : '<div class="shrink-0">' + logo + '</div>') +
-        '<div class="text-right text-[10px] leading-relaxed ' + s.textSecondary + '">' +
-          '<div class="text-[12px] font-bold ' + s.textPrimary + '">' + U.esc(cd.name) + '</div>' +
-          U.esc(cd.address) + '<br>' +
-          '<span class="font-semibold ' + s.textPrimary + '">' + U.esc(cd.phone) + '</span><br>' +
-          '<span class="font-mono">' + U.esc(cd.email) + '</span>' +
+        (function () {
+          var card = LOGO_FRAMES[frameOf(p)].card;
+          return '<div class="shrink-0' + (card ? ' rounded-lg p-1.5 ' + card : '') + '">' +
+            logo + '</div>';
+        })() +
+        '<div class="lh-contact text-right text-[10px] leading-relaxed ' + s.textSecondary + '">' +
+          '<div class="lh-name text-[12px] font-bold ' + s.textPrimary + '">' + U.esc(cd.name) + '</div>' +
+          '<span class="lh-address">' + U.esc(cd.address) + '</span><br>' +
+          '<span class="lh-phone font-semibold ' + s.textPrimary + '">' + U.esc(cd.phone) + '</span><br>' +
+          '<span class="lh-email font-mono">' + U.esc(cd.email) + '</span>' +
         '</div>' +
       '</div></div>');
 
     /* ---- title, centred, ruled under the words only */
-    add('<div class="text-center pb-5">' +
+    add('<div class="doc-title text-center pb-5">' +
       '<h1 class="inline-block text-[30px] font-black tracking-[0.12em] pb-1 ' +
         'border-b-[3px] ' + s.titleColor + ' ' + s.borderPrimary + '">BID PROPOSAL</h1></div>');
 
     /* ---- what the proposal is for */
     if (pd.type) {
-      add('<div class="pb-5"><div class="px-6 py-4 rounded-xl border ' + s.borderPrimary + ' ' +
+      add('<div class="doc-tagline pb-5"><div class="px-6 py-4 rounded-xl border ' + s.borderPrimary + ' ' +
         s.cardBg + ' text-center">' +
         '<div class="text-[15px] font-bold tracking-[0.06em] leading-relaxed ' + s.textPrimary + '">' +
           U.esc(pd.type).toUpperCase() + '</div></div></div>');
     }
 
     /* ---- the five identifying fields, label and value on one line */
+    /* All five values in one face. The proposal number used to be set in the
+       monospace and the project name in the prose face, which made the two
+       halves of the grid look like they came from different documents. The
+       monospace is kept for money, where lining up on the digit is worth
+       something; a reference number and a project name are read, not compared. */
     function meta(label, value) {
-      return '<div class="py-1 text-[11px] leading-snug">' +
-        '<span class="font-bold tracking-wider ' + s.textMuted + '">' + label + '</span> ' +
-        '<span class="font-semibold ' + s.textPrimary + '">' + U.esc(value || '-') + '</span></div>';
+      return '<div class="meta-row py-1 text-[11px] leading-snug">' +
+        '<span class="meta-label font-bold tracking-wider ' + s.textMuted + '">' + label + '</span> ' +
+        '<span class="meta-value font-semibold ' + s.textPrimary + '">' +
+          U.esc(value || '-') + '</span></div>';
     }
-    add('<div class="pb-5"><div class="grid grid-cols-2 gap-x-8 px-5 py-3 rounded-xl border ' +
+    add('<div class="doc-meta pb-5"><div class="grid grid-cols-2 gap-x-8 px-5 py-3 rounded-xl border ' +
       s.borderPrimary + ' ' + s.cardBg + '">' +
         '<div>' + meta('PROPOSAL NO:', pd.proposalNo) +
           meta('SUBMITTED DATE:', U.date(pd.submittedDate)) +
@@ -527,12 +595,12 @@
       '</div></div>');
 
     if (pd.description) {
-      add('<div class="pb-5 px-1 text-[11.5px] leading-relaxed ' + s.textSecondary + '">' +
+      add('<div class="doc-intro pb-5 px-1 text-[11.5px] leading-relaxed ' + s.textSecondary + '">' +
         U.esc(pd.description) + '</div>');
     }
 
     /* ---- scope: ruled entries, not a table. Title left, price right. */
-    add(sectionHead(s, 'SCOPE OF WORK AND BIDDING PRICE'), { keepWithNext: true });
+    add(sectionHead(s, 'SCOPE OF WORK AND BIDDING PRICE', true), { keepWithNext: true });
 
     if (!p.scopeItems.length) {
       add('<div class="py-8 text-center text-xs ' + s.textMuted + '">No scope items yet.</div>');
@@ -544,8 +612,8 @@
         : '';
       add('<div class="scope-row py-3 border-b ' + s.borderPrimary + '">' +
         '<div class="flex items-baseline justify-between gap-6">' +
-          '<div class="text-[12px] font-bold ' + s.textPrimary + '">' + U.esc(item.description) + '</div>' +
-          '<div class="text-[12px] font-bold font-mono whitespace-nowrap ' + s.textPrimary + '">' +
+          '<div class="scope-title text-[12px] font-bold ' + s.textPrimary + '">' + U.esc(item.description) + '</div>' +
+          '<div class="scope-price text-[12px] font-bold font-mono whitespace-nowrap ' + s.textPrimary + '">' +
             U.currency2(item.cost) + '</div>' +
         '</div>' + details + '</div>',
         // A scope entry is one thought: the price and the specification it buys
@@ -553,17 +621,17 @@
         { splitAt: null });
     });
 
-    add('<div class="pt-5 pb-2"><div class="flex items-center justify-between gap-6 px-6 py-4 ' +
+    add('<div class="doc-total pt-5 pb-2"><div class="flex items-center justify-between gap-6 px-6 py-4 ' +
       'rounded-xl ' + s.totalBg + '">' +
-        '<span class="text-[13px] font-black tracking-[0.15em] ' + s.textAccent + '">TOTAL BID PRICE</span>' +
-        '<span class="text-[22px] font-black font-mono ' + s.textAccent + '">' +
+        '<span class="total-label text-[13px] font-black tracking-[0.15em] ' + s.textAccent + '">TOTAL BID PRICE</span>' +
+        '<span class="total-amount text-[22px] font-black font-mono ' + s.textAccent + '">' +
           U.currency2(total(p)) + '</span></div></div>');
 
     /* ---- the contractual half */
     if (pd.terms || pd.inclusions || pd.paymentTerms) {
-      add('<div class="pt-8 pb-6 flex items-center gap-4">' +
+      add('<div class="doc-rule pt-8 pb-6 flex items-center gap-4">' +
         '<span class="flex-1 border-t border-dashed ' + s.borderPrimary + '"></span>' +
-        '<span class="text-[9px] font-bold tracking-[0.25em] ' + s.textMuted + '">CONTRACT DETAILS &amp; TERMS</span>' +
+        '<span class="rule-chip text-[9px] font-bold tracking-[0.25em] ' + s.textMuted + '">CONTRACT DETAILS &amp; TERMS</span>' +
         '<span class="flex-1 border-t border-dashed ' + s.borderPrimary + '"></span>' +
       '</div>', { keepWithNext: true });
     }
@@ -575,20 +643,26 @@
      ['PAYMENT TERMS', pd.paymentTerms]].forEach(function (sec) {
       if (!sec[1]) return;
       add(sectionHead(s, sec[0]), { keepWithNext: true });
-      add('<div class="prose-doc text-[10.5px] pb-4 ' + s.textSecondary + '">' +
+      add('<div class="doc-terms prose-doc text-[10.5px] pb-4 ' + s.textSecondary + '">' +
         U.sanitizeHTML(U.toHTMLList(sec[1])) + '</div>', { splitAt: 'li' });
     });
 
     if (pd.acceptanceNote) {
-      add('<div class="pt-4 pb-2 px-1 text-[11px] font-semibold leading-relaxed ' +
+      add('<div class="doc-accept pt-4 pb-2 px-1 text-[11px] font-semibold leading-relaxed ' +
         s.textPrimary + '">' + U.esc(pd.acceptanceNote) + '</div>');
     }
 
+    /* A ruled line over each label, not just white space. The client signs this
+       sheet with a pen: without the rule there is nothing telling them where,
+       and the three fields do not line up across the page. */
     add('<div class="signature-block pt-6">' +
       '<div class="border-t ' + s.borderPrimary + ' pt-12">' +
         '<div class="grid grid-cols-3 gap-8 text-center">' +
           ['SIGNATURE', 'NAME', 'DATE'].map(function (l) {
-            return '<div class="text-[12px] font-bold tracking-wider ' + s.textPrimary + '">' + l + '</div>';
+            return '<div>' +
+              '<div class="sign-rule border-b ' + s.signatureInput.split(' ')[0] + ' mb-1.5"></div>' +
+              '<div class="sign-label text-[12px] font-bold tracking-wider ' + s.textPrimary + '">' +
+                l + '</div></div>';
           }).join('') +
         '</div>' +
       '</div></div>');
@@ -596,11 +670,16 @@
     return out;
   }
 
-  function sectionHead(s, title) {
-    return '<div class="pt-2 pb-3">' +
+  /* `underline` marks the scope heading. In the printed document that one is
+     underlined under the words themselves and the three contractual headings
+     are ruled across the page instead - the difference is what tells you the
+     scope ledger is the subject and the rest is the small print. Only a theme
+     that asks for it draws it that way; without the class nothing changes. */
+  function sectionHead(s, title, underline) {
+    return '<div class="sec-head' + (underline ? ' sec-head-underline' : '') + ' pt-2 pb-3">' +
       '<h2 class="text-[13px] font-extrabold tracking-[0.08em] uppercase pb-2 ' +
         s.sectionHeaderColor + '">' + title + '</h2>' +
-      '<div class="border-t ' + s.borderPrimary + '"></div></div>';
+      '<div class="sec-rule border-t ' + s.borderPrimary + '"></div></div>';
   }
 
   /* "August 24, 2026" - the long form the printed proposal is dated with. */
@@ -621,7 +700,12 @@
     var s = root.PROPOSAL_STYLES[p.selectedStyle] || root.PROPOSAL_STYLES[1];
     var pd = p.proposalData, cd = p.companyData;
 
-    host.className = 'mx-auto ' + s.documentBg;
+    /* The typeface and type scale the theme asks for, defined in
+       assets/app.css. Themes 1-9 do not carry the key and get nothing, so they
+       render exactly as they always have - see the note in proposal.styles.js. */
+    var font = s.docFont ? ' ' + s.docFont : '';
+
+    host.className = 'mx-auto ' + s.documentBg + font;
     host.style.width = '8.5in';
     host.style.minHeight = '';
 
@@ -629,7 +713,7 @@
        the same job. Names the company and which proposal this is - what a
        loose sheet on somebody's desk needs to say. */
     function header() {
-      return '<div class="flex items-start justify-between gap-6 text-[8px] ' +
+      return '<div class="run-head flex items-start justify-between gap-6 text-[8px] ' +
         'font-semibold tracking-[0.12em] uppercase leading-snug ' + s.textMuted + '">' +
         '<span class="max-w-[45%]">' + U.esc(cd.name) + '</span>' +
         '<span class="max-w-[50%] text-right">BID PROPOSAL: ' +
@@ -637,7 +721,7 @@
     }
 
     function footer(no) {
-      return '<div class="flex items-center justify-between text-[8px] ' + s.textMuted + '">' +
+      return '<div class="run-foot flex items-center justify-between text-[8px] ' + s.textMuted + '">' +
         '<span>' + U.esc(longDate(pd.submittedDate)) + '</span>' +
         '<span>Page ' + no + '</span></div>';
     }
@@ -645,7 +729,10 @@
     host.innerHTML = root.Paginate.flow({
       host: host,
       blocks: docBlocks(p, s),
-      pageClass: 'doc-page ' + s.documentBg,
+      // The class goes on every page as well as the host: the paginator
+      // measures against a probe page, and a probe in a different typeface
+      // would break in different places from the sheets it is measuring for.
+      pageClass: 'doc-page ' + s.documentBg + font,
       header: header,
       footer: footer
     });
@@ -692,7 +779,9 @@
     root.Store.downloadJSON({
       version: '1.0.0',
       selectedStyle: p.selectedStyle,
-      frameLogo: p.frameLogo,
+      // The boolean goes out as well as the choice, so a template written here
+      // still frames the logo in the v3 app these files are shared with.
+      frameLogo: frameOf(p) !== 'none',
       hasManuallyToggledLogoFrame: p.hasManuallyToggledLogoFrame,
       proposalData: p.proposalData,
       companyData: p.companyData,
@@ -711,9 +800,10 @@
           throw new Error('Missing required proposal sections (proposalData, companyData, or scopeItems).');
         }
         var p = current() || blank(null);
-        if (typeof q.selectedStyle === 'number' && q.selectedStyle >= 1 && q.selectedStyle <= 9) {
-          p.selectedStyle = q.selectedStyle;
-        }
+        // Against the style table rather than a hard-coded 1..9: a template
+        // written here can name any theme the app has, including the typeset
+        // ones added after the v3 nine.
+        if (root.PROPOSAL_STYLES[q.selectedStyle]) p.selectedStyle = q.selectedStyle;
         if (typeof q.frameLogo === 'boolean') p.frameLogo = q.frameLogo;
         if (typeof q.hasManuallyToggledLogoFrame === 'boolean') p.hasManuallyToggledLogoFrame = q.hasManuallyToggledLogoFrame;
         ['proposalNo', 'submittedDate', 'approvalDeadline', 'projectName', 'projectAddress',
@@ -726,6 +816,10 @@
         ['name', 'address', 'phone', 'email', 'logoType', 'logoUrl', 'brandSlogan'].forEach(function (k) {
           p.companyData[k] = q.companyData[k] || (k === 'logoType' ? 'default' : '');
         });
+        // The template may carry the choice; a v3 one carries only the boolean.
+        p.companyData.logoFrame = LOGO_FRAMES[q.companyData.logoFrame]
+          ? q.companyData.logoFrame
+          : (q.frameLogo === false ? 'none' : 'white');
         p.scopeItems = q.scopeItems.map(function (s, i) {
           return {
             id: s.id || root.Store.uid('si'),
@@ -826,6 +920,26 @@
     toggleLock: function (i) {
       var s = current().scopeItems[i];
       s.locked = !s.locked;
+      save();
+    },
+
+    /* Written to the shop's company record as well as this proposal, the same
+       as the logo itself below - it is a fact about the logo, not about one
+       document, and blank() copies db().company into every new proposal. */
+    /* The three, and which one a given proposal resolves to - read by the
+       letterhead, by the control in the Company tab, and by the tests. */
+    LOGO_FRAMES: LOGO_FRAMES,
+    logoFrame: frameOf,
+
+    setLogoFrame: function (key) {
+      if (!LOGO_FRAMES[key]) return;
+      var p = current();
+      if (!p) return;
+      p.companyData.logoFrame = key;
+      // The boolean is kept in step so nothing reading the old field disagrees
+      // with what is on screen.
+      p.frameLogo = key !== 'none';
+      db().company.logoFrame = key;
       save();
     },
 

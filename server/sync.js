@@ -38,6 +38,11 @@ function add(res, req, user) {
     res: res,
     userId: user ? user.id : null,
     name: user ? user.name : null,
+    // The initials the bids table already knows this person by, so a presence
+    // marker on a row reads the same as the Engineer column beside it.
+    initials: user ? (user.initials || null) : null,
+    // Which record this connection is looking at, once it says - see setWhere.
+    where: null,
     at: Date.now()
   };
   clients.set(id, client);
@@ -88,14 +93,42 @@ function broadcast(changes, originId) {
   }
 }
 
+/* WHERE A CONNECTION IS LOOKING.
+ *
+ * The stream already knew who was connected. It did not know what any of them
+ * had open, which is the thing worth telling everybody else: two people on the
+ * same project, each unaware of the other, is how one of them loses an
+ * afternoon's edit to the other's.
+ *
+ * The client says so itself - there is nothing to infer from, since reading is
+ * not a request the server sees. Unknown ids are ignored rather than refused: a
+ * client whose stream dropped a moment ago is a normal thing, not an error.
+ */
+function setWhere(clientId, where) {
+  const c = clients.get(Number(clientId));
+  if (!c) return false;
+  const next = where && where.bidId != null
+    ? { bidId: where.bidId, section: where.section || null }
+    : null;
+  // Only broadcast on a real move. A client repeating itself must not repaint
+  // every other screen in the office.
+  if (JSON.stringify(next) === JSON.stringify(c.where)) return true;
+  c.where = next;
+  broadcastPresence();
+  return true;
+}
+
+/* One entry per CONNECTION, not per person: somebody with two tabs open on two
+   projects is in two places, and the client is what decides how to group that
+   for a given screen. */
 function presence() {
-  const byUser = new Map();
-  for (const c of clients.values()) {
-    const key = c.userId == null ? 'anon-' + c.id : 'u' + c.userId;
-    if (!byUser.has(key)) byUser.set(key, { userId: c.userId, name: c.name, tabs: 0 });
-    byUser.get(key).tabs++;
-  }
-  return [...byUser.values()];
+  return [...clients.values()].map(c => ({
+    clientId: c.id,
+    userId: c.userId,
+    name: c.name,
+    initials: c.initials,
+    where: c.where
+  }));
 }
 
 function broadcastPresence() {
@@ -126,6 +159,6 @@ function closeAll() {
 }
 
 module.exports = {
-  add, remove, broadcast, broadcastPresence, presence, closeAll,
+  add, remove, broadcast, broadcastPresence, presence, setWhere, closeAll,
   get count() { return clients.size; }
 };

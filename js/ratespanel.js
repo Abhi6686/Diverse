@@ -51,21 +51,21 @@
     var reset = over && scope.resetter ? scope.resetter(key) : null;
 
     return '<div>' +
-      '<label class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider mb-1 ' +
-        (over ? 'text-amber-700' : 'text-slate-500') + '">' +
+      '<label class="flex items-center gap-1 text-3xs font-semibold uppercase tracking-wider mb-1 ' +
+        (over ? 'text-warn-ink' : 'text-muted') + '">' +
         '<span class="truncate">' + label + '</span>' +
         (reset ? '<button onclick="' + reset + '" title="Use the shop default again" ' +
-          'class="text-amber-600 hover:text-amber-800 shrink-0"><i class="fas fa-undo text-[9px]"></i></button>' : '') +
+          'class="text-warn hover:text-warn-ink shrink-0"><i class="fas fa-undo text-3xs"></i></button>' : '') +
       '</label>' +
       '<div class="flex items-center gap-1">' +
-        (unit === '$' ? '<span class="text-slate-400 text-xs">$</span>' : '') +
+        (unit === '$' ? '<span class="text-faint text-xs">$</span>' : '') +
         '<input type="number" step="' + (step || 'any') + '" value="' + (v == null ? '' : v) + '" ' +
           'onchange="' + scope.setter(key) + '" ' +
-          'class="w-full px-2 py-1.5 border rounded-lg text-sm text-right font-mono outline-none focus:border-blue-400 ' +
+          'class="w-full px-2 py-1.5 border rounded-lg text-sm text-right font-mono outline-none focus:border-brand ' +
           // Same amber-means-overridden language as the typed-over formula hours
           // on Cost & Labour, so there is one idea to learn rather than two.
-          (over ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50 border-slate-200') + '">' +
-        (unit === '%' ? '<span class="text-slate-400 text-xs">%</span>' : '') +
+          (over ? 'bg-warn-soft border-warn/40 text-warn-ink' : 'bg-raised border-line') + '">' +
+        (unit === '%' ? '<span class="text-faint text-xs">%</span>' : '') +
       '</div></div>';
   }
 
@@ -76,18 +76,18 @@
       .concat(FACTORS.map(function (r) { return r[1]; })),
 
     render: function (scope) {
-      return '<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">' +
+      return '<div class="bg-surface rounded-xl shadow-sm border border-line p-5 mb-6">' +
         '<div class="flex items-center justify-between gap-3 mb-4 flex-wrap">' +
-          '<div><h3 class="text-sm font-bold text-slate-800">' +
-            '<i class="fas fa-sliders-h text-blue-500 mr-2"></i>' + scope.title + '</h3>' +
-            (scope.subtitle ? '<p class="text-[11px] text-slate-500 mt-0.5">' + scope.subtitle + '</p>' : '') +
+          '<div><h3 class="text-sm font-bold text-ink-strong">' +
+            '<i class="fas fa-sliders-h text-brand mr-2"></i>' + scope.title + '</h3>' +
+            (scope.subtitle ? '<p class="text-2xs text-muted mt-0.5">' + scope.subtitle + '</p>' : '') +
           '</div>' +
           (scope.headerRight || '') +
         '</div>' +
         '<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 mb-4">' +
           MONEY.map(function (r) { return field(scope, r[0], r[1], '$'); }).join('') +
         '</div>' +
-        '<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 pt-4 border-t border-slate-100">' +
+        '<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 pt-4 border-t border-line">' +
           FACTORS.map(function (r) { return field(scope, r[0], r[1], r[2], r[3]); }).join('') +
         '</div>' +
         (scope.footer || '') +

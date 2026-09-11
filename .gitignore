@@ -8,12 +8,26 @@ diverse.db-wal
 *.db
 *.db-shm
 *.db-wal
+# ...including the dated backups. *.db above does NOT catch these: it matches
+# names ENDING in .db, and these end in .bak-20260911-1126. One of them was
+# 107MB, which GitHub refuses outright.
+*.db.bak-*
+*.bak-*
+
+# exports of the live register - real bids, real customers
+diverse-bids-before-wipe.json
+*-before-wipe.json
 
 # scratch / local working files
 .scratch/
 *.log
 
 # client reference documents (local only, not part of the app)
+# Real project workbooks and takeoffs. Named individually below for the ones
+# already here; these two globs are what stop the next one being committed by
+# somebody running `git add -A` in a hurry.
+Estimation_*.xlsx
+*Takeoff*.xlsx
 Bid\ Proposal_Lancaster\ Township.pdf
 Bid\ Proposal_Lancaster\ Township*.pdf
 Estimation_Lancaster\ Township.xlsx

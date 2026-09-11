@@ -1,0 +1,20 @@
+/* The input to `npm run build:css`. Everything here is Tailwind's own; the
+   app's two hand-written stylesheets - assets/tokens.css and assets/app.css -
+   are linked separately from the HTML so they can be edited without a rebuild. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Preflight leaves the page transparent; the app has a canvas. */
+  html { background-color: rgb(var(--c-canvas)); }
+
+  /* One focus ring for the whole app, on the token accent, and only for
+     keyboard users - a mouse click on a button should not leave a halo behind
+     it. The app had no visible focus state at all before this. */
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid rgb(var(--c-brand));
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+}

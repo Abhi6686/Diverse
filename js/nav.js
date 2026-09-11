@@ -78,6 +78,7 @@
         { key: 'regions', label: 'Regions', icon: 'fa-map-marked-alt', dom: 'settings', perm: 'settings.view' },
         { key: 'engineers', label: 'Engineers', icon: 'fa-user-gear', dom: 'settings', perm: 'settings.view' },
         { key: 'tasktypes', label: 'Task Types', icon: 'fa-list-check', dom: 'settings', perm: 'settings.view' },
+        { key: 'materials', label: 'Materials', icon: 'fa-layer-group', dom: 'settings', perm: 'settings.view' },
         { key: 'company', label: 'Company', icon: 'fa-building', dom: 'settings', perm: 'settings.view' },
         /* Administration. Separate permissions from settings.view so a role can
            be given the shop's reference data without also being handed the
@@ -172,14 +173,12 @@
   function renderPlaceholder(m) {
     var host = U.$('section-' + m.key);
     if (!host || host.innerHTML) return;
-    host.innerHTML =
-      '<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-16 text-center">' +
-        '<div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">' +
-          '<i class="fas ' + m.icon + ' text-2xl text-slate-400"></i></div>' +
-        '<h3 class="text-lg font-bold text-slate-800 mb-1">' + U.esc(m.label) + '</h3>' +
-        '<p class="text-sm text-slate-500 max-w-md mx-auto">Not built yet &mdash; planned for a later phase. ' +
-        'Bid Management is the module currently in use.</p>' +
-      '</div>';
+    host.innerHTML = root.UI.emptyCard({
+      icon: m.icon,
+      title: m.label,
+      blurb: 'Not built yet &mdash; planned for a later phase. ' +
+             'Bid Management is the module currently in use.'
+    });
   }
 
   /* The first page of a module this person may open, which is not always the
@@ -250,10 +249,10 @@
       var on = m.key === current.module;
       return '<button onclick="Nav.goModule(\'' + m.key + '\')" ' +
         'class="px-4 py-2.5 rounded-lg text-sm whitespace-nowrap transition flex items-center gap-2 ' +
-        (on ? 'bg-blue-600 text-white font-semibold shadow-lg shadow-blue-900/30'
-            : 'text-slate-300 hover:text-white hover:bg-slate-700/60') + '">' +
+        (on ? 'bg-brand text-white font-semibold shadow-lg shadow-brand/25'
+            : 'text-faint hover:text-white hover:bg-chrome-soft/60') + '">' +
         '<i class="fas ' + m.icon + ' text-xs"></i>' + U.esc(m.label) +
-        (m.placeholder ? '<span class="text-[9px] uppercase tracking-wider opacity-50">soon</span>' : '') +
+        (m.placeholder ? '<span class="text-3xs uppercase tracking-wider opacity-50">soon</span>' : '') +
         '</button>';
     }).join('');
   }
@@ -267,7 +266,7 @@
     if (!root.Bids || typeof root.Bids.viewCount !== 'function') return '';
     var n = root.Bids.viewCount(key);
     if (n == null) return '';
-    return ' <span class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs" ' +
+    return ' <span class="ml-1 bg-neutral-soft text-muted px-2 py-0.5 rounded-full text-xs" ' +
       'id="badge-' + key + '">' + n + '</span>';
   }
 
@@ -296,9 +295,9 @@
     }).join('');
 
     U.$('subMenuToolbar').innerHTML = (m.toolbar || []).filter(allows).map(function (b) {
-      var cls = b.primary ? 'bg-blue-600 hover:bg-blue-500 text-white'
-              : b.green ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-              : 'bg-slate-100 hover:bg-slate-200 text-slate-700';
+      var cls = b.primary ? 'bg-brand hover:bg-brand-hover text-white'
+              : b.green ? 'bg-ok hover:bg-ok-hover text-white'
+              : 'bg-neutral-soft hover:bg-line text-ink';
       return '<button onclick="' + b.onclick + '" class="px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ' + cls + '">' +
         '<i class="fas ' + b.icon + '"></i>' + U.esc(b.label) + '</button>';
     }).join('');
@@ -320,7 +319,7 @@
     return '<button onclick="Nav.popout(\'' + s.key + '\')" tabindex="-1" ' +
       'title="Open ' + U.escAttr(s.label) + ' in its own window" ' +
       'class="absolute right-0.5 top-1 opacity-0 group-hover:opacity-100 focus:opacity-100 transition ' +
-      'text-[9px] text-slate-400 hover:text-blue-600 p-1">' +
+      'text-3xs text-faint hover:text-brand p-1">' +
       '<i class="fas fa-up-right-from-square"></i></button>';
   }
 
@@ -331,16 +330,16 @@
     var m = ownerOf(current.section);
     host.innerHTML =
       '<div class="flex items-center gap-3 min-w-0">' +
-        '<div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">' +
+        '<div class="w-8 h-8 bg-brand rounded-lg flex items-center justify-center shrink-0">' +
           '<i class="fas ' + (s ? s.icon : 'fa-window-restore') + ' text-white text-xs"></i></div>' +
         '<div class="min-w-0">' +
           '<div class="text-sm font-bold text-white truncate">' + U.esc(s ? s.label : current.section) + '</div>' +
-          '<div class="text-[11px] text-slate-400 truncate">' + U.esc(m ? m.label : '') + ' &middot; DiverSe</div>' +
+          '<div class="text-2xs text-faint truncate">' + U.esc(m ? m.label : '') + ' &middot; DiverSe</div>' +
         '</div>' +
       '</div>' +
       '<div class="flex items-center gap-3">' +
-        '<span id="saveIndicator" class="text-xs text-slate-400"></span>' +
-        '<button onclick="Nav.returnToMain()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-medium flex items-center gap-2">' +
+        '<span id="saveIndicator" class="text-xs text-faint"></span>' +
+        '<button onclick="Nav.returnToMain()" class="px-3 py-1.5 bg-chrome-soft hover:bg-chrome-soft/70 text-white rounded-lg text-xs font-medium flex items-center gap-2">' +
           '<i class="fas fa-arrow-left"></i>Main window</button>' +
       '</div>';
   }
@@ -365,9 +364,45 @@
     return true;
   }
 
-  /* The popped-out window deliberately does not persist where it is. ui.module
-     and ui.section are what the *main* window reopens on; a popout writing them
-     would drag the main window to the popout's page on its next boot.
+  /* ---- where this tab is, as opposed to where this person was --------------
+   *
+   * WHICH PAGE THE APP OPENS ON IS TWO DIFFERENT QUESTIONS.
+   *
+   * Opening the app is not the same event as reloading it, and they want
+   * opposite answers. Coming to the app fresh you want the Dashboard - the
+   * state of the office. Pressing F5 you want the page you were already on,
+   * because a reload is not a decision to go somewhere else.
+   *
+   * The app used to answer both with ui.section, the last page this PERSON
+   * navigated to, saved with their layout. So leaving it on a proposal meant
+   * every future visit opened inside that document, several clicks deep in one
+   * project - and on a shared machine a brand-new account inherited the last
+   * page of whoever used the browser before them, because a signed-in user with
+   * no saved prefs yet adopts this browser's (see store.js, adoptUI).
+   *
+   * sessionStorage tells the two apart exactly: it survives a reload and dies
+   * with the tab. So this is per tab, which is also what makes two tabs on two
+   * different projects each reload onto their own.
+   */
+  var TAB_SECTION = 'dv.tab.section';
+  var TAB_BID = 'dv.tab.bid';
+
+  function rememberTab() {
+    try {
+      root.sessionStorage.setItem(TAB_SECTION, current.section);
+      var bid = root.Project && root.Project.currentBid && root.Project.currentBid();
+      if (bid) root.sessionStorage.setItem(TAB_BID, String(bid.id));
+      else root.sessionStorage.removeItem(TAB_BID);
+    } catch (e) { /* private mode: the tab just forgets, which is the old behaviour */ }
+  }
+
+  function tabValue(key) {
+    try { return root.sessionStorage.getItem(key); } catch (e) { return null; }
+  }
+
+  /* The popped-out window deliberately does not persist where it is. A popout
+     writing the marker - or ui.section - would drag the window that opened it to
+     the popout's page on its next reload.
 
      Read through root.Nav.isPopout rather than the POPOUT variable so the guard
      can be exercised without opening a second window. */
@@ -378,6 +413,7 @@
     ui.section = current.section;
     // Settings reopens on the panel you left it on rather than always the first.
     if (current.module === 'settings') ui.settingsSection = current.section;
+    rememberTab();
     root.Store.save();
   }
 
@@ -451,16 +487,29 @@
       root.location.href = root.location.pathname;
     },
 
-    /* Where to open on boot: the URL wins (that is how a popout is addressed),
-       then the last place the main window was, then Active Bids. */
+    /* Where to open on boot:
+         1. the URL, which is how a popout and a bookmark are addressed
+         2. this tab's own marker - i.e. this is a reload, so stay put
+         3. the Dashboard: a fresh visit starts at the state of the office
+       Their role may not admit the Dashboard at all - a Production-only account
+       would land on a page it cannot see - so it falls through to the first page
+       that does admit them.
+
+       ui.section is deliberately NOT consulted. See rememberTab above. */
     initialSection: function () {
       var fromUrl = param('section');
       if (fromUrl && mayOpen(fromUrl)) return fromUrl;
-      var ui = root.Store.db.ui;
-      if (ui.section && mayOpen(ui.section)) return ui.section;
-      // Their role may not admit Active Bids at all - a Production-only account
-      // would land on a page it cannot see.
-      return mayOpen('active') ? 'active' : (firstAllowedSection() || 'active');
+      var mine = tabValue(TAB_SECTION);
+      if (mine && mayOpen(mine)) return mine;
+      return mayOpen('dashboard') ? 'dashboard' : (firstAllowedSection() || 'active');
+    },
+
+    /* The project this tab was on when it was last reloaded, if it was on one.
+       Read by App.resumeLastSession in preference to ui.projectBidId, which is
+       shared by every tab and so is whichever one navigated last. */
+    tabBidId: function () {
+      var v = tabValue(TAB_BID);
+      return v && /^\d+$/.test(v) ? Number(v) : null;
     }
   };
 })(window);

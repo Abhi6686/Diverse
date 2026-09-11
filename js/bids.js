@@ -67,10 +67,12 @@
     return STATUSES.filter(function (s) { return s.settable; });
   }
 
+  /* The pill is UI.badge, which does not wrap. "Submitted to Review" used to
+     break over two lines and make its row taller than the ones around it, which
+     is what gave the table its ragged left-to-right rhythm. */
   function statusBadge(status) {
     var s = statusOf(status);
-    return '<span class="px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase ' +
-      (s ? s.badge : 'status-notstarted') + '">' + U.esc(status || 'Not Started') + '</span>';
+    return root.UI.badge(status || 'Not Started', s ? s.badge : 'status-notstarted');
   }
 
   /* ---- shared bits ----------------------------------------------------- */
@@ -79,26 +81,95 @@
      height out. The title attribute carries the full list. */
   function productCell(bid, max) {
     var list = (bid.products || []).filter(Boolean);
-    if (!list.length) return '<span class="text-slate-300">-</span>';
+    if (!list.length) return '<span class="text-faint">-</span>';
     var shown = list.slice(0, max);
     var rest = list.length - shown.length;
     return '<span class="flex flex-wrap gap-1" title="' + U.escAttr(list.join(', ')) + '">' +
       shown.map(function (p) {
-        return '<span class="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] max-w-[150px] truncate">' +
+        return '<span class="px-1.5 py-0.5 bg-neutral-soft text-muted rounded text-3xs max-w-[150px] truncate">' +
           U.esc(p) + '</span>';
       }).join('') +
-      (rest > 0 ? '<span class="px-1.5 py-0.5 bg-slate-200 text-slate-600 rounded text-[10px] font-semibold">+' +
+      (rest > 0 ? '<span class="px-1.5 py-0.5 bg-line text-muted rounded text-3xs font-semibold">+' +
         rest + '</span>' : '') + '</span>';
+  }
+
+  /* ---- one colour per person -------------------------------------------- */
+
+  /* WHOSE FOUR AND A HALF HOURS ARE THOSE.
+
+     The Employee view stacks initials in the Engineer column and a matching
+     stack of figures across thirty date cells; in grey they can only be told
+     apart by counting lines. So each person carries a colour, and it is the
+     same colour everywhere they are named - the schedule, the bid tables,
+     Settings, the who-is-here markers.
+
+     The colour lives on the ENGINEER RECORD rather than on the account,
+     because of who can read it: accounts are server-side behind admin.users
+     and an ordinary employee never sees them, while the engineers register is
+     in Store.db and is synced to every browser. The two are already joined by
+     userId (see server/api.js linkEngineer), so Settings > People edits the
+     register entry behind the person it is showing. */
+  var PALETTE = 14;               // .pal-1 .. .pal-14 in assets/app.css
+
+  /* An explicit colour wins. Failing that, the entry's POSITION in the
+     register decides - not a hash of the initials, because a hash collides
+     and two people sharing a colour is the one thing this must not do.
+     Ordinal assignment gives the first fourteen people fourteen different
+     colours with nothing written and nothing to migrate. */
+  function colorOf(eng) {
+    if (!eng) return 0;
+    var n = U.n(eng.color);
+    if (n >= 1 && n <= PALETTE) return n;
+    var i = engineers().indexOf(eng);
+    return (i < 0 ? 0 : i % PALETTE) + 1;
+  }
+
+  function colorClass(initials) {
+    var e = findEngineer(initials);
+    return e ? 'pal-' + colorOf(e) : 'pal-none';
+  }
+
+  /* THE CHIP, rendered in one place so the colour cannot drift between the
+     four views that draw it. `size` is the padding scale; `title` overrides
+     the name tooltip. */
+  function personChip(initials, o) {
+    var opts = o || {};
+    var i = String(initials || '').trim();
+    if (!i) return '<span class="text-faint">&mdash;</span>';
+    var name = engineerName(i);
+    return '<span class="person-chip ' + colorClass(i) + ' ' +
+      (opts.cls || 'px-1.5 py-0.5 rounded text-2xs') + '" title="' +
+      U.escAttr(opts.title || name || 'Not in the engineers register') + '">' +
+      U.esc(i) + '</span>';
+  }
+
+  /* Setting a colour by hand. 0 - or anything off the palette - clears it,
+     which puts the person back on their ordinal colour. */
+  function setEngineerColor(id, n) {
+    var e = engineers().filter(function (x) { return x.id === id; })[0];
+    if (!e) return;
+    var v = U.n(n);
+    if (v >= 1 && v <= PALETTE) e.color = v; else delete e.color;
+    root.Store.save();
+    refresh();
+    renderEngineerList();
+    if (root.Settings && root.Settings.repaintPeople) root.Settings.repaintPeople();
+    reopenPickers();
+  }
+
+  /* The register entry behind an account: by the link the server made, and by
+     initials for a person whose entry predates the account. */
+  function engineerForUser(user) {
+    if (!user) return null;
+    var byId = engineers().filter(function (e) { return e.userId === user.id; })[0];
+    return byId || findEngineer(user.initials);
   }
 
   /* Initials keep the column narrow; the full name rides along as a tooltip. */
   function engineerCell(bid) {
     var i = (bid.engineer || '').trim();
-    if (!i) return '<span class="text-slate-300">&mdash;</span>';
-    var name = engineerName(i);
-    return '<span class="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[11px] font-semibold"' +
-      (name ? ' title="' + U.escAttr(name) + '"' : ' title="Not in the engineers register"') + '>' +
-      U.esc(i) + '</span>';
+    if (!i) return '<span class="text-faint">&mdash;</span>';
+    return personChip(i, { cls: 'px-1.5 py-0.5 rounded text-2xs' });
   }
 
   /* The team assigned in the active stage. Capped like the product chips so one
@@ -107,7 +178,7 @@
      open a bid to answer. */
   function teamCell(bid) {
     var list = root.Assign.engineerList(bid);
-    if (!list.length) return '<span class="text-slate-300">&mdash;</span>';
+    if (!list.length) return '<span class="text-faint">&mdash;</span>';
 
     var byEngineer = {};
     root.Assign.rows(bid).forEach(function (r) {
@@ -121,147 +192,212 @@
     var rest = list.length - shown.length;
     return '<span class="inline-flex flex-wrap gap-1 justify-center" title="' + U.escAttr(title) + '">' +
       shown.map(function (i) {
-        return '<span class="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[11px] font-semibold">' +
-          U.esc(i) + '</span>';
+        return personChip(i, { cls: 'px-1.5 py-0.5 rounded text-2xs',
+          title: i + ' - ' + U.qty(byEngineer[i]) + ' hrs' });
       }).join('') +
-      (rest > 0 ? '<span class="px-1.5 py-0.5 bg-slate-200 text-slate-600 rounded text-[11px] font-semibold">+' +
+      (rest > 0 ? '<span class="px-1.5 py-0.5 bg-line text-muted rounded text-2xs font-semibold">+' +
         rest + '</span>' : '') + '</span>';
   }
 
-  /* The proposal button next to the takeoff one. It opens the document that was
-     generated; regenerating is a deliberate act done from the proposal itself,
-     where the wording you might overwrite is on screen. */
-  function proposalButton(bid) {
-    var d = db();
-    var has = bid.proposalId && d.proposals[bid.proposalId];
-    if (has) {
-      return '<button onclick="Proposal.open(\'' + bid.proposalId + '\')" title="View the bid proposal" ' +
-        'class="btn-icon w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 flex items-center justify-center">' +
-        '<i class="fas fa-file-contract text-xs"></i></button>';
-    }
-    if (root.Takeoff.hasTakeoff(bid)) {
-      return '<button onclick="Proposal.generateFromTakeoff(\'' + bid.takeoffId + '\')" title="Generate a bid proposal from the takeoff" ' +
-        'class="btn-icon w-7 h-7 rounded-lg bg-slate-50 text-slate-400 hover:bg-slate-100 flex items-center justify-center">' +
-        '<i class="fas fa-file-contract text-xs"></i></button>';
-    }
-    return '<span title="Start a takeoff first" ' +
-      'class="w-7 h-7 rounded-lg bg-slate-50 text-slate-200 flex items-center justify-center cursor-not-allowed">' +
-      '<i class="fas fa-file-contract text-xs"></i></span>';
-  }
+  /* The takeoff button, the proposal button and the promote button all used to
+     live out here, drawn onto every row. They are menu entries now - see
+     rowMenuItems - because six icon buttons made the widest column in the table
+     out of controls you had to hover to identify.
 
-  /* Awarding or losing a bid is a decision with consequences - one issues a job
-     number, both take the bid off Active - so it is a menu with a confirmation
-     behind each choice rather than a button that acts on the first click.
-     Hidden once the bid is decided, since there is nothing left to decide. */
-  function decisionMenu(bid) {
-    if (!root.Auth.can('bid.award')) return '';
-    // Offered while the bid is on Active Bids, which now includes Lost ones: a
-    // lost job that comes back should be awardable from where you are looking
-    // at it rather than needing the status unpicked first.
-    if (!onActiveOf(bid)) {
-      return '<span title="' + U.escAttr(bid.awardNo ? 'Awarded as ' + bid.awardNo : 'Already decided') + '" ' +
-        'class="w-7 h-7 rounded-lg bg-slate-50 text-slate-200 flex items-center justify-center cursor-not-allowed">' +
-        '<i class="fas fa-trophy text-xs"></i></span>';
-    }
-    return '<span class="relative inline-flex">' +
-      '<button onclick="Bids.toggleDecisionMenu(event,' + bid.id + ')" title="Award or mark lost" ' +
-        'class="btn-icon w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center">' +
-        '<i class="fas fa-trophy text-xs"></i></button>' +
-      '<span id="decide-' + bid.id + '" class="hidden absolute right-0 top-8 z-30 bg-white border border-slate-200 rounded-lg shadow-xl py-1 w-40 text-left">' +
-        decisionMenuItem(bid.id, 'Awarded', 'fa-trophy', 'Award', 'text-emerald-700') +
-        decisionMenuItem(bid.id, 'Lost', 'fa-xmark', 'Mark Lost', 'text-red-600') +
-      '</span></span>';
-  }
+     Project.decisionMenu is the other route to the same Award/Lost decision,
+     from the project page's header bar, and is untouched. */
 
-  /* Any open row menu closes on the next click anywhere, the way the grid's
-     filter popovers already behave. */
-  function closeDecisionMenus() {
-    var open = document.querySelectorAll('[id^="decide-"]:not(.hidden)');
-    Array.prototype.forEach.call(open, function (el) { el.classList.add('hidden'); });
-  }
+  /* ONE CONTROL, NOT SIX.
 
-  function decisionMenuItem(id, outcome, icon, label, cls) {
-    return '<button onclick="Bids.decide(' + id + ',\'' + outcome + '\')" ' +
-      'class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 ' + cls + '">' +
-      '<i class="fas ' + icon + ' w-4 mr-1.5"></i>' + label + '</button>';
-  }
+     Every row used to end in a cluster of up to six identical 28px squares,
+     all equally loud, which made Actions the widest column in the table - wide
+     enough to be most of why the table scrolled sideways at all - while still
+     being a row of icons you had to hover to identify. And being last, reaching
+     them meant scrolling the project name off the screen first.
 
-  /* All Bids is an intake register, so its rows offer the one thing you do with
-     an intake record - pick it up - rather than the estimating controls, which
-     belong to a bid somebody is actually working. */
-  function promoteButton(bid) {
-    if (!root.Auth.can('bid.edit')) return '';
-    if (bid.active && onActiveOf(bid)) {
-      return '<span title="Already in Active Bids" ' +
-        'class="w-7 h-7 rounded-lg bg-slate-50 text-slate-200 flex items-center justify-center cursor-not-allowed">' +
-        '<i class="fas fa-bolt text-xs"></i></span>';
-    }
-    return '<button onclick="Bids.addToActive(' + bid.id + ')" title="Add to Active Bids" ' +
-      'class="btn-icon w-7 h-7 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 flex items-center justify-center">' +
-      '<i class="fas fa-bolt text-xs"></i></button>';
-  }
-
-  /* The row itself opens the project page, so every control in here has to stop
-     the click from reaching it - one guard on the container covers the lot. */
+     It is one button now, at the front of the row and frozen with the identity
+     block, opening a menu that names each action in words. */
   function actionCell(bid) {
-    var hasT = root.Takeoff.hasTakeoff(bid);
-    var estimating = view === 'all'
-      ? promoteButton(bid)
-      : '<button onclick="Takeoff.openForBid(' + bid.id + ')" title="' +
-          (hasT ? 'Open takeoff' : 'Start a takeoff') + '" class="btn-icon w-7 h-7 rounded-lg flex items-center justify-center ' +
-          (hasT ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-slate-50 text-slate-400 hover:bg-slate-100') +
-          '"><i class="fas fa-calculator text-xs"></i></button>' +
-        proposalButton(bid) +
-        decisionMenu(bid);
-
-    return '<div class="flex items-center gap-1.5" onclick="event.stopPropagation()">' +
-      estimating +
-      (root.Auth.can('bid.edit')
-        ? '<button onclick="Bids.edit(' + bid.id + ')" title="Edit" class="btn-icon w-7 h-7 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center"><i class="fas fa-pen text-xs"></i></button>'
-        : '') +
-      // Deleting a bid is the one row action the screenshots mark as belonging
-      // to specific roles rather than everybody. The server refuses it too.
-      (root.Auth.can('bid.delete')
-        ? '<button onclick="Bids.promptDelete(' + bid.id + ')" title="Delete" class="btn-icon w-7 h-7 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 flex items-center justify-center"><i class="fas fa-trash text-xs"></i></button>'
-        : '') +
-      (bid.link ? '<a href="' + U.escAttr(bid.link) + '" target="_blank" rel="noopener" title="Open portal link" class="btn-icon w-7 h-7 rounded-lg bg-slate-50 text-slate-600 hover:bg-slate-100 flex items-center justify-center"><i class="fas fa-external-link-alt text-xs"></i></a>' : '') +
+    // The row itself opens the project, so the cell has to stop the click
+    // reaching it - one guard on the container covers the button inside.
+    return '<div class="flex items-center justify-center" onclick="event.stopPropagation()">' +
+      root.UI.iconBtn({
+        icon: 'fa-ellipsis-vertical',
+        title: 'Actions for ' + (bid.project || 'this bid'),
+        tone: 'neutral',
+        variant: 'ghost',
+        onclick: 'Bids.openRowMenu(event,' + bid.id + ')'
+      }) +
       '</div>';
   }
 
-  /* ---- award numbering -------------------------------------------------- */
+  /* Everything you can do to a bid from the table, in the order you would do
+     it: pick it up or open the work, then decide it, then the record itself.
 
-  /* An awarded job is known by DIS-<yy>-<0001>, where yy is the year it was
-     awarded and the sequence restarts each year.
+     All of it is in the menu, including the takeoff and the proposal that used
+     to sit on the row as icons. Six icon buttons made the widest column in the
+     table out of controls you had to hover to identify; a menu is one button
+     wide and says what each thing is in words. */
+  function rowMenuItems(bid) {
+    var G = root.BidGrid, out = [];
 
-     Allocated as "highest existing for that year + 1" rather than from a stored
-     counter: a number that has been on paper must never be handed to a second
-     job, and deleting a bid must not make its number available again. Counting
-     the bids gives both for free, with nothing to keep in sync. */
-  function nextAwardNo(dateISO) {
+    if (view === 'all') {
+      // Intake offers the one thing you do with an intake record. Anything to
+      // do with estimating belongs to a bid somebody has committed to.
+      if (root.Auth.can('bid.edit')) {
+        if (bid.active && onActiveOf(bid)) {
+          out.push(G.menuItem({ icon: 'fa-bolt', label: 'Open in Active Bids',
+            onclick: 'Project.openFrom(' + bid.id + ',\'active\')' }));
+        } else {
+          out.push(G.menuItem({ icon: 'fa-bolt', label: 'Add to Active Bids', tone: 'ok',
+            onclick: 'Bids.addToActive(' + bid.id + ')' }));
+        }
+      }
+    } else {
+      var hasT = root.Takeoff.hasTakeoff(bid);
+      out.push(G.menuItem({ icon: 'fa-calculator',
+        label: hasT ? 'Open takeoff' : 'Start a takeoff',
+        onclick: 'Takeoff.openForBid(' + bid.id + ')' }));
+
+      var d = db();
+      if (bid.proposalId && d.proposals[bid.proposalId]) {
+        out.push(G.menuItem({ icon: 'fa-file-contract', label: 'Open proposal',
+          onclick: 'Proposal.open(\'' + bid.proposalId + '\')' }));
+      } else if (hasT) {
+        out.push(G.menuItem({ icon: 'fa-file-contract', label: 'Generate proposal',
+          onclick: 'Proposal.generateFromTakeoff(\'' + bid.takeoffId + '\')' }));
+      }
+
+      // Award and Lost are the same decision and each has its own confirmation
+      // behind it, so they read as a pair rather than as a nested menu.
+      if (root.Auth.can('bid.award') && onActiveOf(bid)) {
+        out.push(G.menuSeparator());
+        out.push(G.menuItem({ icon: 'fa-trophy', label: 'Award', tone: 'ok',
+          onclick: 'Bids.decide(' + bid.id + ',\'Awarded\')' }));
+        out.push(G.menuItem({ icon: 'fa-xmark', label: 'Mark Lost', tone: 'danger',
+          onclick: 'Bids.decide(' + bid.id + ',\'Lost\')' }));
+      }
+    }
+
+    if (out.length) out.push(G.menuSeparator());
+    if (root.Auth.can('bid.edit')) {
+      out.push(G.menuItem({ icon: 'fa-pen', label: 'Edit bid',
+        onclick: 'Bids.edit(' + bid.id + ')' }));
+    }
+    // Undoing a stage: an award rescinded, a bid picked up by mistake. It takes
+    // a comment, and it is logged - see js/history.js.
+    if (root.History.canReverse(bid)) {
+      out.push(G.menuItem({ icon: 'fa-rotate-left', tone: 'warn',
+        label: 'Move back to ' + root.History.label(root.History.previousStage(bid)),
+        onclick: 'History.promptReverse(' + bid.id + ')' }));
+    }
+    /* Through U.safeUrl, like the same field on the project page: bid.link is
+       typed by a user, and menuLink escapes the quotes without looking at the
+       scheme - so a `javascript:` link pasted into the portal field would run
+       from this menu. An unusable link simply offers no menu item. */
+    var portalHref = U.safeUrl(bid.link);
+    if (portalHref) {
+      out.push(G.menuLink({ icon: 'fa-external-link-alt', label: 'Open portal link',
+        href: portalHref }));
+    }
+    // Deleting a bid is the one row action the screenshots mark as belonging to
+    // specific roles rather than everybody. The server refuses it too.
+    if (root.Auth.can('bid.delete')) {
+      out.push(G.menuItem({ icon: 'fa-trash', label: 'Delete bid', tone: 'danger',
+        onclick: 'Bids.promptDelete(' + bid.id + ')' }));
+    }
+    return out.join('');
+  }
+
+  /* ---- the project number ------------------------------------------------ */
+
+  /* ONE NUMBER, FOR THE PROJECT'S WHOLE LIFE.
+   *
+   * DIS-<yy>-<0001>, where yy is the year and the sequence restarts each
+   * January. It is issued the moment a bid is picked up - All Bids to Active -
+   * and it never changes again: it is the Proposal No. on the document that
+   * goes to the client, and it is still the number the job is known by after it
+   * is won.
+   *
+   * It used to be issued at award, which was too late to be any use: the
+   * proposal that won the job had already gone out under a number somebody
+   * typed by hand. There is no longer a second number at award - see
+   * applyAward.
+   *
+   * Allocated as "highest existing for that year + 1" rather than from a stored
+   * counter: a number that has been on paper must never be handed to a second
+   * project, and deleting a bid must not make its number available again.
+   * Counting the bids gives both for free, with nothing to keep in sync.
+   *
+   * Both fields are scanned, not just proposalNo. Bids numbered under the old
+   * scheme carry theirs in awardNo, and reissuing one of those as a proposal
+   * number is exactly the collision this rule exists to prevent. */
+  function nextProjectNo(dateISO) {
     var yy = String(dateISO || U.today()).slice(2, 4);
     var re = new RegExp('^DIS-' + yy + '-(\\d{4})$');
+    function seq(v) {
+      var hit = re.exec(String(v || '').trim());
+      return hit ? Number(hit[1]) : 0;
+    }
     var max = bids().reduce(function (m, b) {
-      var hit = re.exec(b.awardNo || '');
-      return hit ? Math.max(m, Number(hit[1])) : m;
+      return Math.max(m, seq(b.proposalNo), seq(b.awardNo));
     }, 0);
     return 'DIS-' + yy + '-' + String(max + 1).padStart(4, '0');
   }
 
-  /* The single way a bid becomes Awarded. Idempotent: a bid that already has a
-     number keeps it, so re-awarding, or moving out of Awarded and back, never
-     renumbers the job. */
-  function applyAward(bid, dateISO) {
-    bid.status = 'Awarded';
-    if (!bid.awardedAt) bid.awardedAt = dateISO || U.today();
-    if (!bid.awardNo) bid.awardNo = nextAwardNo(bid.awardedAt);
-    return bid.awardNo;
+  /* Idempotent, and called from the one place a bid becomes active. A bid that
+     already has a number keeps it, so moving out of Active and back does not
+     renumber the project. */
+  function issueProjectNo(bid, dateISO) {
+    if (!String(bid.proposalNo || '').trim()) {
+      bid.proposalNo = nextProjectNo(dateISO);
+    }
+    return bid.proposalNo;
   }
 
-  /* The other outcome. No number is issued - job numbers identify work we are
-     actually doing, and a lost bid never becomes one. */
+  /* The single way a bid becomes Awarded.
+     No number is allocated here any more - the project already has one. awardNo
+     is written as a mirror of it purely so the server's bids_award_no unique
+     index and the existing XLSX export keep working; it is NOT a second
+     identity, and nothing should read it as one. */
+  function applyAward(bid, dateISO) {
+    var was = root.History.stageOf(bid);
+    var wasStatus = bid.status;
+    bid.status = 'Awarded';
+    if (!bid.awardedAt) bid.awardedAt = dateISO || U.today();
+    // A bid can reach Awarded without having passed through Active - an
+    // imported file, or a status typed straight in - so the number is ensured
+    // rather than assumed.
+    issueProjectNo(bid, bid.activatedAt || bid.awardedAt);
+    bid.awardNo = bid.proposalNo;
+    root.History.record(bid, was, 'awarded', { fromStatus: wasStatus });
+    return bid.proposalNo;
+  }
+
+  /* The other outcome. Nothing is issued and nothing is taken away: the project
+     keeps the number it was given when somebody picked it up, because that
+     number is on the proposal that lost. */
   function applyLost(bid, dateISO) {
+    var was = root.History.stageOf(bid);
+    var wasStatus = bid.status;
     bid.status = 'Lost';
     if (!bid.decidedAt) bid.decidedAt = dateISO || U.today();
+    root.History.record(bid, was, 'lost', { fromStatus: wasStatus });
+  }
+
+  /* ---- dates ------------------------------------------------------------- */
+
+  /* The date the project is actually working to.
+
+     A revised due date is the client moving the deadline, which happens often
+     enough that overwriting the original loses the fact that it moved. So both
+     are kept and everything that asks "when is this due" asks here: the grid
+     column and its sort, the month the bid is filed under, the dashboard's
+     "due within 7 days", and the export. */
+  function effectiveDueDate(bid) {
+    if (!bid) return '';
+    var revised = String(bid.revisedDueDate || '').trim();
+    return revised || bid.dueDate || '';
   }
 
   /* ---- the Award / Lost decision ---------------------------------------- */
@@ -274,9 +410,9 @@
   var DECISIONS = {
     Awarded: {
       verb: 'Award', icon: 'fa-trophy',
-      wrapClass: 'w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4',
-      iconClass: 'fas fa-trophy text-emerald-600 text-2xl',
-      buttonClass: 'px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition',
+      wrapClass: 'w-16 h-16 bg-ok-soft rounded-full flex items-center justify-center mx-auto mb-4',
+      iconClass: 'fas fa-trophy text-ok text-2xl',
+      buttonClass: 'px-5 py-2.5 bg-ok hover:bg-ok-hover text-white rounded-lg text-sm font-medium transition',
       title: 'Move to Awarded?',
       note: 'It moves off Active Bids into Awarded Bids. The number is permanent — ' +
             'it is not reissued if the status changes again.',
@@ -284,9 +420,9 @@
     },
     Lost: {
       verb: 'Mark Lost', icon: 'fa-xmark',
-      wrapClass: 'w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4',
-      iconClass: 'fas fa-xmark text-red-600 text-2xl',
-      buttonClass: 'px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition',
+      wrapClass: 'w-16 h-16 bg-danger-soft rounded-full flex items-center justify-center mx-auto mb-4',
+      iconClass: 'fas fa-xmark text-danger text-2xl',
+      buttonClass: 'px-5 py-2.5 bg-danger hover:bg-danger-hover text-white rounded-lg text-sm font-medium transition',
       title: 'Mark this bid as Lost?',
       note: 'It moves off Active Bids and stays in All Bids. No job number is issued — ' +
             'those identify work we are doing.',
@@ -316,14 +452,17 @@
     U.$('decisionConfirm').className = d.buttonClass;
     U.$('decisionConfirm').textContent = d.verb;
 
-    // Only the award issues a number, and it is named before the fact so nobody
-    // is surprised by which one they got.
+    // Awarding no longer issues anything: the project was numbered when it was
+    // picked up, and that is the number it is won under. Naming it here is a
+    // confirmation rather than a warning - but a bid that somehow reached this
+    // point unnumbered is told which one it is about to get.
     var numberRow = U.$('decisionNumberRow');
     if (outcome === 'Awarded') {
       numberRow.classList.remove('hidden');
-      U.$('decisionNumber').textContent = b.awardNo || nextAwardNo(U.today());
-      U.$('decisionNumberLabel').textContent = b.awardNo
-        ? 'keeps its existing job number' : 'will be given job number';
+      var existing = String(b.proposalNo || '').trim();
+      U.$('decisionNumber').textContent = existing || nextProjectNo(U.today());
+      U.$('decisionNumberLabel').textContent = existing
+        ? 'will be awarded as' : 'will be given project number';
     } else {
       numberRow.classList.add('hidden');
       // The label sits outside the hidden row, beside the project name, so it
@@ -357,12 +496,20 @@
      would be invisible on the list it was just added to, so it reopens at the
      start. A Lost bid belongs on Active as it stands, so promoting one leaves
      its status alone rather than quietly erasing the outcome. */
+  /* Picking a bid up is what turns a received enquiry into a project, so it is
+     where the project gets its number - see issueProjectNo. Everything
+     downstream, the takeoff and the proposal document, is identified by it. */
   function addToActive(bid) {
     if (!bid) return false;
     if (bid.active && onActiveOf(bid)) return false;
+    var was = root.History.stageOf(bid);
+    var wasStatus = bid.status;
     bid.active = true;
     if (!onActiveOf(bid)) bid.status = 'Not Started';
     if (!bid.activatedAt) bid.activatedAt = U.today();
+    issueProjectNo(bid, bid.activatedAt);
+    pushProposalNo(bid);
+    root.History.record(bid, was, root.History.stageOf(bid), { fromStatus: wasStatus });
     return true;
   }
 
@@ -410,12 +557,12 @@
       ? 'A bid with this project name is already on file:'
       : dups.length + ' bids with this project name are already on file:';
     U.$('duplicateList').innerHTML = dups.map(function (d) {
-      return '<div class="flex items-center justify-between gap-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-left">' +
+      return '<div class="flex items-center justify-between gap-3 px-3 py-2 bg-warn-soft border border-warn/30 rounded-lg text-left">' +
         '<div class="min-w-0">' +
-          '<div class="text-sm font-semibold text-slate-800 truncate">' + U.esc(d.project) + '</div>' +
-          '<div class="text-[11px] text-slate-500">' + U.esc(stageOf(d)) +
+          '<div class="text-sm font-semibold text-ink-strong truncate">' + U.esc(d.project) + '</div>' +
+          '<div class="text-2xs text-muted">' + U.esc(stageOf(d)) +
             (d.proposalNo ? ' &middot; <span class="font-mono">' + U.esc(d.proposalNo) + '</span>' : ' &middot; no proposal no.') +
-            (d.awardNo ? ' &middot; <span class="font-mono text-emerald-700">' + U.esc(d.awardNo) + '</span>' : '') +
+            (d.awardNo ? ' &middot; <span class="font-mono text-ok-ink">' + U.esc(d.awardNo) + '</span>' : '') +
           '</div>' +
         '</div>' +
         root.Bids.statusBadge(d.status) +
@@ -429,8 +576,9 @@
     root.Store.save();
     refresh();
     repaintProject();
-    U.toast('"' + (b.project || 'Bid') + '" added to Active Bids.' +
-      (b.proposalNo ? '' : ' Give it a Proposal No. to identify it.'), 'ok');
+    // The number is the useful half of this message: it is what the project is
+    // called from here on, and it is what goes on the proposal.
+    U.toast('"' + (b.project || 'Bid') + '" added to Active Bids as ' + b.proposalNo + '.', 'ok');
     if (then) then(b);
   }
 
@@ -459,13 +607,56 @@
 
   /* ---- KPIs and month grid --------------------------------------------- */
 
+  /* Days from today to an ISO date; negative is in the past. Null when the bid
+     has no due date, which is different from "not due soon". */
+  function daysUntil(iso) {
+    var d = U.parseDate(iso);
+    if (!d) return null;
+    var today = U.parseDate(U.today());
+    return Math.round((d - today) / 86400000);
+  }
+
+  function pct(part, whole) {
+    return whole ? Math.round((part / whole) * 100) : 0;
+  }
+
+  /* Each tile is a figure and the one fact that makes it mean something. A bare
+     count says nothing about whether it is a good number - "12 In Progress" is
+     reassuring or alarming entirely depending on how many of them are due this
+     week, which is what the line underneath answers. */
   function updateKPIs() {
     var b = bids();
-    U.$('kpiTotal').textContent = b.length;
-    U.$('kpiSubmitted').textContent = b.filter(function (x) { return x.status === 'Submitted to review'; }).length;
-    U.$('kpiProgress').textContent = b.filter(function (x) { return x.status === 'In Progress'; }).length;
-    U.$('kpiAwarded').textContent = b.filter(function (x) { return x.status === 'Awarded'; }).length;
-    U.$('kpiValue').textContent = U.currency(b.reduce(function (s, x) { return s + U.n(x.price); }, 0));
+    function set(id, value, note) {
+      var el = U.$(id);
+      if (el) el.textContent = value;
+      var n = U.$(id + 'Note');
+      if (n) n.textContent = note || ' ';
+    }
+
+    var open = b.filter(function (x) { return bucketOf(x) === 'open'; });
+    var submitted = b.filter(function (x) { return x.status === 'Submitted to review'; });
+    var progress = b.filter(function (x) { return x.status === 'In Progress'; });
+    var awarded = b.filter(function (x) { return x.status === 'Awarded'; });
+    var lost = b.filter(function (x) { return x.status === 'Lost'; });
+    var priced = b.filter(function (x) { return U.n(x.price) > 0; });
+    var soon = progress.filter(function (x) {
+      var d = daysUntil(effectiveDueDate(x));
+      return d !== null && d <= 7;
+    });
+
+    set('kpiTotal', b.length, viewCount('active') + ' being worked');
+    set('kpiSubmitted', submitted.length,
+      open.length ? pct(submitted.length, open.length) + '% of everything still open' : 'nothing open');
+    set('kpiProgress', progress.length,
+      soon.length ? soon.length + ' due within 7 days' : 'none due this week');
+    // The hit rate, which is the question anybody looking at an Awarded count
+    // is actually asking. Only meaningful once something has been decided.
+    set('kpiAwarded', awarded.length,
+      awarded.length + lost.length
+        ? pct(awarded.length, awarded.length + lost.length) + '% of decided bids won'
+        : 'nothing decided yet');
+    set('kpiValue', U.currency(b.reduce(function (s, x) { return s + U.n(x.price); }, 0)),
+      'across ' + priced.length + ' priced bid' + (priced.length === 1 ? '' : 's'));
 
     // js/nav.js draws these from viewCount whenever it renders the strip; this
     // keeps them current after a mutation that does not re-render it.
@@ -478,17 +669,130 @@
     if (rec) rec.textContent = b.length;
   }
 
+  /* The year as one strip of bars.
+
+     It was twelve cards, of which ten read 0 - a third of the fold spent
+     saying nothing happened. A bar carries the same number and its size at the
+     same time, so the shape of the year is readable without doing arithmetic
+     across twelve tiles. It is still the month filter: clicking one narrows
+     All Bids, which is the only thing the cards were really for. */
+  var BAR_MAX_PX = 104;
+
   function renderMonthGrid() {
     var host = U.$('monthGrid');
     if (!host) return;
     var counts = new Array(12).fill(0);
     bids().forEach(function (b) { if (b.month >= 0 && b.month < 12) counts[b.month]++; });
+    var max = Math.max.apply(null, counts) || 1;
+    var thisMonth = new Date().getMonth();
+
     host.innerHTML = monthNames.map(function (name, i) {
-      return '<div onclick="Bids.selectMonth(' + i + ')" class="month-card ' +
-        (selectedMonth === i ? 'active' : '') + ' bg-white rounded-lg p-3 text-center border border-slate-200 shadow-sm">' +
-        '<p class="text-xs font-semibold text-slate-500 uppercase">' + name + '</p>' +
-        '<p class="text-xl font-bold ' + (counts[i] > 0 ? 'text-blue-600' : 'text-slate-300') + '">' + counts[i] + '</p>' +
-        '<p class="text-[10px] text-slate-400">bids</p></div>';
+      var on = selectedMonth === i;
+      // An empty month still gets a sliver, so the baseline reads as a row of
+      // months rather than as gaps where months should be.
+      var h = counts[i] ? Math.max(6, Math.round(BAR_MAX_PX * counts[i] / max)) : 3;
+      var bar = on ? 'bg-brand'
+        : counts[i] ? 'bg-brand/45 group-hover:bg-brand/70'
+        : 'bg-line group-hover:bg-line-strong';
+      return '<button onclick="Bids.selectMonth(' + i + ')" ' +
+        'title="' + counts[i] + ' bid' + (counts[i] === 1 ? '' : 's') + ' in ' + name + '" ' +
+        'class="group flex-1 h-full flex flex-col items-center justify-end gap-1.5 min-w-0">' +
+        '<span class="text-2xs font-semibold tabular-nums ' +
+          (counts[i] ? (on ? 'text-brand-ink' : 'text-muted') : 'text-transparent') + '">' +
+          (counts[i] || 0) + '</span>' +
+        '<span class="w-full rounded-t transition-colors ' + bar + '" ' +
+          'style="height:' + h + 'px"></span>' +
+        '<span class="text-3xs uppercase tracking-wider ' +
+          (on ? 'text-brand-ink font-bold'
+              : i === thisMonth ? 'text-ink font-semibold' : 'text-faint') + '">' +
+          name + '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  /* ---- needs attention -------------------------------------------------- */
+
+  /* The one part of the dashboard that is about what to do next rather than
+     what already happened, so it sits at the top beside the month strip.
+
+     Both lists are derived from the bids themselves - there is no new field and
+     nothing to keep in step. A row opens the project, which is where you would
+     go next anyway. */
+  function attentionGroups() {
+    var open = bids().filter(function (b) { return bucketOf(b) === 'open'; });
+
+    /* Completed is in the open bucket - the work is done but the bid has not
+       been decided - so without this a finished job goes on reporting itself as
+       overdue for the rest of the week. A panel that cries wolf is a panel
+       nobody reads. Submitted to review stays: it is still out there, and its
+       deadline is still real. */
+    var due = open.filter(function (b) { return b.status !== 'Completed'; })
+      .map(function (b) { return { bid: b, days: daysUntil(effectiveDueDate(b)) }; })
+      .filter(function (x) { return x.days !== null && x.days <= 7; })
+      .sort(function (a, c) { return a.days - c.days; });
+
+    // Submitted or finished, but the client-facing document was never produced.
+    var noProposal = open.filter(function (b) {
+      return (b.status === 'Submitted to review' || b.status === 'Completed') && !b.proposalId;
+    });
+
+    return [
+      // The icon colour is written out in full, not assembled from a tone name:
+      // the stylesheet only ships classes the compiler can see in the source,
+      // and 'text-' + tone is not one of them.
+      { key: 'due', icon: 'fa-clock', label: 'Due within 7 days', tint: 'text-warn',
+        rows: due.map(function (x) {
+          return {
+            bid: x.bid,
+            meta: x.days < 0 ? Math.abs(x.days) + 'd overdue'
+                : x.days === 0 ? 'today'
+                : 'in ' + x.days + 'd',
+            urgent: x.days <= 0
+          };
+        }) },
+      { key: 'noproposal', icon: 'fa-file-circle-xmark', label: 'No proposal generated', tint: 'text-info',
+        rows: noProposal.map(function (b) {
+          return { bid: b, meta: b.status, urgent: false };
+        }) }
+    ];
+  }
+
+  function renderAttention() {
+    var host = U.$('attentionList');
+    if (!host) return;
+    var groups = attentionGroups().filter(function (g) { return g.rows.length; });
+
+    if (!groups.length) {
+      host.innerHTML =
+        '<div class="text-center py-8">' +
+          '<i class="fas fa-circle-check text-2xl text-ok mb-2 block"></i>' +
+          '<p class="text-sm text-muted">Nothing due this week, and every submitted ' +
+          'bid has its proposal.</p>' +
+        '</div>';
+      return;
+    }
+
+    /* Every row, not the first four. The panel is the one part of the dashboard
+       that is a to-do list, and a to-do list that hides its tail is worse than
+       none: the count said 8 while four were reachable. The card scrolls
+       instead - see #attentionList in the page. */
+    host.innerHTML = groups.map(function (g) {
+      return '<div>' +
+        '<div class="flex items-center gap-2 text-3xs font-bold uppercase tracking-wider ' +
+          'text-muted mb-1.5">' +
+          '<i class="fas ' + g.icon + ' ' + g.tint + '"></i>' + U.esc(g.label) +
+          '<span class="ml-auto tabular-nums">' + g.rows.length + '</span></div>' +
+        g.rows.map(function (r) {
+          return '<button onclick="Project.open(' + r.bid.id + ')" ' +
+            'class="w-full text-left flex items-baseline gap-2 px-2 py-1.5 rounded-lg ' +
+            'hover:bg-raised transition">' +
+            '<span class="flex-1 truncate text-xs text-ink">' +
+              U.esc(r.bid.project || 'Untitled project') + '</span>' +
+            '<span class="text-3xs whitespace-nowrap ' +
+              (r.urgent ? 'text-danger font-semibold' : 'text-muted') + '">' +
+              U.esc(r.meta) + '</span></button>';
+        }).join('') +
+      '</div>';
     }).join('');
   }
 
@@ -596,6 +900,9 @@
 
   /* ---- analytics ------------------------------------------------------- */
 
+  /* The Monthly Bid Volume bar chart used to sit here as well, showing exactly
+     what the month strip above it shows - the same twelve numbers, twice, in
+     half the page. The strip won because it is also the month filter. */
   function renderCharts() {
     if (!root.Chart) return;
     // Chart.js keeps a registry per canvas; without destroying first, repeated
@@ -605,24 +912,24 @@
     });
 
     var b = bids();
-    var palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-      '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1'];
 
-    var monthCounts = new Array(12).fill(0);
-    b.forEach(function (x) { if (x.month >= 0 && x.month < 12) monthCounts[x.month]++; });
-    charts.month = new root.Chart(U.$('monthChart'), {
-      type: 'bar',
-      data: {
-        labels: monthNames,
-        datasets: [{ label: 'Bids', data: monthCounts, backgroundColor: '#3b82f6', borderRadius: 4 }]
-      },
-      options: { responsive: true, plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    // Status is the one breakdown that already has colours: the badges in the
+    // table. Reusing them means a slice and its pill are the same colour, which
+    // they were not before - the pie was on Chart.js's defaults.
+    charts.status = pie('statusChart', tally(b, 'status'), function (pairs) {
+      return pairs.map(function (p) { return root.UI.statusColor(p[0]); });
     });
 
-    charts.status = pie('statusChart', tally(b, 'status'), palette);
-    charts.material = pie('materialChart', tally(b, 'material'), palette);
-    charts.region = pie('regionChart', tally(b, 'region', 8), palette);
+    // The other two have no inherent colour, so they take the shared
+    // categorical order - which means the same slice position is the same
+    // colour on both, and both match the rest of the app.
+    charts.material = pie('materialChart', tally(b, 'material'), categorical);
+    charts.region = pie('regionChart', tally(b, 'region', 6), categorical);
+  }
+
+  function categorical(pairs) {
+    var palette = root.UI.chartColors();
+    return pairs.map(function (_, i) { return palette[i % palette.length]; });
   }
 
   function tally(list, field, limit) {
@@ -641,18 +948,41 @@
     return pairs;
   }
 
-  function pie(canvasId, pairs, palette) {
+  function pie(canvasId, pairs, colorsFor) {
     var el = U.$(canvasId);
     if (!el) return null;
     return new root.Chart(el, {
       type: 'doughnut',
       data: {
         labels: pairs.map(function (p) { return p[0]; }),
-        datasets: [{ data: pairs.map(function (p) { return p[1]; }), backgroundColor: palette }]
+        datasets: [{
+          data: pairs.map(function (p) { return p[1]; }),
+          backgroundColor: colorsFor(pairs),
+          // The ring is cut out of the card, not drawn on white, so the gap
+          // between slices has to be the card's own colour or every doughnut
+          // gets a white halo in the dark theme.
+          borderColor: root.UI.color('surface'),
+          borderWidth: 2
+        }]
       },
       options: {
         responsive: true,
-        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } }
+        // The container sets the height. Left to itself the doughnut grew to
+        // whatever width it was given and pushed everything below the fold.
+        maintainAspectRatio: false,
+        cutout: '58%',
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: {
+              boxWidth: 10, boxHeight: 10, padding: 10, usePointStyle: true,
+              // Legend text is chrome, so it follows the theme like the rest of
+              // it rather than staying near-black on a dark card.
+              color: root.UI.color('muted'),
+              font: { size: 11, family: 'Inter' }
+            }
+          }
+        }
       }
     });
   }
@@ -665,29 +995,92 @@
     ['mRegion', 'filterRegion'].forEach(function (id) {
       var sel = U.$(id);
       if (!sel) return;
+      var form = id === 'mRegion';
       var cur = sel.value;
-      sel.innerHTML = id === 'mRegion' ? '<option value="">Select Region</option>' : '<option value="">All Regions</option>';
+      sel.innerHTML = form ? '<option value="">Select Region</option>' : '<option value="">All Regions</option>';
       sorted.forEach(function (r) {
         var o = document.createElement('option');
         o.value = r; o.textContent = r;
         sel.appendChild(o);
       });
+      /* Only on the form. A filter is a question about the bids that exist, and
+         inventing a region nothing is filed under would only ever empty the
+         table - see onRegionChange for what this sentinel does. */
+      if (form) {
+        var add = document.createElement('option');
+        add.value = '__add';
+        add.textContent = '+ Add new region...';
+        sel.appendChild(add);
+      }
       if (cur) sel.value = cur;
+      // What to put back if the "+ Add new" prompt is cancelled: the browser
+      // has already moved the select to the sentinel by the time onchange runs.
+      if (form) sel.dataset.prev = sel.value === '__add' ? '' : sel.value;
     });
   }
 
+  /* Intercepts the "+ Add new" sentinel on the form's region select.
+   *
+   * A county missing from the list used to mean abandoning a half-filled bid
+   * form, going to Settings > Regions to add it, and starting again - so the
+   * list gets a one-off typed into some other field instead, or the bid gets
+   * filed under the wrong county because that one was in the list.
+   *
+   * Deliberately the same bargain the Product picker makes (see
+   * onProductChange): what you type joins the shared list for everybody, rather
+   * than being a value only this bid has. */
+  function onRegionChange(sel) {
+    var prev = sel.dataset.prev || '';
+    if (sel.value !== '__add') { sel.dataset.prev = sel.value; return; }
+
+    var name = (prompt('Name for the new region or county:', '') || '').trim();
+    // Cancelled, or nothing typed: put back whatever was chosen before rather
+    // than leaving the form sitting on the sentinel.
+    if (!name) { sel.value = prev; return; }
+
+    var d = db();
+    var existing = d.regions.filter(function (r) {
+      return r.toLowerCase() === name.toLowerCase();
+    })[0];
+    if (existing) {
+      // "beachwood, oh" and "Beachwood, OH" are one county to everybody except
+      // a string compare, and two entries in the list is how the filter ends up
+      // splitting one county's bids across two rows.
+      populateRegionSelects();
+      sel.value = existing;
+      sel.dataset.prev = existing;
+      U.toast('"' + existing + '" was already in the list - selected it.', 'warn');
+      return;
+    }
+
+    d.regions.push(name);
+    root.Store.save();
+    renderRegionList();
+    populateRegionSelects();
+    sel.value = name;
+    sel.dataset.prev = name;
+    U.toast('"' + name + '" added to the region list.', 'ok');
+  }
+
   /* The host only exists while the Settings > Regions panel is showing, and
-     these are called from mutations that can happen from elsewhere. */
+     these are called from mutations that can happen from elsewhere.
+
+     Editable in place, like the Task Types and Materials lists - a county typed
+     wrong is otherwise only fixable by deleting it, which orphans the value on
+     every bid already filed under it. */
   function renderRegionList() {
     var d = db();
     var host = U.$('regionList');
     if (!host) return;
     host.innerHTML = d.regions.slice().sort().map(function (r) {
       var used = d.bids.filter(function (b) { return b.region === r; }).length;
-      return '<div class="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-lg">' +
-        '<span class="text-sm text-slate-700">' + U.esc(r) +
-          (used ? ' <span class="text-xs text-slate-400">(' + used + ')</span>' : '') + '</span>' +
-        '<button onclick="Bids.removeRegion(\'' + U.escAttr(r).replace(/'/g, "\\'") + '\')" class="text-red-500 hover:text-red-700 text-xs"><i class="fas fa-trash"></i></button></div>';
+      var arg = U.escAttr(r).replace(/'/g, "\\'");
+      return '<div class="flex items-center gap-2 px-3 py-2 bg-raised rounded-lg">' +
+        '<input value="' + U.escAttr(r) + '" onchange="Bids.renameRegion(\'' + arg + '\',this.value)" ' +
+          'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm outline-none focus:border-brand">' +
+        '<span class="text-xs text-faint w-16 text-right">' +
+          (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
+        '<button onclick="Bids.removeRegion(\'' + arg + '\')" class="text-danger hover:text-danger-ink text-xs"><i class="fas fa-trash"></i></button></div>';
     }).join('');
   }
 
@@ -698,10 +1091,24 @@
   function renderAwardNoHint(b) {
     var host = U.$('awardNoHint');
     if (!host) return;
-    host.innerHTML = b && b.awardNo
-      ? '<span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700 font-mono font-semibold text-sm">' +
-        U.esc(b.awardNo) + '</span>'
-      : '<span class="text-slate-400 text-xs">Issued on award</span>';
+    // One number for the project's life: what is shown here is the number it was
+    // given when it was picked up, confirmed as the job number on award.
+    host.innerHTML = b && b.awardedAt && b.proposalNo
+      ? '<span class="px-2 py-1 rounded bg-ok-soft text-ok-ink font-mono font-semibold text-sm">' +
+        U.esc(b.proposalNo) + '</span>'
+      : '<span class="text-faint text-xs">Confirmed on award</span>';
+  }
+
+  /* Says plainly which date is now in force, because a second date box next to
+     the first invites the reading that the original still governs. */
+  function renderRevisedDueHint(b) {
+    var host = U.$('revisedDueHint');
+    if (!host) return;
+    var revised = b && String(b.revisedDueDate || '').trim();
+    host.innerHTML = revised
+      ? '<span class="text-warn-ink">Due ' + U.esc(U.date(revised)) +
+        ', was ' + U.esc(U.date(b.dueDate)) + '</span>'
+      : 'Overrides the due date if set';
   }
 
   /* An active bid's real hours are on its Team & Hours card, not in this form.
@@ -713,10 +1120,10 @@
     if (!b || !b.active) { host.innerHTML = ''; return; }
     var t = root.Assign.totals(b);
     host.innerHTML = t.count
-      ? 'Team hours: <span class="font-mono font-semibold text-slate-700">' + U.qty(t.est) +
-        '</span> estm &middot; <span class="font-mono font-semibold text-slate-700">' + U.qty(t.asgn) +
+      ? 'Team hours: <span class="font-mono font-semibold text-ink">' + U.qty(t.est) +
+        '</span> estm &middot; <span class="font-mono font-semibold text-ink">' + U.qty(t.asgn) +
         '</span> asgn &mdash; edit on the project page'
-      : '<span class="text-slate-400">No team hours yet &mdash; add them on the project page</span>';
+      : '<span class="text-faint">No team hours yet &mdash; add them on the project page</span>';
   }
 
   /* Awarded and Lost are outcomes of the Award/Lost decision, not values you
@@ -750,10 +1157,12 @@
     U.$('bidForm').reset();
     setProducts([]);             // after reset(), which would clear the picker
     U.setDateField('mDueDate', '');
+    U.setDateField('mRevisedDueDate', '');
+    renderRevisedDueHint(null);
     U.$('editId').value = '';
     populateStatusSelect(null);
     showProposalNoBlock(null);
-    U.$('mProposalNo').classList.remove('border-red-400', 'bg-red-50');
+    U.$('mProposalNo').classList.remove('border-danger', 'bg-danger-soft');
     renderAwardNoHint(null);
     renderTeamHrsHint(null);
     U.$('bidModal').classList.remove('hidden');
@@ -766,7 +1175,7 @@
     U.$('modalTitle').textContent = 'Edit Bid';
     U.$('editId').value = b.id;
     U.$('mProposalNo').value = b.proposalNo || '';
-    U.$('mProposalNo').classList.remove('border-red-400', 'bg-red-50');
+    U.$('mProposalNo').classList.remove('border-danger', 'bg-danger-soft');
     showProposalNoBlock(b);
     renderAwardNoHint(b);
     renderTeamHrsHint(b);
@@ -780,6 +1189,8 @@
     U.$('mAssignedHrs').value = b.assignedHrs == null ? '' : b.assignedHrs;
     U.$('mEstHrs').value = b.estHrs == null ? '' : b.estHrs;
     U.setDateField('mDueDate', b.dueDate);
+    U.setDateField('mRevisedDueDate', b.revisedDueDate);
+    renderRevisedDueHint(b);
     populateStatusSelect(b.status || 'Not Started');
     U.$('mLink').value = b.link || '';
     U.$('mComments').value = b.comments || '';
@@ -812,14 +1223,14 @@
           // Values carried over from before the managed list get a muted style
           // so it is obvious they are one-offs rather than list entries.
           var legacy = known.indexOf(p) < 0;
-          return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ' +
-            (legacy ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-blue-50 text-blue-700') +
+          return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium ' +
+            (legacy ? 'bg-warn-soft text-warn-ink border border-warn/30' : 'bg-brand-soft text-brand-ink') +
             '" title="' + U.escAttr(p) + (legacy ? ' (entry from before the product list)' : '') + '">' +
             '<span class="max-w-[150px] truncate">' + U.esc(p) + '</span>' +
             '<button type="button" onclick="Bids.removeProduct(' + i + ')" ' +
-            'class="hover:text-red-600 leading-none" aria-label="Remove">&times;</button></span>';
+            'class="hover:text-danger leading-none" aria-label="Remove">&times;</button></span>';
         }).join('')
-      : '<span class="text-[11px] text-slate-400">No products selected</span>';
+      : '<span class="text-2xs text-faint">No products selected</span>';
 
     var available = known.filter(function (p) { return pickedProducts.indexOf(p) < 0; });
     sel.innerHTML = '<option value="">+ Add product...</option>' +
@@ -914,12 +1325,12 @@
     if (e) {
       input.value = e.initials;   // normalise casing to the register's
       hint.innerHTML = e.name
-        ? '<span class="text-slate-500">' + U.esc(e.name) + '</span>'
-        : '<span class="text-slate-400">In the register</span>';
+        ? '<span class="text-muted">' + U.esc(e.name) + '</span>'
+        : '<span class="text-faint">In the register</span>';
       return;
     }
     hint.innerHTML = '<button type="button" onclick="Bids.addEngineerFromForm()" ' +
-      'class="text-blue-600 hover:text-blue-800 font-medium">' +
+      'class="text-brand hover:text-brand-ink font-medium">' +
       '<i class="fas fa-plus mr-1"></i>Add "' + U.esc(v) + '" to engineers</button>';
   }
 
@@ -937,6 +1348,52 @@
     return rec;
   }
 
+  /* THE PICKER. A swatch that opens a strip of fourteen inside the row it
+     belongs to, rather than a floating palette: a popover has to be positioned,
+     dismissed and kept on screen, and this list already scrolls inside a box.
+     Drawn here so Settings > People and the Engineers register offer exactly
+     the same control.
+
+     `Auto` is not "no colour" - it is the ordinal colour the person already
+     had, which is why it shows their current swatch rather than a blank. */
+  function colorPicker(engId, current, host) {
+    var strip = '';
+    for (var n = 1; n <= PALETTE; n++) {
+      strip += '<button type="button" class="pal-swatch pal-' + n +
+        (current === n ? ' is-on' : '') + '" title="Colour ' + n + '" ' +
+        'aria-label="Colour ' + n + '" ' +
+        'onclick="event.stopPropagation();Bids.setEngineerColor(\'' + engId + '\',' + n + ')"></button>';
+    }
+    return '<div id="' + host + '" class="hidden basis-full flex flex-wrap items-center gap-1.5 pt-2 mt-1 border-t border-line">' +
+      '<span class="text-3xs font-bold uppercase tracking-wider text-muted mr-1">Colour</span>' +
+      strip +
+      '<button type="button" onclick="event.stopPropagation();Bids.setEngineerColor(\'' + engId + '\',0)" ' +
+        'class="ml-1 px-2 py-1 rounded text-3xs font-semibold text-muted hover:bg-line" ' +
+        'title="Back to the colour this person was given automatically">Auto</button>' +
+    '</div>';
+  }
+
+  /* Which strips are open, remembered across the repaint that picking a colour
+     causes - otherwise the palette shuts the instant you use it, and trying a
+     second colour means finding the swatch again. */
+  var openPickers = {};
+
+  function toggleColorPicker(hostId) {
+    var el = U.$(hostId);
+    if (!el) return;
+    el.classList.toggle('hidden');
+    if (el.classList.contains('hidden')) delete openPickers[hostId];
+    else openPickers[hostId] = true;
+  }
+
+  function reopenPickers() {
+    Object.keys(openPickers).forEach(function (id) {
+      var el = U.$(id);
+      if (el) el.classList.remove('hidden');
+      else delete openPickers[id];
+    });
+  }
+
   function renderEngineerList() {
     var d = db();
     var host = U.$('engineerList');
@@ -948,23 +1405,28 @@
       var used = d.bids.filter(function (b) {
         return (b.engineer || '').toLowerCase() === e.initials.toLowerCase();
       }).length;
-      return '<div class="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg">' +
+      return '<div class="flex flex-wrap items-center gap-2 px-3 py-2 bg-raised rounded-lg">' +
+        '<button type="button" onclick="Bids.toggleColorPicker(\'palEng-' + e.id + '\')" ' +
+          'title="Choose this person\'s colour" ' +
+          'class="person-chip pal-' + colorOf(e) + ' w-8 h-8 rounded-lg text-3xs shrink-0">' +
+          U.esc(e.initials) + '</button>' +
         '<input value="' + U.escAttr(e.initials) + '" onchange="Bids.updateEngineer(\'' + e.id + '\',\'initials\',this.value)" ' +
-          'class="w-20 px-2 py-1 bg-white border border-slate-200 rounded text-sm font-semibold uppercase outline-none focus:border-blue-400">' +
+          'class="w-20 px-2 py-1 bg-surface border border-line rounded text-sm font-semibold uppercase outline-none focus:border-brand">' +
         '<input value="' + U.escAttr(e.name) + '" placeholder="Full name (optional)" ' +
           'onchange="Bids.updateEngineer(\'' + e.id + '\',\'name\',this.value)" ' +
-          'class="flex-1 px-2 py-1 bg-white border border-slate-200 rounded text-sm outline-none focus:border-blue-400">' +
+          'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm outline-none focus:border-brand">' +
         // An entry that belongs to an account is not free-standing: renaming
         // the initials here moves the link with it, and deleting it would
         // orphan somebody who can still sign in.
         (e.userId
           ? '<span title="Has an account - manage it under Settings &rsaquo; People" ' +
-            'class="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">' +
+            'class="text-3xs font-bold uppercase tracking-wider text-brand bg-brand-soft px-1.5 py-0.5 rounded">' +
             'account</span>'
           : '') +
-        '<span class="text-xs text-slate-400 w-16 text-right">' + (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
-        '<button onclick="Bids.removeEngineer(\'' + e.id + '\')" class="text-red-500 hover:text-red-700 text-xs"><i class="fas fa-trash"></i></button></div>';
-    }).join('') : '<p class="text-sm text-slate-400 text-center py-6">No engineers yet.</p>';
+        '<span class="text-xs text-faint w-16 text-right">' + (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
+        '<button onclick="Bids.removeEngineer(\'' + e.id + '\')" class="text-danger hover:text-danger-ink text-xs"><i class="fas fa-trash"></i></button>' +
+        colorPicker(e.id, U.n(e.color), 'palEng-' + e.id) + '</div>';
+    }).join('') : '<p class="text-sm text-faint text-center py-6">No engineers yet.</p>';
   }
 
   /* The proposal number belongs to the bid and flows outward from it, so there
@@ -976,6 +1438,11 @@
     if (t) t.project.proposalNo = bid.proposalNo || '';
     var p = bid.proposalId ? d.proposals[bid.proposalId] : null;
     if (p) p.proposalData.proposalNo = bid.proposalNo || '';
+    // awardNo is a mirror of the project number on a won job, kept only for the
+    // server's unique index and the export. It has to follow the number here
+    // too, or editing the number on an awarded bid leaves the two disagreeing
+    // about what the job is called.
+    if (bid.awardedAt) bid.awardNo = bid.proposalNo || null;
   }
 
   /* The proposal number is what identifies a project everywhere it appears -
@@ -991,6 +1458,101 @@
     })[0] || null;
   }
 
+  /* THE FORM AND THE CARD, KEPT IN STEP.
+
+     The bid form is the quick intake path: a list of products and one material,
+     which is all you know when an enquiry lands. The Products & Materials card
+     on the project page is the full picture - each product with its own
+     materials. Both write the same record, so saving the form has to fold its
+     two flat fields back into the rows without throwing away pairings the card
+     has since been used to make.
+
+     So: a product the form still lists keeps the materials its row already has.
+     A product the form has added gets the form's material. A product the form
+     has removed loses its row. Only then are the flat fields rewritten from the
+     rows, by Products.sync, which is what the grid columns read. */
+  function reconcileProductLines(bid) {
+    var existing = {};
+    root.Products.rows(bid).forEach(function (r) { existing[r.product] = r; });
+
+    var formMaterial = String(bid.material || '').trim();
+    bid.productLines = (bid.products || []).filter(Boolean).map(function (p) {
+      if (existing[p]) {
+        var row = existing[p];
+        // A row with no material yet takes whatever the form was set to; one
+        // that already has materials is left alone, because the card is where
+        // that detail was entered and the form cannot express it.
+        if (formMaterial && !root.Products.materialsOf(row).length) {
+          row.materials = [formMaterial];
+        }
+        return row;
+      }
+      return { id: root.Store.uid('pl'), product: p,
+               materials: formMaterial ? [formMaterial] : [] };
+    });
+    root.Products.sync(bid);
+  }
+
+  /* ---- editing one field, in place -------------------------------------- */
+
+  /* The commit half of UI.editableField.
+   *
+   * Every rule the Add/Edit form applies has to apply here too, or the quick
+   * path becomes the way round the validation: a duplicate proposal number, a
+   * date that does not exist, a month that no longer matches its due date. So
+   * this reuses the same helpers - proposalNoOwner, U.inputToDate,
+   * effectiveDueDate - rather than a second, laxer set.
+   *
+   * `host` is the element being edited. On a refusal it is put back exactly as
+   * it was, because the alternative is silently discarding what was typed.
+   */
+  function saveField(bidId, field, raw, type, host) {
+    var bid = bids().filter(function (x) { return x.id === bidId; })[0];
+    if (!bid) return;
+
+    function refuse(message) {
+      if (host && host.dataset.original !== undefined) host.innerHTML = host.dataset.original;
+      U.toast(message, 'err');
+    }
+
+    var value = String(raw == null ? '' : raw).trim();
+
+    if (type === 'date') {
+      var iso = U.inputToDate(value);
+      if (iso === null) { refuse('That date must be MM-DD-YYYY and a real date.'); return; }
+      value = iso;
+    } else if (type === 'number') {
+      value = value === '' ? null : Number(value);
+      if (value !== null && isNaN(value)) { refuse('That has to be a number.'); return; }
+    }
+
+    if (field === 'proposalNo') {
+      var clash = proposalNoOwner(value, bid.id);
+      if (clash) {
+        refuse('Proposal No. "' + value + '" is already on "' +
+          (clash.project || 'another bid') + '". It has to be unique.');
+        return;
+      }
+    }
+
+    if (field === 'project' && !value) { refuse('A project needs a name.'); return; }
+
+    root.History.track(bid, function () {
+      bid[field] = value;
+
+      // Two fields have consequences beyond themselves.
+      if (field === 'proposalNo') pushProposalNo(bid);
+      if (field === 'dueDate' || field === 'revisedDueDate') {
+        var effective = effectiveDueDate(bid);
+        bid.month = effective ? U.parseDate(effective).getMonth() : bid.month;
+      }
+    });
+
+    root.Store.save();
+    refresh();
+    repaintProject();
+  }
+
   function saveBid(e) {
     e.preventDefault();
     var d = db();
@@ -998,23 +1560,47 @@
     var typed = U.$('mDueDate').value.trim();
     var due = U.readDateField('mDueDate');
     if (typed && !due) {
-      U.$('mDueDate').classList.add('border-red-400', 'bg-red-50');
+      U.$('mDueDate').classList.add('border-danger', 'bg-danger-soft');
       U.$('mDueDate').focus();
       U.toast('Due date must be MM-DD-YYYY and a real date.', 'err');
       return;
     }
 
+    // The revised date is optional, but if something has been typed into it, it
+    // has to be a date - silently storing '' would look like it had been saved.
+    var typedRev = U.$('mRevisedDueDate').value.trim();
+    var revised = U.readDateField('mRevisedDueDate');
+    if (typedRev && !revised) {
+      U.$('mRevisedDueDate').classList.add('border-danger', 'bg-danger-soft');
+      U.$('mRevisedDueDate').focus();
+      U.toast('Revised due date must be MM-DD-YYYY and a real date.', 'err');
+      return;
+    }
+    U.$('mRevisedDueDate').classList.remove('border-danger', 'bg-danger-soft');
+
     var pnField = U.$('mProposalNo');
     var clash = proposalNoOwner(pnField.value, id ? Number(id) : null);
     if (clash) {
-      pnField.classList.add('border-red-400', 'bg-red-50');
+      pnField.classList.add('border-danger', 'bg-danger-soft');
       pnField.focus();
       pnField.select();
       U.toast('Proposal No. "' + pnField.value.trim() + '" is already on "' +
         (clash.project || 'another bid') + '". It has to be unique.', 'err');
       return;
     }
-    pnField.classList.remove('border-red-400', 'bg-red-50');
+    pnField.classList.remove('border-danger', 'bg-danger-soft');
+
+    /* The "+ Add new region..." sentinel is a real, non-empty option value, so
+       the field's `required` would happily let it through and the bid would be
+       filed under a region called "__add". onRegionChange always puts the
+       select back, so this should be unreachable - which is exactly why it is
+       cheap to make certain of. */
+    var regionField = U.$('mRegion');
+    if (regionField.value === '__add') {
+      regionField.focus();
+      U.toast('Pick a region, or use "+ Add new region..." to create one.', 'err');
+      return;
+    }
 
     var rec = {
       proposalNo: pnField.value.trim(),
@@ -1028,16 +1614,27 @@
       assignedHrs: U.n(U.$('mAssignedHrs').value),
       estHrs: U.n(U.$('mEstHrs').value),
       dueDate: due,
+      revisedDueDate: revised,
       status: U.$('mStatus').value,
       link: U.$('mLink').value.trim(),
       comments: U.$('mComments').value.trim(),
-      priceLocked: U.$('mPriceLocked').checked,
-      month: due ? U.parseDate(due).getMonth() : new Date().getMonth()
+      priceLocked: U.$('mPriceLocked').checked
     };
+    // Filed under the month it is actually due, which is the revised date once
+    // there is one - otherwise moving a deadline into the next month would
+    // leave the bid sitting in the old one on the dashboard.
+    var effective = revised || due;
+    rec.month = effective ? U.parseDate(effective).getMonth() : new Date().getMonth();
     var saved;
     if (id) {
       var b = d.bids.filter(function (x) { return x.id === Number(id); })[0];
+      // Snapshot before the assign, diff after - see History.track. This is the
+      // whole form at once, so one Save that changed four fields is one entry
+      // naming all four rather than four separate ones.
+      var before = root.History.snapshot(b);
       Object.assign(b, rec);
+      reconcileProductLines(b);
+      root.History.recordEdit(b, root.History.diff(before, b));
       saved = b;
     } else {
       var nextId = d.bids.reduce(function (m, x) { return Math.max(m, x.id); }, 0) + 1;
@@ -1047,12 +1644,20 @@
       // it from every bid would buy nothing - but nothing reads it any more.
       saved = Object.assign({
         id: nextId, sr: nextSr, inRegion: true, lf: null, bidHrs: 0,
+        // When the enquiry arrived. A full timestamp, not a date: two bids
+        // entered on the same morning still have an order, and All Bids is
+        // read as an arrival log.
+        createdAt: new Date().toISOString(),
         takeoffId: null, proposalId: null, awardNo: null, awardedAt: null,
         // Add Bid is how a received bid gets entered - that is intake, not a
         // decision to work it. "Add to Active bid" is the decision.
         active: false, activatedAt: null, decidedAt: null
       }, rec);
       d.bids.push(saved);
+      reconcileProductLines(saved);
+      // One entry, not a diff against nothing. Stamped with createdAt so the
+      // log's first line and the Created column agree to the second.
+      root.History.recordCreated(saved);
     }
 
     // The form can no longer produce Awarded, but an imported file can, and a
@@ -1106,7 +1711,7 @@
         'Intake Est Hrs': b.estHrs, 'Intake Assigned Hrs': b.assignedHrs,
         'Team': root.Assign.engineerList(b).join('; '),
         'Team Est Hrs': t.est, 'Team Assigned Hrs': t.asgn,
-        'Due Date': b.dueDate, 'Status': b.status,
+        'Due Date': effectiveDueDate(b), 'Revised Due': b.revisedDueDate || '', 'Status': b.status,
         'Link': b.link, 'Comments': b.comments
       };
     })), 'Bids');
@@ -1167,9 +1772,30 @@
     filterTable();
     updateKPIs();
     renderMonthGrid();
+    renderAttention();
   }
 
   root.Bids = {
+    /* The revised due date is chosen against the one it replaces, so the
+       calendar opens with the original flagged rather than leaving somebody to
+       remember it. Everything else on the form opens the plain picker. */
+    openRevisedDuePicker: function () {
+      var original = U.inputToDate((U.$('mDueDate') || {}).value || '');
+      U.openDatePicker('mRevisedDueDate', {
+        mark: original || null,
+        markLabel: original ? 'The original due date, ' + U.date(original) : null,
+        // Opens on the month the original is in, since that is the date being
+        // moved - not on today, which may be months away from it.
+        startAt: original || null,
+        // The hint reads off the record's shape, and on the form the values are
+        // in the boxes rather than on a bid - so it is handed the two dates as
+        // they currently stand.
+        onPick: function (picked) {
+          renderRevisedDueHint({ dueDate: original, revisedDueDate: picked || '' });
+        }
+      });
+    },
+
     refresh: refresh,
     filterTable: filterTable,
     baseList: baseList,
@@ -1185,6 +1811,7 @@
     renderCharts: renderCharts,
     updateKPIs: updateKPIs,
     renderMonthGrid: renderMonthGrid,
+    renderAttention: renderAttention,
     populateRegionSelects: populateRegionSelects,
     // Drawn by js/settings.js, which supplies the hosts these write into.
     renderRegionList: renderRegionList,
@@ -1195,29 +1822,51 @@
     addEngineer: addEngineer,
     populateEngineerList: populateEngineerList,
 
+    /* One colour per person, drawn the same way wherever they are named - the
+       schedule, the bid tables, Settings and the who-is-here markers. */
+    PALETTE: PALETTE,
+    colorOf: colorOf,
+    colorClass: colorClass,
+    personChip: personChip,
+    setEngineerColor: setEngineerColor,
+    engineerForUser: engineerForUser,
+    colorPicker: colorPicker,
+    toggleColorPicker: toggleColorPicker,
+
     STATUSES: STATUSES,
     bucketOf: bucketOf,
     onActiveOf: onActiveOf,
+    /* The status table's row for one status key. js/ui.js reads the badge class
+       off it to colour the charts, so the pie and the pills cannot disagree. */
+    statusOf: statusOf,
     settableStatuses: settableStatuses,
 
-    nextAwardNo: nextAwardNo,
+    /* The project number: allocated once, when a bid is picked up. */
+    nextProjectNo: nextProjectNo,
+    issueProjectNo: issueProjectNo,
     applyAward: applyAward,
     applyLost: applyLost,
+    /* The date the project is working to - the revised one if there is one. */
+    effectiveDueDate: effectiveDueDate,
+    /* One field, edited in place on the project page - see UI.editableField. */
+    saveField: saveField,
     promptDecision: promptDecision,
     confirmDecision: confirmDecision,
     closeDecisionModal: function () { U.$('decisionModal').classList.add('hidden'); },
 
-    /* Opens the confirmation for one outcome, closing the menu it came from. */
-    decide: function (id, outcome) {
-      closeDecisionMenus();
-      promptDecision(id, outcome);
-    },
-    toggleDecisionMenu: function (ev, id) {
-      ev.stopPropagation();
-      var el = U.$('decide-' + id);
-      var wasOpen = el && !el.classList.contains('hidden');
-      closeDecisionMenus();
-      if (el && !wasOpen) el.classList.remove('hidden');
+    /* Opens the confirmation for one outcome. Whichever menu it was chosen from
+       has already closed itself - BidGrid.menuItem dismisses before it acts. */
+    decide: promptDecision,
+
+    /* What the row's overflow menu offers this person. Exposed because it is
+       where the per-role row actions actually live now - actionCell only draws
+       the two workflow buttons and the control that opens this. */
+    rowMenu: rowMenuItems,
+
+    /* The row's overflow menu, hung off the grid's one popover. */
+    openRowMenu: function (ev, id) {
+      var bid = bids().filter(function (x) { return x.id === id; })[0];
+      if (bid) root.BidGrid.openMenu(ev, rowMenuItems(bid));
     },
 
     /* Every route into Active Bids goes through requestAddToActive so none of
@@ -1326,6 +1975,7 @@
     },
     onEngineerChange: onEngineerChange,
 
+    onRegionChange: onRegionChange,
     openRegionModal: function () { root.App.switchTab('regions'); },
     closeRegionModal: function () { populateRegionSelects(); },
     addRegion: function () {
@@ -1340,6 +1990,45 @@
       renderRegionList();
       populateRegionSelects();
     },
+    /* A rename has to carry onto the bids using it, or those bids quietly lose
+       their region - the same rule task types and engineer initials follow.
+       Matched case-insensitively on purpose: correcting "beachwood, oh" to
+       "Beachwood, OH" is the case this exists for, and an exact compare would
+       leave those bids behind on a name no longer in the list. */
+    renameRegion: function (from, value) {
+      var d = db();
+      var to = String(value || '').trim();
+      var i = d.regions.indexOf(from);
+      if (i < 0) return;
+      // Cleared, or unchanged: put the old text back rather than leaving the
+      // input showing something the list does not hold.
+      if (!to) { renderRegionList(); return; }
+      if (to === from) return;
+
+      if (d.regions.some(function (r) {
+        return r !== from && r.toLowerCase() === to.toLowerCase();
+      })) {
+        U.toast('"' + to + '" is already in the list.', 'warn');
+        renderRegionList();
+        return;
+      }
+
+      // In place, by index: renderRegionList draws a sorted copy, so writing
+      // that back would reorder the stored list as a side effect of a rename.
+      d.regions[i] = to;
+      var moved = 0;
+      d.bids.forEach(function (b) {
+        if ((b.region || '').toLowerCase() === from.toLowerCase()) { b.region = to; moved++; }
+      });
+
+      root.Store.save();
+      renderRegionList();
+      populateRegionSelects();
+      // The filter select may have been sitting on the old name.
+      filterTable();
+      refresh();
+      U.toast(moved ? 'Renamed on ' + moved + ' bid' + (moved > 1 ? 's' : '') + '.' : 'Renamed.', 'ok');
+    },
     removeRegion: function (name) {
       var d = db();
       var used = d.bids.filter(function (b) { return b.region === name; }).length;
@@ -1353,5 +2042,7 @@
     exportXLSX: exportXLSX
   };
 
-  document.addEventListener('click', closeDecisionMenus);
+  // The row menus are the grid's popover now, and js/bidgrid.js already closes
+  // that on the next click anywhere and on any scroll - so there is nothing
+  // left for this file to dismiss.
 })(window);

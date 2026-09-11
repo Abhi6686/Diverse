@@ -5,6 +5,7 @@
  *   GET  /api/bootstrap        everything, plus the seq it is current as of
  *   POST /api/changes          a batch of edits, applied as one transaction
  *   GET  /api/changes?since=N  what was missed while disconnected
+ *   POST /api/records          the bodies too large to travel with their change
  *   GET  /api/stream           SSE: what other people are doing, live
  *   GET/PUT /api/prefs         one person's column layouts
  *
@@ -272,16 +273,70 @@ async function handle(req, res, ctx) {
       return true;
     }
 
+    /* "I am looking at this bid." Broadcast to everyone else on the stream so
+       two people on one project can see each other before they find out from
+       the change log.
+
+       A session is required and nothing more. It grants no access and reveals
+       nothing about the record - only that somebody has open a bid they were
+       already entitled to open. */
+    if (route === '/api/where' && req.method === 'POST') {
+      const body = (await readBody(req)) || {};
+      sync.setWhere(body.clientId, body.bidId == null ? null : {
+        bidId: body.bidId,
+        section: typeof body.section === 'string' ? body.section.slice(0, 40) : null
+      });
+      json(res, 200, { ok: true });
+      return true;
+    }
+
     if (route === '/api/changes' && req.method === 'GET') {
       const since = Number(url.searchParams.get('since') || 0);
-      const rows = db.changesSince(since, 5000);
+      const out = db.changesSince(since, 5000);
       json(res, 200, {
         seq: db.latestSeq(),
-        changes: rows.map(r => ({
+        /* The list is a prefix of the gap, not the whole of it - the client
+           must reload rather than apply it and believe it is caught up. */
+        truncated: out.truncated,
+        changes: out.rows.map(r => ({
           seq: r.seq, kind: r.kind, id: r.entity_id, op: r.op,
           json: r.json ? JSON.parse(r.json) : null, at: r.at, by: r.by
         }))
       });
+      return true;
+    }
+
+    /* The bodies the change log and the stream deliberately did not carry.
+     *
+     * A change to something large - a proposal, the rates list - is announced
+     * without its body, because copying a megabyte into the log on every
+     * autosave is what turned a 3MB dataset into a 107MB file. The client asks
+     * here for the records it was told about, in one request rather than one
+     * per record.
+     *
+     * What comes back is the record as it stands now, not as it stood at that
+     * seq. That is the right answer for a client catching up: it is about to
+     * step past every later seq anyway. A record that has since been deleted is
+     * simply absent - the delete is later in the same list. */
+    if (route === '/api/records' && req.method === 'POST') {
+      const body = (await readBody(req)) || {};
+      const want = Array.isArray(body) ? body : body.records;
+      if (!Array.isArray(want)) {
+        throw Object.assign(new Error('Expected an array of {kind, id}'), { status: 400 });
+      }
+      if (want.length > 500) {
+        throw Object.assign(new Error('Too many records in one request'), { status: 413 });
+      }
+      const records = [];
+      for (const w of want) {
+        if (!w || !schema.KINDS[w.kind] || w.id == null || w.id === '') continue;
+        const row = db.getOne(w.kind, w.id);
+        if (!row) continue;
+        try {
+          records.push({ kind: w.kind, id: row.id, json: JSON.parse(row.json), rev: row.rev });
+        } catch (e) { /* a corrupt row is a miss, not a failed request */ }
+      }
+      json(res, 200, { records: records });
       return true;
     }
 
@@ -311,12 +366,16 @@ async function handle(req, res, ctx) {
         throw e;
       }
 
-      // Tell everyone else, then answer the writer with the new revs.
+      /* Tell everyone else, then answer the writer with the new revs.
+         Large bodies are withheld on exactly the rule the log uses, so one
+         proposal save does not push a megabyte down every open stream in the
+         office; the client fetches those from /api/records. */
       const originId = body && body.clientId ? body.clientId : null;
       sync.broadcast(applied.map((a, i) => ({
         seq: a.seq, kind: a.kind, id: a.id,
         op: batch[i].op || 'put',
-        json: (batch[i].op === 'delete') ? null : batch[i].json,
+        json: (batch[i].op === 'delete' || !db.bodyTravels(batch[i].json))
+          ? null : batch[i].json,
         by: user.id,
         byName: user.name
       })), originId);

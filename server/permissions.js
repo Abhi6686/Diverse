@@ -28,6 +28,10 @@ const PERMISSIONS = [
   { key: 'bid.edit', group: 'Bids', label: 'Edit a bid' },
   { key: 'bid.award', group: 'Bids', label: 'Award a bid, or mark it lost' },
   { key: 'bid.delete', group: 'Bids', label: 'Delete a bid' },
+  /* Moving a bid BACK a stage is ordinary work covered by bid.edit - an award
+     gets rescinded, a bid gets picked up by mistake. Erasing the record that it
+     happened is not: the history is what the office is answerable to. */
+  { key: 'bid.history.delete', group: 'Bids', label: 'Delete an entry from a bid history' },
   { key: 'bid.export', group: 'Bids', label: 'Export the table to XLSX' },
   { key: 'takeoff.edit', group: 'Bids', label: 'Edit take-offs' },
   { key: 'proposal.edit', group: 'Bids', label: 'Edit proposals' },
@@ -51,6 +55,10 @@ const PERMISSIONS = [
 ];
 
 const ALL = PERMISSIONS.map(p => p.key);
+
+/* The shop-wide lists somebody working a bid may add to without being an
+   administrator. See requiredFor(). */
+const EXTENDABLE_LISTS = ['taskTypes', 'regions', 'productTypes', 'materials'];
 
 /* The two roles the first run creates. Employee is the access level marked on
    the screenshots: every page and action of Bid Management, nothing that
@@ -115,7 +123,11 @@ function requiredFor(item, existing) {
 
     case 'setting':
       if (op === 'delete') return 'settings.edit';
-      if ((item.id === 'taskTypes' || item.id === 'regions') &&
+      // The lists an estimator legitimately extends mid-bid: a task type on the
+      // Team & Hours card, a region on the bid form, a product or material on
+      // the Products & Materials card. Adding to one is ordinary work;
+      // reordering or removing entries is administering the shop's lists.
+      if (EXTENDABLE_LISTS.indexOf(item.id) >= 0 &&
           existing && onlyAdditions(existing, item.json)) {
         return 'list.extend';
       }

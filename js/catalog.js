@@ -31,6 +31,12 @@
           option: s.option || '', material: s.material || '',
           grade: s.grade || '', um: s.um || 'EA',
           unitCost: s.unitCost == null ? null : Number(s.unitCost),
+          // How much of the measured stuff comes in one purchased item - 21 LF
+          // to a stick, 100 EA to a packet. Seeded blank: the workbook the seed
+          // came from never recorded it, and a guessed stock length would price
+          // a job wrong more quietly than a blank one.
+          packQty: s.packQty == null ? null : Number(s.packQty),
+          packUm: s.packUm || '',
           weightPerUnit: s.weightPerUnit == null ? null : Number(s.weightPerUnit),
           sowTags: (s.sowTags || []).slice(),
           useCount: 1, lastUsedAt: null,
@@ -156,6 +162,8 @@
         option: row.option || '', material: row.material || '',
         grade: row.grade || '', um: row.um || 'EA',
         unitCost: cost,
+        packQty: row.packQty == null || row.packQty === '' ? null : Number(row.packQty),
+        packUm: row.packUm || '',
         weightPerUnit: row.weightLb && row.qty ? Number(row.weightLb) / Number(row.qty) : null,
         sowTags: productType ? [productType] : [],
         useCount: 1, lastUsedAt: now,
@@ -172,9 +180,16 @@
       existing.sowTags.push(productType);
     }
     // Keep the richest description/material we have seen.
-    ['description', 'feature', 'option', 'material', 'grade', 'um'].forEach(function (f) {
+    ['description', 'feature', 'option', 'material', 'grade', 'um', 'packUm'].forEach(function (f) {
       if (!existing[f] && row[f]) existing[f] = row[f];
     });
+    /* A stock size typed on a takeoff row is learned the same way a price is,
+       so it only has to be looked up on a vendor's site once. Unlike a price it
+       is not versioned - a stick of pipe does not become 19 feet long next
+       quarter - so a later, different number simply replaces it. */
+    if (row.packQty != null && row.packQty !== '' && Number(row.packQty) > 0) {
+      existing.packQty = Number(row.packQty);
+    }
 
     var prev = existing.unitCost;
     if (cost != null && prev !== cost) {
@@ -188,6 +203,21 @@
       };
     }
     return { action: 'used', item: existing };
+  }
+
+  /* Parts filed under a Feature name, matched the way a person matches two
+     headings rather than the way a string compare does.
+
+     This is the join between the two halves of the app: a drawing-takeoff
+     scope is called "Top Rail 1-1/2\" Pipe", and so is the part that gets
+     bought for it. Where exactly one part answers to the name, a scope can
+     arrive on the Materials tab already priced. Where several do, the caller
+     is expected to ask rather than guess - which is what the Vendor Part No
+     dropdown is for. */
+  function byFeature(name) {
+    var k = norm(name);
+    if (!k) return [];
+    return all().filter(function (c) { return norm(c.feature) === k; });
   }
 
   function findNearDuplicate(item) {
@@ -249,6 +279,7 @@
       id: root.Store.uid('cat'),
       vendor: '', partNo: '', description: '', feature: '', option: '',
       material: '', grade: '', um: 'EA', unitCost: null, weightPerUnit: null,
+      packQty: null, packUm: '',
       sowTags: [], useCount: 0, lastUsedAt: null, source: 'learned', priceHistory: []
     }, partial || {});
     db.catalog.push(item);
@@ -259,6 +290,12 @@
   function update(id, patch) {
     var item = find(id);
     if (!item) return null;
+    // Typed into a table cell, so it arrives as a string; every reader of
+    // packQty divides by it.
+    if (patch.packQty !== undefined) {
+      patch.packQty = patch.packQty === '' || patch.packQty == null
+        ? null : Number(patch.packQty);
+    }
     if (patch.unitCost !== undefined) {
       var cost = patch.unitCost === '' || patch.unitCost == null ? null : Number(patch.unitCost);
       if (cost !== item.unitCost && cost != null) {
@@ -282,7 +319,8 @@
   }
 
   var CSV_COLS = ['vendor', 'partNo', 'description', 'feature', 'option',
-    'material', 'grade', 'um', 'unitCost', 'weightPerUnit', 'sowTags'];
+    'material', 'grade', 'um', 'packQty', 'packUm', 'unitCost', 'weightPerUnit',
+    'sowTags'];
 
   function csvCell(v) {
     var s = v == null ? '' : String(v);
@@ -300,7 +338,8 @@
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'rate-library-' + new Date().toISOString().slice(0, 10) + '.csv';
+    // Dated in IST, so a export taken at 02:00 is not filed under yesterday.
+    a.download = 'rate-library-' + root.U.stampDate(new Date()) + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 0);
   }
@@ -333,6 +372,7 @@
       head.forEach(function (h, i) { rec[h] = (rows[r][i] || '').trim(); });
       if (!rec.description && !rec.partNo) continue;
       rec.unitCost = rec.unitCost === '' ? null : Number(rec.unitCost);
+      rec.packQty = rec.packQty === '' || rec.packQty == null ? null : Number(rec.packQty);
       rec.weightPerUnit = rec.weightPerUnit === '' ? null : Number(rec.weightPerUnit);
       rec.sowTags = rec.sowTags ? rec.sowTags.split(/\s*;\s*/).filter(Boolean) : [];
       var existing = map[keyOf(rec)];
@@ -346,6 +386,7 @@
   root.Catalog = {
     ensure: ensure, all: all, find: find, keyOf: keyOf,
     suggest: suggest, learn: learn, merge: merge, duplicates: duplicates,
+    byFeature: byFeature, norm: norm,
     create: create, update: update, remove: remove,
     exportCSV: exportCSV, importCSV: importCSV,
     fuzzyScore: fuzzyScore

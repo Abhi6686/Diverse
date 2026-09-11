@@ -101,8 +101,8 @@
   function tab(key, label, icon, on) {
     return '<button onclick="App.switchTab(\'' + key + '\')" ' +
       'class="px-4 py-2 rounded-lg text-sm whitespace-nowrap transition flex items-center gap-2 ' +
-      (on ? 'bg-blue-600 text-white font-semibold shadow-lg shadow-blue-900/30'
-          : 'text-slate-300 hover:text-white hover:bg-slate-700/60') + '">' +
+      (on ? 'bg-brand text-white font-semibold shadow-lg shadow-brand/25'
+          : 'text-faint hover:text-white hover:bg-chrome-soft/60') + '">' +
       '<i class="fas ' + icon + ' text-xs"></i>' + U.esc(label) + '</button>';
   }
 
@@ -110,11 +110,11 @@
     // The job number is a fact about work in progress, so it stays out of the
     // intake stage even on a bid that happens to have one.
     if (bid.awardNo && mode() !== 'all') {
-      return '<span class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[11px] font-mono font-semibold" ' +
+      return '<span class="px-2 py-0.5 rounded bg-ok/15 text-ok-ink text-2xs font-mono font-semibold" ' +
         'title="Job number, issued when the bid was awarded">' + U.esc(bid.awardNo) + '</span>';
     }
     if (bid.proposalNo) {
-      return '<span class="px-2 py-0.5 rounded bg-slate-700 text-slate-300 text-[11px] font-mono" ' +
+      return '<span class="px-2 py-0.5 rounded bg-chrome-soft text-faint text-2xs font-mono" ' +
         'title="Proposal number - unique to this project">' + U.esc(bid.proposalNo) + '</span>';
     }
     return '';
@@ -130,7 +130,7 @@
       host.innerHTML =
         '<div class="flex items-center gap-3">' +
           backButton() +
-          '<span class="text-sm text-slate-400">No project selected</span>' +
+          '<span class="text-sm text-faint">No project selected</span>' +
         '</div>' +
         '<div class="flex items-center gap-2">' +
           tab('takeoff', 'TakeOff', 'fa-calculator', section === 'takeoff') +
@@ -144,13 +144,16 @@
         backButton() +
         '<div class="min-w-0">' +
           '<div class="text-sm font-bold text-white truncate flex items-center gap-2">' +
-            U.esc(bid.project || 'Untitled project') + numberChip(bid) + '</div>' +
-          '<div class="text-[11px] text-slate-400 truncate flex items-center gap-2">' +
+            U.esc(bid.project || 'Untitled project') + numberChip(bid) +
+            // Who else has this open right now - see js/presence.js. Empty
+            // string when it is only you, or when there is no server.
+            (root.Presence ? root.Presence.headerChip(bid.id) : '') + '</div>' +
+          '<div class="text-2xs text-faint truncate flex items-center gap-2">' +
             U.esc(bid.region || 'No region') +
-            '<span class="text-slate-600">&middot;</span>' +
+            '<span class="text-muted">&middot;</span>' +
             U.esc(bid.portal || '-') +
-            '<span class="text-slate-600">&middot;</span>' +
-            '<span class="font-mono text-slate-300">' + U.currency(bid.price) + '</span>' +
+            '<span class="text-muted">&middot;</span>' +
+            '<span class="font-mono text-faint">' + U.currency(bid.price) + '</span>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -161,7 +164,7 @@
             tab('takeoff', 'TakeOff', 'fa-calculator', section === 'takeoff') +
             tab('proposal', 'Proposal', 'fa-file-contract', section === 'proposal') +
             decisionMenu(bid)) +
-        '<span id="saveIndicator" class="text-xs text-slate-400 ml-1"></span>' +
+        '<span id="saveIndicator" class="text-xs text-faint ml-1"></span>' +
       '</div>';
   }
 
@@ -170,18 +173,18 @@
   function promoteAction(bid) {
     if (bid.active && root.Bids.bucketOf(bid) === 'open') {
       return '<button onclick="Project.openInActive()" ' +
-        'class="px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-2">' +
+        'class="px-3 py-2 rounded-lg text-sm font-medium bg-brand hover:bg-brand-hover text-white flex items-center gap-2">' +
         '<i class="fas fa-bolt text-xs"></i>Open in Active Bids' +
-        '<i class="fas fa-arrow-up-right-from-square text-[10px] opacity-70"></i></button>';
+        '<i class="fas fa-arrow-up-right-from-square text-3xs opacity-70"></i></button>';
     }
     return '<button onclick="Project.addToActive()" ' +
-      'class="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-400 text-white flex items-center gap-2">' +
+      'class="px-3 py-2 rounded-lg text-sm font-medium bg-warn hover:bg-warn-hover text-white flex items-center gap-2">' +
       '<i class="fas fa-bolt text-xs"></i>Add to Active bid</button>';
   }
 
   function backButton() {
     return '<button onclick="Project.close()" title="Back to the bid list" ' +
-      'class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-medium flex items-center gap-2 shrink-0">' +
+      'class="px-2.5 py-1.5 bg-chrome-soft hover:bg-chrome-soft/70 text-white rounded-lg text-xs font-medium flex items-center gap-2 shrink-0">' +
       '<i class="fas fa-arrow-left"></i>Bids</button>';
   }
 
@@ -193,16 +196,16 @@
     if (!root.Auth.can('bid.award')) return '';
     return '<span class="relative inline-flex">' +
       '<button onclick="Project.toggleDecisionMenu(event)" title="Award or mark this bid lost" ' +
-        'class="px-3 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-2">' +
-        '<i class="fas fa-trophy text-xs"></i>Award<i class="fas fa-chevron-down text-[9px] opacity-70"></i></button>' +
-      '<span id="projectDecideMenu" class="hidden absolute right-0 top-11 z-30 bg-white border border-slate-200 rounded-lg shadow-xl py-1 w-44 text-left">' +
-        item('Awarded', 'fa-trophy', 'Award', 'text-emerald-700') +
-        item('Lost', 'fa-xmark', 'Mark Lost', 'text-red-600') +
+        'class="px-3 py-2 rounded-lg text-sm font-medium bg-ok hover:bg-ok-hover text-white flex items-center gap-2">' +
+        '<i class="fas fa-trophy text-xs"></i>Award<i class="fas fa-chevron-down text-3xs opacity-70"></i></button>' +
+      '<span id="projectDecideMenu" class="hidden absolute right-0 top-11 z-30 bg-surface border border-line rounded-lg shadow-xl py-1 w-44 text-left">' +
+        item('Awarded', 'fa-trophy', 'Award', 'text-ok-ink') +
+        item('Lost', 'fa-xmark', 'Mark Lost', 'text-danger') +
       '</span></span>';
 
     function item(outcome, icon, label, cls) {
       return '<button onclick="Project.decide(\'' + outcome + '\')" ' +
-        'class="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 ' + cls + '">' +
+        'class="w-full text-left px-3 py-2 text-xs hover:bg-raised ' + cls + '">' +
         '<i class="fas ' + icon + ' w-4 mr-1.5"></i>' + label + '</button>';
     }
   }
@@ -214,21 +217,16 @@
 
   /* ---- overview --------------------------------------------------------- */
 
+  /* The card shell and the labelled value both live in js/ui.js now - this page
+     is where they were first written, and Settings and the module placeholders
+     had each grown their own slightly different copy. Kept as local names so
+     the twenty call sites below read as they did. */
   function card(title, icon, body, action) {
-    return '<div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">' +
-      '<div class="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">' +
-        '<h3 class="text-sm font-bold text-slate-700 flex items-center gap-2">' +
-          '<i class="fas ' + icon + ' text-slate-400"></i>' + U.esc(title) + '</h3>' +
-        (action || '') +
-      '</div>' +
-      '<div class="p-5">' + body + '</div></div>';
+    return root.UI.card({ title: title, icon: icon, body: body, action: action });
   }
 
   function field(label, value) {
-    return '<div class="min-w-0">' +
-      '<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">' + U.esc(label) + '</div>' +
-      '<div class="text-sm text-slate-800 break-words">' + (value || '<span class="text-slate-300">&mdash;</span>') + '</div>' +
-    '</div>';
+    return root.UI.field(label, value);
   }
 
   /* Intake shows the first-pass guess; the working stages show what the team
@@ -246,28 +244,86 @@
     }
     var t = root.Assign.totals(bid);
     if (!t.count) {
-      return field('Hours', '<span class="text-slate-400 text-xs">Nobody booked yet</span>');
+      return field('Hours', '<span class="text-faint text-xs">Nobody booked yet</span>');
     }
     return field('Hours', pair(t.est, t.asgn));
   }
 
+  /* TWO DATES, EACH SHOWN AS ITSELF.
+
+     Due Date is the date the enquiry came in with. Revised Due is what the
+     client moved it to. Both are facts and both are kept, so each field shows
+     its own value plainly - the Due Date box is the due date, not a derived
+     "whichever is in force" with the original crossed out beside it. That
+     reading was wrong twice over: it put a value in the Due Date field that was
+     not bid.dueDate, and striking the original through said it had been
+     cancelled when it is the date on the record.
+
+     Which one the app WORKS to is a separate question, answered in one place by
+     Bids.effectiveDueDate - the revised one when there is one. That is what the
+     bids table sorts on, what the dashboard files the month by, what the
+     Needs-attention list counts down to, and what the Employee schedule flags.
+     A note under Revised Due says so, rather than leaving it to be inferred. */
+  function dueDateValue(bid) {
+    return bid.dueDate ? U.esc(U.date(bid.dueDate)) : '';
+  }
+
+  function revisedDueValue(bid) {
+    var revised = String(bid.revisedDueDate || '').trim();
+    if (!revised) return '';
+    return U.esc(U.date(revised)) +
+      '<span class="ml-2 text-2xs text-warn-ink">in force</span>';
+  }
+
+  /* WHAT IS EDITABLE HERE, AND WHAT IS NOT.
+
+     Anything somebody types is editable in place: double-click it and it
+     becomes the right control. Anything the app works out for itself is not -
+     the hours come from the Team & Hours rows, the products and materials from
+     the Products & Materials card, the linear feet from the takeoff. Making
+     those look editable would invite an edit the next recalculation silently
+     throws away.
+
+     Withheld entirely without bid.edit, so a read-only role does not get a
+     control that would be refused on save. */
+  function edit(label, display, spec) {
+    if (!root.Auth.can('bid.edit')) return field(label, display);
+    spec.bidId = currentBidId();
+    return root.UI.editableField(label, display, spec);
+  }
+
+  function currentBidId() {
+    var b = currentBid();
+    return b ? b.id : null;
+  }
+
   function detailsCard(bid) {
-    // The proposal number is the project's identity, so it leads. The job
-    // number only exists once the bid is won, so it is not shown at intake
-    // where it would only ever be an em-dash.
-    var numbers = field('Proposal No.', bid.proposalNo
-        ? '<span class="font-mono font-semibold">' + U.esc(bid.proposalNo) + '</span>' : '') +
-      (mode() === 'all' ? ''
-        : field('Job No.', bid.awardNo
-            ? '<span class="font-mono font-semibold text-emerald-700">' + U.esc(bid.awardNo) + '</span>' : ''));
+    var d = db();
 
     var body = '<div class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-5">' +
-      numbers +
-      field('Status', root.Bids.statusBadge(bid.status)) +
-      field('Due Date', U.date(bid.dueDate) === '-' ? '' : U.date(bid.dueDate)) +
-      field('Portal', U.esc(bid.portal)) +
-      field('Region', U.esc(bid.region) +
-        (bid.inRegion === false ? '<span class="block text-[10px] text-amber-600">out of region</span>' : '')) +
+      // The project number is its identity, so it leads. It is issued when the
+      // bid is picked up, which is why it is absent at intake - and editable,
+      // because a number sometimes has to be made to match one already sent.
+      (mode() === 'all'
+        ? field('Proposal No.', '<span class="text-faint text-xs">Issued when picked up</span>')
+        : edit('Proposal No.',
+            bid.proposalNo ? '<span class="font-mono font-semibold">' + U.esc(bid.proposalNo) + '</span>' : '',
+            { field: 'proposalNo', type: 'text', value: bid.proposalNo || '' })) +
+      edit('Status', root.Bids.statusBadge(bid.status),
+        { field: 'status', type: 'select', value: bid.status,
+          options: root.Bids.settableStatuses().map(function (s) { return s.key; }) }) +
+      edit('Due Date', dueDateValue(bid),
+        { field: 'dueDate', type: 'date', value: bid.dueDate || '' }) +
+      edit('Revised Due', revisedDueValue(bid),
+        { field: 'revisedDueDate', type: 'date', value: bid.revisedDueDate || '' }) +
+      edit('Portal', U.esc(bid.portal),
+        { field: 'portal', type: 'select', value: bid.portal,
+          options: ['PlanHub', 'ConstructConnect', 'BuildingConnected', 'PennBid', 'SmartBid', 'Other'] }) +
+      edit('Region', U.esc(bid.region) +
+        (bid.inRegion === false ? '<span class="block text-3xs text-warn">out of region</span>' : ''),
+        { field: 'region', type: 'select', value: bid.region,
+          options: (d.regions || []).slice().sort() }) +
+      // Derived from the Products & Materials card below, so read-only here.
       field('Material', U.esc(bid.material)) +
       // Which stage's people and hours, matching the columns on the list you
       // came from. Intake is the first pass; the team is who actually worked it.
@@ -275,24 +331,36 @@
         ? field('Engineer', root.Bids.engineerCell(bid)) : field('Team', root.Bids.teamCell(bid))) +
       field('Product', root.Bids.productCell(bid, 6)) +
       field('Linear Feet', bid.lf == null ? '' : '<span class="font-mono">' + U.qty(bid.lf) + '</span>') +
-      field('Bid Price', '<span class="font-mono font-semibold">' + U.currency(bid.price) + '</span>' +
-        (bid.priceLocked ? ' <i class="fas fa-lock text-[10px] text-amber-500" title="Locked - a takeoff will not overwrite this"></i>' : '')) +
+      edit('Bid Price', '<span class="font-mono font-semibold">' + U.currency(bid.price) + '</span>' +
+        (bid.priceLocked ? ' <i class="fas fa-lock text-3xs text-warn" title="Locked - a takeoff will not overwrite this"></i>' : ''),
+        { field: 'price', type: 'number', value: bid.price == null ? '' : bid.price }) +
       hoursField(bid) +
       '</div>' +
-      (bid.link || bid.comments
-        ? '<div class="mt-5 pt-5 border-t border-slate-100 space-y-4">' +
-            (bid.link ? field('Platform Link',
-              '<a href="' + U.escAttr(bid.link) + '" target="_blank" rel="noopener" ' +
-              'class="text-blue-600 hover:text-blue-800 break-all">' + U.esc(bid.link) +
-              ' <i class="fas fa-external-link-alt text-[10px]"></i></a>') : '') +
-            (bid.comments ? field('Comments', U.esc(bid.comments)) : '') +
-          '</div>'
-        : '');
+      '<div class="mt-5 pt-5 border-t border-line space-y-4">' +
+        /* Through U.safeUrl, not straight into the href: this is a field
+           somebody types, and escaping the quotes does nothing about a
+           `javascript:` scheme. A link that is not a web address is still shown
+           - it is what they typed and they may be mid-edit - just not as
+           something clickable. */
+        edit('Platform Link',
+          U.safeUrl(bid.link)
+            ? '<a href="' + U.escAttr(U.safeUrl(bid.link)) + '" target="_blank" rel="noopener noreferrer" ' +
+              'onclick="event.stopPropagation()" ' +
+              'class="text-brand hover:text-brand-ink break-all">' + U.esc(bid.link) +
+              ' <i class="fas fa-external-link-alt text-3xs"></i></a>'
+            : bid.link
+              ? '<span class="text-muted break-all" title="Not a web link - it has to start with https://">' +
+                U.esc(bid.link) + '</span>'
+              : '',
+          { field: 'link', type: 'text', value: bid.link || '' }) +
+        edit('Comments', U.esc(bid.comments),
+          { field: 'comments', type: 'textarea', value: bid.comments || '' }) +
+      '</div>';
 
     return card('Project Details', 'fa-circle-info', body,
       root.Auth.can('bid.edit')
         ? '<button onclick="Bids.edit(' + bid.id + ')" ' +
-          'class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
+          'class="px-3 py-1.5 bg-brand-soft hover:bg-brand-soft/60 text-brand-ink rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
           '<i class="fas fa-pen"></i>Edit</button>'
         : '');
   }
@@ -301,30 +369,30 @@
     var t = bid.takeoffId ? db().takeoffs[bid.takeoffId] : null;
     var openBtn = '<button onclick="Takeoff.openForBid(' + bid.id + ')" ' +
       'class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ' +
-      (t ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
-         : 'bg-blue-600 hover:bg-blue-500 text-white') + '">' +
+      (t ? 'bg-ok-soft hover:bg-ok-soft/60 text-ok-ink'
+         : 'bg-brand hover:bg-brand-hover text-white') + '">' +
       '<i class="fas fa-calculator"></i>' + (t ? 'Open TakeOff' : 'Start takeoff') + '</button>';
 
     if (!t) {
       return card('Estimate', 'fa-calculator',
-        '<p class="text-sm text-slate-400">No takeoff yet. Starting one creates the estimating ' +
+        '<p class="text-sm text-faint">No takeoff yet. Starting one creates the estimating ' +
         'workbook for this project; its total flows back into Bid Price and LF.</p>', openBtn);
     }
 
     var roll = root.TakeoffModel.computeTakeoff(t);
     var body = '<div class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-5">' +
-      field('Total Bid Cost', '<span class="font-mono font-bold text-lg text-slate-800">' +
+      field('Total Bid Cost', '<span class="font-mono font-bold text-lg text-ink-strong">' +
         U.currency2(roll.total) + '</span>') +
       field('Products', String(t.products.length)) +
       field('Total LF', '<span class="font-mono">' + U.qty(roll.totalLF) + '</span>') +
-      field('Last edited', t.updatedAt ? U.date(t.updatedAt.slice(0, 10)) : '') +
+      field('Last edited', t.updatedAt ? U.esc(U.stamp(t.updatedAt)) : '') +
       '</div>' +
       (t.products.length
-        ? '<div class="mt-5 pt-4 border-t border-slate-100 space-y-1.5">' +
+        ? '<div class="mt-5 pt-4 border-t border-line space-y-1.5">' +
             roll.products.map(function (x) {
               return '<div class="flex items-baseline justify-between gap-3 text-sm">' +
-                '<span class="text-slate-600 truncate">' + U.esc(x.product.type) + '</span>' +
-                '<span class="font-mono text-slate-700 whitespace-nowrap">' + U.currency2(x.calc.total) + '</span></div>';
+                '<span class="text-muted truncate">' + U.esc(x.product.type) + '</span>' +
+                '<span class="font-mono text-ink whitespace-nowrap">' + U.currency2(x.calc.total) + '</span></div>';
             }).join('') +
           '</div>'
         : '');
@@ -337,36 +405,36 @@
 
     if (!p) {
       return card('Proposal', 'fa-file-contract',
-        '<p class="text-sm text-slate-400">' + (hasT
+        '<p class="text-sm text-faint">' + (hasT
           ? 'No proposal yet. Generating one turns the takeoff into the client-facing document.'
           : 'Start a takeoff first &mdash; a proposal is generated from one.') + '</p>',
         hasT ? '<button onclick="Proposal.generateFromTakeoff(\'' + bid.takeoffId + '\')" ' +
-          'class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
+          'class="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
           '<i class="fas fa-file-contract"></i>Generate</button>' : '');
     }
 
     var stale = root.Proposal.isStale(p);
     var body =
       (stale
-        ? '<div class="mb-4 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 flex items-center gap-2">' +
-            '<i class="fas fa-triangle-exclamation text-amber-500 text-xs"></i>' +
-            '<span class="flex-1 text-[11px] text-amber-900 leading-snug">The takeoff has changed since ' +
+        ? '<div class="mb-4 px-3 py-2.5 rounded-lg bg-warn-soft border border-warn/30 flex items-center gap-2">' +
+            '<i class="fas fa-triangle-exclamation text-warn text-xs"></i>' +
+            '<span class="flex-1 text-2xs text-warn-ink leading-snug">The takeoff has changed since ' +
               'this proposal was generated.</span>' +
             '<button onclick="Proposal.generateFromTakeoff(\'' + p.takeoffId + '\')" ' +
-              'class="px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-600 hover:bg-amber-500 text-white whitespace-nowrap">' +
+              'class="px-2.5 py-1 rounded text-2xs font-semibold bg-warn hover:bg-warn-hover text-white whitespace-nowrap">' +
               'Regenerate</button></div>'
         : '') +
       '<div class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-5">' +
-        field('Proposal Total', '<span class="font-mono font-bold text-lg text-slate-800">' +
+        field('Proposal Total', '<span class="font-mono font-bold text-lg text-ink-strong">' +
           U.currency(root.Proposal.total(p)) + '</span>') +
         field('Scope Items', String((p.scopeItems || []).length)) +
         field('Proposal No.', U.esc(p.proposalData.proposalNo)) +
-        field('Generated', p.generatedAt ? U.date(p.generatedAt.slice(0, 10)) : '') +
+        field('Generated', p.generatedAt ? U.esc(U.stamp(p.generatedAt)) : '') +
       '</div>';
 
     return card('Proposal', 'fa-file-contract', body,
       '<button onclick="Proposal.open(\'' + p.id + '\')" ' +
-      'class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
+      'class="px-3 py-1.5 bg-info-soft hover:bg-info-soft/60 text-info-ink rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
       '<i class="fas fa-file-contract"></i>Open Proposal</button>');
   }
 
@@ -376,15 +444,12 @@
     var bid = currentBid();
 
     if (!bid) {
-      host.innerHTML =
-        '<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-16 text-center">' +
-          '<div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">' +
-            '<i class="fas fa-diagram-project text-2xl text-slate-400"></i></div>' +
-          '<h3 class="text-lg font-bold text-slate-800 mb-1">No project selected</h3>' +
-          '<p class="text-sm text-slate-500 mb-5">Pick a bid from the list to see everything on it.</p>' +
-          '<button onclick="Project.close()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold">' +
-            'Back to bids</button>' +
-        '</div>';
+      host.innerHTML = root.UI.emptyCard({
+        icon: 'fa-diagram-project',
+        title: 'No project selected',
+        blurb: 'Pick a bid from the list to see everything on it.',
+        action: root.UI.btn({ label: 'Back to bids', onclick: 'Project.close()' })
+      });
       return;
     }
 
@@ -396,34 +461,39 @@
         // invites work on bids nobody has committed to.
         (mode() === 'all'
           ? intakeCard(bid)
-          : root.Assign.card(bid) +
+          : '<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">' +
+              root.Products.card(bid) + root.Assign.card(bid) +
+            '</div>' +
             '<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">' +
               estimateCard(bid) + proposalCard(bid) +
-            '</div>') +
+            '</div>' +
+            root.History.card(bid)) +
       '</div>';
 
-    // The team rows autocomplete off the shared #engineerOptions datalist, so
-    // it has to be populated once the card is on screen.
-    if (mode() !== 'all') root.Bids.populateEngineerList();
+    // The team rows autocomplete off the shared #engineerOptions datalist, and
+    // each one's start date is a hand-rolled date field - both need the card to
+    // be on screen before they can be wired up.
+    if (mode() !== 'all') {
+      root.Bids.populateEngineerList();
+      root.Assign.wire(bid);
+    }
   }
 
   function intakeCard(bid) {
     var live = bid.active && root.Bids.bucketOf(bid) === 'open';
-    return '<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center">' +
-      '<div class="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto mb-4">' +
-        '<i class="fas fa-bolt text-xl text-amber-500"></i></div>' +
-      '<h3 class="text-base font-bold text-slate-800 mb-1">' +
-        (live ? 'This bid is being worked' : 'Not picked up yet') + '</h3>' +
-      '<p class="text-sm text-slate-500 max-w-md mx-auto mb-5">' + (live
+    return root.UI.emptyCard({
+      icon: 'fa-bolt',
+      title: live ? 'This bid is being worked' : 'Not picked up yet',
+      blurb: live
         ? 'It is on the Active Bids list, where its takeoff, proposal and award decision live.'
         : 'All Bids is the register of everything received. Add this one to Active Bids to start ' +
-          'its takeoff and proposal.') + '</p>' +
-      (live
-        ? '<button onclick="Project.openInActive()" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold">' +
-          '<i class="fas fa-bolt mr-1.5"></i>Open in Active Bids</button>'
-        : '<button onclick="Project.addToActive()" class="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-white rounded-lg text-sm font-semibold">' +
-          '<i class="fas fa-bolt mr-1.5"></i>Add to Active bid</button>') +
-    '</div>';
+          'its takeoff and proposal.',
+      action: live
+        ? root.UI.btn({ label: 'Open in Active Bids', icon: 'fa-bolt',
+                        onclick: 'Project.openInActive()', size: 'lg' })
+        : root.UI.btn({ label: 'Add to Active bid', icon: 'fa-bolt', tone: 'warn',
+                        onclick: 'Project.addToActive()', size: 'lg' })
+    });
   }
 
   root.Project = {

@@ -14,10 +14,11 @@
 
   var BASE = '/api';
   var clientId = null;               // our SSE connection, so our own writes do not echo back
+  var lastWhere = null;              // the record this window last told the server it was on
   var es = null;
   var connected = false;
   var lastSeq = 0;
-  var handlers = { changes: null, status: null, presence: null };
+  var handlers = { changes: null, status: null, presence: null, reload: null };
   var retry = null;
   var retryDelay = 1000;
 
@@ -155,6 +156,69 @@
     else shadow[key] = JSON.stringify(change.json);
   }
 
+  /* ---- delivering changes ------------------------------------------------ */
+
+  /* THE BODIES THAT DID NOT TRAVEL.
+   *
+   * A change to something large - a proposal, the rates list - arrives with
+   * `json: null`, because the server stopped copying a megabyte into its change
+   * log and down every open stream on each autosave. The record itself is
+   * fetched here, in one request for the whole batch, and spliced back in
+   * before anything downstream sees the list.
+   *
+   * Done at this level rather than in js/store.js so the rest of the app never
+   * learns that a change can arrive hollow: handlers.changes is handed the same
+   * fully-formed list it always was.
+   *
+   * A record that comes back missing was deleted after the change was logged.
+   * Dropping it is correct - the delete is later in this same list, and applying
+   * a put for a record that no longer exists would resurrect it.
+   */
+  function deliver(list) {
+    if (!list || !list.length) return Promise.resolve(true);
+
+    var hollow = list.filter(function (c) {
+      return (c.op || 'put') !== 'delete' && c.json == null;
+    });
+    if (!hollow.length) {
+      if (handlers.changes) handlers.changes(list);
+      return Promise.resolve(true);
+    }
+
+    return api('/records', {
+      method: 'POST',
+      body: JSON.stringify({
+        records: hollow.map(function (c) { return { kind: c.kind, id: c.id }; })
+      })
+    }).then(function (body) {
+      var got = {};
+      (body.records || []).forEach(function (r) { got[keyOf(r.kind, r.id)] = r; });
+
+      // Filtered, not rebuilt: seq order is what makes a catch-up correct.
+      var full = list.filter(function (c) {
+        if ((c.op || 'put') === 'delete' || c.json != null) return true;
+        var r = got[keyOf(c.kind, c.id)];
+        if (!r) return false;
+        c.json = r.json;
+        // The fetch answered with the record's current rev, so take it: the
+        // next local edit to this record can then be sent without being
+        // refused as stale.
+        revs[keyOf(c.kind, c.id)] = r.rev;
+        return true;
+      });
+      if (full.length && handlers.changes) handlers.changes(full);
+      return true;
+    }).catch(function (e) {
+      /* The bodies could not be fetched, so this batch cannot be applied
+         without leaving the screen wrong. Say we are offline and report the
+         failure, so the caller does not move lastSeq past a gap that was never
+         applied - the stream's own retry comes back through catchUp. */
+      setConnected(false, 'Could not fetch the records that changed.');
+      console.error('Hydrating changes failed:', e);
+      return false;
+    });
+  }
+
   /* ---- the live stream --------------------------------------------------- */
 
   function setConnected(state, detail) {
@@ -174,6 +238,14 @@
       var d = JSON.parse(ev.data);
       clientId = d.clientId;
       retryDelay = 1000;
+      // A reconnected stream is a new connection as far as the server is
+      // concerned, and it has no idea where this one is. Say so again.
+      var was = lastWhere;
+      lastWhere = null;
+      if (was) {
+        var bits = was.split(':');
+        root.Remote.where(Number(bits[0]), bits[1] || null);
+      }
       // Catch up on anything that happened while we were away before saying we
       // are connected, so the screen is never briefly wrong.
       catchUp().then(function () { setConnected(true); });
@@ -182,7 +254,7 @@
     es.addEventListener('changes', function (ev) {
       var list = JSON.parse(ev.data);
       list.forEach(function (c) { if (c.seq > lastSeq) lastSeq = c.seq; });
-      if (handlers.changes) handlers.changes(list);
+      deliver(list);
     });
 
     es.addEventListener('presence', function (ev) {
@@ -212,13 +284,26 @@
   }
 
   /* Everything that happened since our last seq. This is what makes a dropped
-     connection cheap - no reload, just the gap. */
+     connection cheap - no reload, just the gap.
+
+     Unless the gap is too big to send, which the server says by truncating.
+     Applying a prefix and then setting lastSeq to the server's would skip
+     everything in between and leave this browser confidently wrong, so a
+     truncated answer is handed to the reload handler instead - the one case
+     where reloading the world is the cheaper of the two. */
   function catchUp() {
     return api('/changes?since=' + lastSeq).then(function (body) {
-      if (body.changes && body.changes.length && handlers.changes) {
-        handlers.changes(body.changes);
+      if (body.truncated) {
+        if (handlers.reload) handlers.reload();
+        return;
       }
-      lastSeq = body.seq || lastSeq;
+      var to = body.seq || lastSeq;
+      return deliver(body.changes).then(function (ok) {
+        // Only once the gap is actually applied. Advancing past changes that
+        // were fetched but never landed is how a browser ends up quietly
+        // missing an edit for the rest of the afternoon.
+        if (ok) lastSeq = to;
+      });
     }).catch(function () { /* the stream will retry */ });
   }
 
@@ -287,11 +372,32 @@
       return api('/prefs').then(function (b) { return b.prefs || null; });
     },
 
+    /* "I am looking at this bid", so the other people on the stream can see it.
+       Sent only when it actually changes - navigating within one project fires
+       this on every tab, and repeating a position would repaint every other
+       screen in the office for nothing. Failure is silent: an indicator that
+       does not appear is not worth a message about. */
+    where: function (bidId, section) {
+      var next = bidId == null ? '' : bidId + ':' + (section || '');
+      if (next === lastWhere) return Promise.resolve();
+      lastWhere = next;
+      if (!clientId) return Promise.resolve();      // no stream yet; sent on connect
+      return api('/where', {
+        method: 'POST',
+        body: JSON.stringify({ clientId: clientId, bidId: bidId == null ? null : bidId,
+                               section: section || null })
+      }).catch(function () { /* presence is a courtesy, never an error */ });
+    },
+
     connect: connect,
     disconnect: disconnect,
     catchUp: catchUp,
     onChanges: function (fn) { handlers.changes = fn; },
     onStatus: function (fn) { handlers.status = fn; },
-    onPresence: function (fn) { handlers.presence = fn; }
+    onPresence: function (fn) { handlers.presence = fn; },
+    /* Called when this browser has been away long enough that the gap is too
+       large to send. Reloading the world is the cheaper of the two answers
+       here, and the only correct one. */
+    onReload: function (fn) { handlers.reload = fn; }
   };
 })(window);
