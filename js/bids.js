@@ -46,8 +46,47 @@
     { key: 'Lost',                badge: 'status-lost',       bucket: 'closed', settable: false, onActive: true }
   ];
 
+  /* THE SEVEN ABOVE ARE THE LIFECYCLE. THE SHOP CAN ADD STAGES BESIDE THEM.
+   *
+   * db.statuses holds what an office has added - "On Hold", "Waiting on
+   * drawings" - as { name, tone }. They are deliberately less powerful than the
+   * seven: every one of them is open work that stays on Active Bids and can be
+   * chosen on the form, and none of them can be made to mean won, lost or
+   * closed. Those three answers already have statuses, and they are wired to
+   * the award decision, the job number and the hit rate on the dashboard - a
+   * second way to spell "we lost it" would be a second set of figures.
+   *
+   * Which is also why the seven are not editable. Renaming Awarded would leave
+   * the decision that issues it pointing at a status nothing is filed under.
+   *
+   * Read through allStatuses() rather than from STATUSES directly, so a custom
+   * stage reaches the form, the filters, the badges and the counts at once.
+   */
+  var TONES = {
+    neutral: 'status-tone-neutral', brand: 'status-tone-brand',
+    warn:    'status-tone-warn',    ok:    'status-tone-ok',
+    danger:  'status-tone-danger',  info:  'status-tone-info'
+  };
+
+  function customStatuses() {
+    var list = db().statuses;
+    return Array.isArray(list) ? list : [];
+  }
+
+  function allStatuses() {
+    return STATUSES.concat(customStatuses().map(function (s) {
+      return {
+        key: s.name,
+        badge: TONES[s.tone] || TONES.neutral,
+        bucket: 'open', settable: true, onActive: true,
+        custom: true, tone: s.tone || 'neutral'
+      };
+    }));
+  }
+
   function statusOf(key) {
-    for (var i = 0; i < STATUSES.length; i++) if (STATUSES[i].key === key) return STATUSES[i];
+    var all = allStatuses();
+    for (var i = 0; i < all.length; i++) if (all[i].key === key) return all[i];
     return null;
   }
 
@@ -64,7 +103,7 @@
   }
 
   function settableStatuses() {
-    return STATUSES.filter(function (s) { return s.settable; });
+    return allStatuses().filter(function (s) { return s.settable; });
   }
 
   /* The pill is UI.badge, which does not wrap. "Submitted to Review" used to
@@ -140,7 +179,11 @@
     return '<span class="person-chip ' + colorClass(i) + ' ' +
       (opts.cls || 'px-1.5 py-0.5 rounded text-2xs') + '" title="' +
       U.escAttr(opts.title || name || 'Not in the engineers register') + '">' +
-      U.esc(i) + '</span>';
+      U.esc(i) +
+      // Inside the chip, in the chip's own ink, so the mark travels with the
+      // person's colour instead of adding a second thing to line up beside it.
+      (opts.done ? '<i class="fas fa-check ml-1 text-3xs opacity-80"></i>' : '') +
+      '</span>';
   }
 
   /* Setting a colour by hand. 0 - or anything off the palette - clears it,
@@ -192,8 +235,15 @@
     var rest = list.length - shown.length;
     return '<span class="inline-flex flex-wrap gap-1 justify-center" title="' + U.escAttr(title) + '">' +
       shown.map(function (i) {
+        /* A tick on the chip when every task this person holds on this bid is
+           marked done. It answers "is the team finished" from the register,
+           without opening the project - which is the whole point of tracking
+           completion per person rather than per bid. */
+        var fin = root.Assign.engineerDone(bid, i);
         return personChip(i, { cls: 'px-1.5 py-0.5 rounded text-2xs',
-          title: i + ' - ' + U.qty(byEngineer[i]) + ' hrs' });
+          done: fin,
+          title: i + ' - ' + U.qty(byEngineer[i]) + ' hrs' +
+            (fin ? ' - all tasks done' : '') });
       }).join('') +
       (rest > 0 ? '<span class="px-1.5 py-0.5 bg-line text-muted rounded text-2xs font-semibold">+' +
         rest + '</span>' : '') + '</span>';
@@ -635,6 +685,11 @@
 
     var open = b.filter(function (x) { return bucketOf(x) === 'open'; });
     var submitted = b.filter(function (x) { return x.status === 'Submitted to review'; });
+    /* Its own tile rather than a share of Submitted. The two mean different
+       things to different people: Submitted is work that has left the building
+       and is waiting on somebody else, Completed is work the estimator has
+       finished. One figure covering both answered neither question. */
+    var completed = b.filter(function (x) { return x.status === 'Completed'; });
     var progress = b.filter(function (x) { return x.status === 'In Progress'; });
     var awarded = b.filter(function (x) { return x.status === 'Awarded'; });
     var lost = b.filter(function (x) { return x.status === 'Lost'; });
@@ -647,6 +702,14 @@
     set('kpiTotal', b.length, viewCount('active') + ' being worked');
     set('kpiSubmitted', submitted.length,
       open.length ? pct(submitted.length, open.length) + '% of everything still open' : 'nothing open');
+    /* The fact that makes the number mean something: a completed bid with no
+       proposal is not finished, whatever its status says - the same condition
+       the Needs-attention panel counts. */
+    var noDoc = completed.filter(function (x) { return !x.proposalId; }).length;
+    set('kpiCompleted', completed.length,
+      completed.length
+        ? (noDoc ? noDoc + ' with no proposal yet' : 'all have their proposal')
+        : 'nothing finished yet');
     set('kpiProgress', progress.length,
       soon.length ? soon.length + ' due within 7 days' : 'none due this week');
     // The hit rate, which is the question anybody looking at an Awarded count
@@ -815,13 +878,13 @@
     all: {
       label: 'All Bids',
       match: function () { return true; },
-      options: function () { return STATUSES.map(function (s) { return s.key; }); }
+      options: function () { return allStatuses().map(function (s) { return s.key; }); }
     },
     active: {
       label: 'Active Bids',
       match: function (b) { return !!b.active && onActiveOf(b); },
       options: function () {
-        return STATUSES.filter(function (s) { return s.onActive; })
+        return allStatuses().filter(function (s) { return s.onActive; })
           .map(function (s) { return s.key; });
       }
     },
@@ -856,6 +919,7 @@
       list = list.filter(function (b) {
         return U.low(b.project).indexOf(search) >= 0 ||
           U.low(b.region).indexOf(search) >= 0 ||
+          U.low(b.location).indexOf(search) >= 0 ||
           U.low(b.material).indexOf(search) >= 0 ||
           U.low(b.engineer).indexOf(search) >= 0 ||
           U.low((b.products || []).join(' ')).indexOf(search) >= 0;
@@ -868,7 +932,10 @@
   }
 
   function filterTable() {
-    root.BidGrid.render(baseList());
+    // Through preserveView because BidGrid.render rebuilds the scroll container
+    // itself: without it every save - yours or a colleague's - throws the table
+    // back to the far left. See U.preserveView.
+    U.preserveView(function () { root.BidGrid.render(baseList()); });
     var n = root.BidGrid.filterCount();
     var badge = U.$('gridFilterBadge');
     if (badge) {
@@ -1017,6 +1084,57 @@
       // has already moved the select to the sentinel by the time onchange runs.
       if (form) sel.dataset.prev = sel.value === '__add' ? '' : sel.value;
     });
+    populatePortalSelect();
+  }
+
+  /* ---- portals --------------------------------------------------------- */
+
+  /* Where the bid came in from. Six <option> tags written into the page until
+     the office signed up to a portal that was not among them; a managed list
+     now - Settings > Portals - so the form is filled from the database rather
+     than from the markup.
+
+     No "+ Add new..." sentinel, unlike regions: a portal is a subscription the
+     office holds, not something invented while filing one bid, so it is added
+     deliberately in Settings and offered everywhere at once. */
+  function populatePortalSelect() {
+    var sel = U.$('mPortal');
+    if (!sel) return;
+    var list = (db().portals || []).slice();
+    var cur = sel.value;
+    /* A bid filed under a portal since removed from the list keeps its value
+       and stays selectable, rather than the form silently rewriting it to
+       whatever happens to be first. Same rule as populateStatusSelect. */
+    if (cur && list.indexOf(cur) < 0) list.push(cur);
+    sel.innerHTML = '<option value="">Select portal</option>' +
+      list.map(function (p) {
+        return '<option value="' + U.escAttr(p) + '">' + U.esc(p) + '</option>';
+      }).join('');
+    if (cur) sel.value = cur;
+  }
+
+  function countPortal(name) {
+    return bids().filter(function (b) { return b.portal === name; }).length;
+  }
+
+  /* Carries a portal rename onto every bid filed under the old name - the same
+     bargain renameRegion makes, and for the same reason: the list and the bids
+     are two views of one fact, and a rename that only moved the list would
+     leave the bids pointing at a portal that no longer exists. */
+  function renamePortalOnBids(from, to) {
+    var n = 0;
+    bids().forEach(function (b) { if (b.portal === from) { b.portal = to; n++; } });
+    return n;
+  }
+
+  function countStatus(name) {
+    return bids().filter(function (b) { return b.status === name; }).length;
+  }
+
+  function renameStatusOnBids(from, to) {
+    var n = 0;
+    bids().forEach(function (b) { if (b.status === from) { b.status = to; n++; } });
+    return n;
   }
 
   /* Intercepts the "+ Add new" sentinel on the form's region select.
@@ -1182,6 +1300,7 @@
     U.$('mProject').value = b.project || '';
     U.$('mPortal').value = b.portal || 'PlanHub';
     U.$('mRegion').value = b.region || '';
+    U.$('mLocation').value = b.location || '';
     setProducts(b.products);
     U.$('mMaterial').value = b.material || '';
     U.$('mEngineer').value = b.engineer || '';
@@ -1607,6 +1726,7 @@
       project: U.$('mProject').value.trim(),
       portal: U.$('mPortal').value,
       region: U.$('mRegion').value,
+      location: U.$('mLocation').value.trim(),
       products: selectedProducts(),
       material: U.$('mMaterial').value,
       engineer: U.$('mEngineer').value.trim(),
@@ -1704,6 +1824,7 @@
         'Proposal No': b.proposalNo || '',
         'Job No': b.awardNo || '', 'Active': b.active ? 'Yes' : 'No',
         'Project': b.project, 'Portal': b.portal, 'Region': b.region,
+        'Location': b.location || '',
         'In Region': b.inRegion === false ? 'No' : 'Yes',
         'Product': (b.products || []).join('; '),
         'Material': b.material, 'LF': b.lf, 'Bid Price': b.price,
@@ -1724,6 +1845,7 @@
         team.push({
           'Proposal No': b.proposalNo || '', 'Job No': b.awardNo || '', 'Project': b.project,
           'Status': b.status, 'Engineer': r.engineer, 'Description': r.taskType,
+          'Task Status': root.Assign.statusLabel(r), 'Completed': r.completedAt || '',
           'Est Hrs': U.n(r.estHrs), 'Assigned Hrs': U.n(r.asgnHrs)
         });
       });
@@ -1756,7 +1878,7 @@
       root.Catalog.all().map(function (c) {
         return {
           Vendor: c.vendor, 'Part No': c.partNo, Description: c.description,
-          Feature: c.feature, Material: c.material, Grade: c.grade, 'U/M': c.um,
+          Material: c.material, Grade: c.grade, 'U/M': c.um,
           'Unit Cost': c.unitCost, 'Used On': c.sowTags.join('; '),
           'Times Used': c.useCount, Source: c.source
         };
@@ -1813,6 +1935,19 @@
     renderMonthGrid: renderMonthGrid,
     renderAttention: renderAttention,
     populateRegionSelects: populateRegionSelects,
+    populatePortalSelect: populatePortalSelect,
+
+    /* For the Portals and Bid Statuses panels in js/settings.js: how many bids
+       a value is on - the number that decides whether deleting it is safe - and
+       the rename that carries onto them. Here rather than there because this
+       module owns the bids; Settings owns the panel. */
+    countPortal: countPortal,
+    renamePortalOnBids: renamePortalOnBids,
+    countStatus: countStatus,
+    renameStatusOnBids: renameStatusOnBids,
+    allStatuses: allStatuses,
+    STATUS_TONES: TONES,
+
     // Drawn by js/settings.js, which supplies the hosts these write into.
     renderRegionList: renderRegionList,
     renderEngineerList: renderEngineerList,
@@ -1891,6 +2026,20 @@
       selectedMonth = null;
       renderMonthGrid();
       root.App.goToMonth(null);
+    },
+
+    /* A dashboard tile, answered. The count says how many; this is the "which
+       ones" behind it, the same bargain the month bars already make.
+
+       All Bids rather than Active: it is the one list every status appears on,
+       so the tile cannot land on a list that filters its own answer away. The
+       status filter is repopulated by setView, which is why the value is set
+       after switchTab rather than before. */
+    goToStatus: function (status) {
+      root.App.switchTab('all');
+      var sel = U.$('filterStatus');
+      if (sel) sel.value = status || '';
+      filterTable();
     },
 
     openAdd: openAdd,

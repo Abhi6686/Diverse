@@ -295,9 +295,16 @@ const COLLECTIONS = [
   { kind: 'engineer', prop: 'engineers', shape: 'array', idKey: 'id' }
 ];
 
-/* The singleton settings rows, by the property they hold on the client. */
+/* The singleton settings rows, by the property they hold on the client.
+   MUST match SETTING_KEYS in js/remote.js. A key listed on one side only is a
+   list that quietly stops syncing - which is what happened to `materials`, and
+   why tests/smoke.js now checks the two lists against each other.
+
+   Adding a key needs no migration step: the settings table is keyed by id and
+   the row appears the first time somebody writes it. */
 const SETTING_KEYS = [
-  'regions', 'productTypes', 'taskTypes', 'references', 'rates', 'company'
+  'regions', 'productTypes', 'taskTypes', 'materials', 'portals', 'statuses',
+  'references', 'rates', 'company'
 ];
 
 function currentVersion(db) {

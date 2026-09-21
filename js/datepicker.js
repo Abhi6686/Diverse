@@ -206,13 +206,21 @@
     var onPick = state.onPick;
     close();
     if (!input) return;
-    input.value = dateISO ? U.dateToInput(dateISO) : '';
-    input.classList.remove('border-danger', 'bg-danger-soft');
-    // The same event a typed date fires, so every call site keeps one code path
-    // for "this field changed" whether it was typed or clicked.
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    /* THE ANCHOR IS NOT ALWAYS A FIELD.
+       Team & Hours opens this from a button - "Pick a date..." - where there is
+       nothing to write into and nothing to focus; the answer goes back through
+       onPick alone. Everywhere else the anchor is the text field the date is
+       typed into, and that path is unchanged. */
+    if (input.tagName === 'INPUT') {
+      input.value = dateISO ? U.dateToInput(dateISO) : '';
+      input.classList.remove('border-danger', 'bg-danger-soft');
+      // The same event a typed date fires, so every call site keeps one code
+      // path for "this field changed" whether it was typed or clicked.
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
     if (onPick) onPick(dateISO);
-    input.focus();
+    if (input.tagName === 'INPUT') input.focus();
   }
 
   /* `o` may carry { mark, markLabel, onPick }. The input is the text field the
@@ -223,7 +231,8 @@
     if (el && state && state.input === input) { close(); return; }   // toggle
     close();
 
-    var current = U.inputToDate(input.value);
+    // A field opens on what it holds; a button opens on what its caller says.
+    var current = input.tagName === 'INPUT' ? U.inputToDate(input.value) : (o.value || '');
     var selected = current || null;                 // '' or null when unset
     state = {
       input: input,

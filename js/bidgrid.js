@@ -138,11 +138,40 @@
           U.esc(b.portal) + '</span>';
       } },
 
+    /* THE SITE ADDRESS HANGS OFF THE REGION, rather than taking a column of its
+       own by default.
+
+       An address is thirty to fifty characters and it is read once - when
+       somebody is working out where the job is - while the region is a word and
+       is read on every pass down the list. Given a column it would either be
+       truncated to uselessness or push everything after it off the screen. So
+       the region cell carries a pin when the bid has an address, and the pin
+       opens the full thing with somewhere to copy it from and a map link. For
+       anybody who does want it as a real column there is one in the picker,
+       off by default - see VIEW_COLUMNS. */
     { key: 'region', label: 'Region', align: 'left', type: 'enum',
       value: function (b) { return b.region || ''; },
       render: function (b) {
         return U.esc(b.region || '-') +
+          (b.location
+            ? ' <button onclick="BidGrid.openLocation(event,' + b.id + ')" ' +
+              'title="' + U.escAttr(b.location) + '" aria-label="Site address" ' +
+              'class="text-faint hover:text-brand align-middle">' +
+              '<i class="fas fa-location-dot text-3xs"></i></button>'
+            : '') +
           (b.inRegion === false ? '<span class="block text-3xs text-warn">out of region</span>' : '');
+      } },
+
+    /* Off by default on every view; switched on from the column picker by
+       anybody who sorts or filters by where the work is. */
+    { key: 'location', label: 'Location', align: 'left', type: 'text',
+      value: function (b) { return U.low(b.location); },
+      text: function (b) { return b.location || ''; },
+      render: function (b) {
+        return b.location
+          ? '<span class="text-xs text-muted block truncate max-w-[260px]" title="' +
+            U.escAttr(b.location) + '">' + U.esc(b.location) + '</span>'
+          : '<span class="text-faint">&mdash;</span>';
       } },
 
     { key: 'products', label: 'Product', align: 'left', type: 'multi',
@@ -292,17 +321,17 @@
     // first-pass engineer and hours. No Proposal No. - a bid has not got one
     // until somebody picks it up, so the column would be all em-dashes.
     all: { on: ['sr', 'createdAt', 'engineer', 'estHrs', 'assignedHrs'],
-           off: ['proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs'],
+           off: ['proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs', 'location'],
            first: ['sr', 'createdAt'] },
 
     // Working: the team and what it has booked. The intake pair is deliberately
     // absent - showing both would put two "Estm Hrs" columns side by side.
     active: { on: ['sr', 'proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs'],
-              off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs'] },
+              off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'] },
 
     // On a won job, what it cost in effort is the point, so the hours stay on.
     awarded: { on: ['sr', 'result', 'proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs'],
-               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs'],
+               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'],
                // Read by the project number, so it leads - behind the row
                // counter, which always comes first.
                first: ['sr', 'proposalNo'] }
@@ -671,7 +700,11 @@
       // Height comes off the viewport rather than a fixed 600px: on a laptop
       // that left the table scrolling inside a half-empty screen, and on a wide
       // monitor it wasted the bottom third.
-      '<div class="overflow-auto max-h-[calc(100vh-19rem)] min-h-[12rem]" ' +
+      // The id and data-keep-scroll are what U.preserveView restores the
+      // position by - see the note there. Without them a colleague's save
+      // rebuilds this div and the table jumps back to the far left.
+      '<div id="bidsGridScroll" data-keep-scroll ' +
+           'class="overflow-auto max-h-[calc(100vh-19rem)] min-h-[12rem]" ' +
            'onscroll="BidGrid.onScroll(this)">' +
       // The zoom rides on the table so one CSS rule sizes every period column,
       // rather than each cell carrying its own width.
@@ -1119,6 +1152,24 @@
     place(ev.currentTarget);
   }
 
+  /* Copying without the clipboard API: a hidden textarea, selected, and
+     document.execCommand. Needed because the office reaches this app over
+     http://<machine>:port, where navigator.clipboard is not available at all. */
+  function legacyCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    if (ok) done();
+    else U.toast('Could not copy - select the address and copy it by hand.', 'warn');
+  }
+
   /* One row in such a menu. Used by js/bids.js for the row overflow menu. */
   function menuItem(o) {
     return '<button onclick="BidGrid.closePopover();' + o.onclick + '" ' +
@@ -1268,6 +1319,42 @@
        popover, so there is one thing on screen at a time and one dismissal
        rule for all of them. */
     openMenu: openMenu,
+
+    /* The site address, under the Region cell it hangs off. Through the same
+       openMenu as every other popover on this table, so it is placed, dismissed
+       and stacked by the one set of rules rather than a second tooltip nobody
+       can close. */
+    openLocation: function (ev, bidId) {
+      var b = root.Store.db.bids.filter(function (x) { return x.id === bidId; })[0];
+      if (!b || !b.location) return;
+      var maps = U.mapsUrl(b.location);
+      openMenu(ev,
+        '<div class="px-3 py-2 border-b border-line">' +
+          '<div class="text-3xs font-bold text-faint uppercase tracking-wider mb-1">Location</div>' +
+          '<div class="text-xs text-ink leading-snug">' + U.esc(b.location) + '</div>' +
+        '</div>' +
+        menuItem({ icon: 'fa-copy', label: 'Copy address',
+                   onclick: 'BidGrid.copyLocation(' + b.id + ')' }) +
+        (maps ? menuLink({ icon: 'fa-map-location-dot', label: 'Open in Maps', href: maps }) : '') +
+        (root.Auth.can('bid.edit')
+          ? menuItem({ icon: 'fa-pen', label: 'Edit bid', onclick: 'Bids.edit(' + b.id + ')' })
+          : ''));
+    },
+
+    copyLocation: function (bidId) {
+      var b = root.Store.db.bids.filter(function (x) { return x.id === bidId; })[0];
+      if (!b || !b.location) return;
+      closePopover();
+      /* navigator.clipboard is unavailable on a plain-http LAN address, which
+         is exactly how this app is served in the office - so the textarea
+         fallback is the path that actually runs there, not a legacy branch. */
+      var done = function () { U.toast('Address copied.', 'ok'); };
+      if (root.navigator.clipboard && root.navigator.clipboard.writeText) {
+        root.navigator.clipboard.writeText(b.location).then(done, function () { legacyCopy(b.location, done); });
+      } else {
+        legacyCopy(b.location, done);
+      }
+    },
     menuItem: menuItem,
     menuLink: menuLink,
     menuSeparator: menuSeparator,

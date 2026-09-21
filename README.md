@@ -589,14 +589,16 @@ are stored, so a row left alone keeps its default.
 
 1. **Active Bids** → click a row to open the project, then its **TakeOff** tab. (The
    calculator icon in the Actions column goes straight there.)
-2. **Add Product Type** → the standard component groups and drawing-grid columns come with it.
+2. **Add Product Type** → the standard component groups come with it. The drawing grid starts
+   empty: a column is created per thing you are actually measuring.
 3. **Materials** → start typing in *Vendor Part No* or *Description*; pick a suggestion and the
    vendor, grade, U/M and unit cost fill themselves in. Every field stays editable.
 4. **Cost & Labour** → set *Total linear feet*; engineering, fabrication, installation hours and
    the finish quantity fill from the formulas. Type over any of them and it turns amber and stops
    following the formula — the ↺ button puts it back.
-5. **Drawing Takeoff** → enter quantities per drawing reference. *use as total* copies a column's
-   subtotal into Total LF.
+5. **Drawing Takeoff** → name what you are measuring, pick the unit it is measured in, then
+   enter quantities per drawing reference. Each column that ends up with a quantity becomes a
+   material row under its own name.
 6. **Save takeoff** → the total flows back to the bid's Bid Price and LF, and any part the rate
    library hasn't seen is added to it.
 7. **Proposal** → generates one scope item per product type, each carrying that product's

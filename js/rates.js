@@ -40,32 +40,35 @@
   };
 
   /* Product templates: the standard shape of each sheet, so "+ Add Product Type"
-     starts you off with the right groups, grid columns and finish wording. */
+     starts you off with the right component groups, finish wording and unit.
+
+     NO GRID COLUMNS. Every template used to carry the full column list off its
+     workbook sheet - fifteen of them on Steel Guardrail - and a new product
+     arrived with all of them laid out before anybody had measured anything. A
+     real job uses three or four, so the estimator's first task was deleting
+     eleven columns, and the ones left behind sat in the scope strip as work
+     nothing was being bought for.
+
+     The drawing grid is now typed: one column per thing actually being
+     measured, named and given its unit as it is created. See Takeoff.addCol.
+
+     The groups stay. "Embedded Bollard" and "Surface Mounted Bollard" are the
+     shape of the product rather than a measurement, and re-typing them on every
+     bollard job is friction with nothing behind it. */
   var PRODUCT_TEMPLATES = {
     'Steel Guardrail': {
       sow: 'Guardrail',
       material: 'Galvanized Steel',
       finishLabel: 'For interior: Painted / For exterior: Powder coated',
       unit: 'LF',
-      groups: [{
-        name: 'Guardrail',
-        columns: ['Top Rail_1-1/2" Pipe (LF)', 'Mid Rail_1-1/2" Pipe (LF)',
-          'Rail Post_1-1/2" (LF)', 'Handrail_1-1/2" (LF)', 'Post Handrail support (EA)',
-          'Base Plate (EA)', 'Stringer Base Plate (EA)', 'End cap (EA)', 'Elbow (EA)',
-          'Sleeve_2" Pipe (LF)', '2" End cap (EA)', 'Hinge (EA)', 'J bolt Lock (EA)',
-          'Toe Plate (LF)', '8" Toe Plate (LF)']
-      }]
+      groups: [{ name: 'Guardrail' }]
     },
     'Wall Mount Handrail': {
       sow: 'Wall Mount Handrail',
       material: 'Galvanized Steel',
       finishLabel: 'Painted',
       unit: 'LF',
-      groups: [{
-        name: 'Wall Mount Handrail',
-        columns: ['Handrail Rail_1-1/2" Pipe (LF)', 'Handrail support (EA)',
-          'Elbow (EA)', 'End Cap (EA)']
-      }]
+      groups: [{ name: 'Wall Mount Handrail' }]
     },
     'Bollard': {
       sow: 'Bollard',
@@ -73,11 +76,8 @@
       finishLabel: 'Sleeve, Color Yellow',
       unit: 'EA',
       groups: [
-        { name: 'Embedded Bollard',
-          columns: ['Bollard (EA)', '8" SCH 40 Pipe (LF)', 'Sleeve (EA)', 'Bollard Cap (EA)'] },
-        { name: 'Surface Mounted Bollard',
-          columns: ['Bollard (EA)', '8" SCH 40 Pipe (LF)', 'Sleeve (EA)',
-            'Base plate (EA)', 'Anchor (EA)', 'Bollard Cap (EA)'] }
+        { name: 'Embedded Bollard' },
+        { name: 'Surface Mounted Bollard' }
       ]
     },
     'Galvanized Platform': {
@@ -86,14 +86,8 @@
       finishLabel: 'Hot Dip Galvanized',
       unit: 'LF',
       groups: [
-        { name: 'Walkway framing',
-          columns: ["Grating (3' x 20') EA", 'C6 X 8.2 (LF)', 'W8 X 10 (LF)',
-            'L2 X 2 X 1/4 (LF)', 'HSS 4 X 4 X 3/8 (LF)', 'Base plate (EA)',
-            'Connector clip (EA)', 'Swivel Lock Clip (EA)', 'Struct to Wall Anchor (EA)'] },
-        { name: 'Platform at wash bay',
-          columns: ["Grating (3' x 24') EA", 'C6 X 8.2 (LF)', 'W8 X 10 (LF)',
-            'L2 X 2 X 1/4 (LF)', 'HSS 4 X 4 X 3/8 (LF)', 'Base plate (EA)',
-            'Connector clip (EA)', 'Swivel Lock Clip (EA)', 'Struct to Wall Anchor (EA)'] }
+        { name: 'Walkway framing' },
+        { name: 'Platform at wash bay' }
       ]
     },
     'Stair': {
@@ -101,11 +95,7 @@
       material: 'Galvanized Steel',
       finishLabel: 'Stringer: Painted',
       unit: 'LF',
-      groups: [{
-        name: 'Stair',
-        columns: ['C10 X 15.3 Stringer (LF)', '2.5" X 2.5" X 3/8" Angle clip (FT)',
-          'Stair Treads 48" x 11" (EA)']
-      }]
+      groups: [{ name: 'Stair' }]
     }
   };
 

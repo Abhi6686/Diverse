@@ -157,6 +157,127 @@
     }).join('') : '<p class="text-sm text-faint text-center py-6">No materials yet.</p>';
   }
 
+  /* ---- portals ---------------------------------------------------------- */
+
+  function portalsPanel() {
+    return panel('Portals', 'Where a bid came in from, offered on the Add/Edit Bid form. ' +
+      'Correcting a name carries the change onto every bid filed under it; removing one ' +
+      'leaves the value on the bids that already use it.',
+      '<div class="flex gap-2 mb-4">' +
+        '<input type="text" id="newPortal" placeholder="New portal..." ' +
+          'class="flex-1 px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none" ' +
+          'onkeypress="if(event.key===&#39;Enter&#39;)Settings.addPortal()">' +
+        '<button onclick="Settings.addPortal()" class="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-medium transition">' +
+          '<i class="fas fa-plus"></i></button>' +
+      '</div>' +
+      '<div id="portalList" class="space-y-2 max-h-[520px] overflow-y-auto"></div>');
+  }
+
+  function renderPortalList() {
+    var host = U.$('portalList');
+    if (!host) return;
+    var list = (db().portals || []).slice();
+    host.innerHTML = list.length ? list.map(function (p, i) {
+      var used = root.Bids.countPortal(p);
+      return '<div class="flex items-center gap-2 px-3 py-2 bg-raised rounded-lg">' +
+        '<input value="' + U.escAttr(p) + '" onchange="Settings.renamePortal(' + i + ',this.value)" ' +
+          'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm outline-none focus:border-brand">' +
+        '<span class="text-xs text-faint w-20 text-right">' +
+          (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
+        '<button onclick="Settings.removePortal(' + i + ')" class="text-danger hover:text-danger-ink text-xs">' +
+          '<i class="fas fa-trash"></i></button></div>';
+    }).join('') : '<p class="text-sm text-faint text-center py-6">No portals yet.</p>';
+  }
+
+  /* ---- bid statuses ----------------------------------------------------- */
+
+  /* Two kinds of row, and the difference is not cosmetic.
+   *
+   * The seven built-in statuses ARE the lifecycle: Awarded and Lost are issued
+   * by the Award/Lost decision and carry the job number, No Scope is the intake
+   * verdict, and each one's bucket is what the dashboard counts as open, won or
+   * decided. Renaming or deleting one would leave that machinery pointing at a
+   * status nothing is filed under, so they are shown as facts - badge, count,
+   * and a note saying why there is nothing to click.
+   *
+   * What a shop adds is a stage beside them - "On Hold", "Waiting on drawings" -
+   * and those are editable, deletable and coloured to taste. They are all open
+   * work on Active Bids, because that is the only thing a new stage can safely
+   * mean; anything else already has a status.
+   */
+  var TONE_SWATCHES = [
+    ['neutral', 'Grey'], ['brand', 'Blue'], ['warn', 'Amber'],
+    ['ok', 'Green'], ['danger', 'Red'], ['info', 'Violet']
+  ];
+
+  function tonePicker(id, selected) {
+    return '<div class="flex items-center gap-1" id="' + id + '">' +
+      TONE_SWATCHES.map(function (t) {
+        var on = t[0] === selected;
+        return '<button type="button" data-tone="' + t[0] + '" title="' + t[1] + '" ' +
+          'onclick="Settings.pickTone(\'' + id + '\',\'' + t[0] + '\')" ' +
+          'class="status-tone-' + t[0] + ' w-7 h-7 rounded-lg text-3xs font-bold ' +
+          'border-2 transition ' + (on ? 'border-ink' : 'border-transparent hover:border-line-strong') + '">' +
+          (on ? '<i class="fas fa-check"></i>' : '') + '</button>';
+      }).join('') + '</div>';
+  }
+
+  function statusesPanel() {
+    return panel('Bid Statuses', 'The stages a bid moves through. The seven the app is ' +
+      'built on cannot be changed &mdash; Awarded and Lost are issued by the Award/Lost ' +
+      'decision, and each one decides what counts as open work. Stages you add sit beside ' +
+      'them as open work on Active Bids.',
+      '<div class="flex flex-wrap items-center gap-2 mb-4">' +
+        '<input type="text" id="newStatus" placeholder="New status..." ' +
+          'class="flex-1 min-w-[180px] px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none" ' +
+          'onkeypress="if(event.key===&#39;Enter&#39;)Settings.addStatus()">' +
+        tonePicker('newStatusTone', 'neutral') +
+        '<button onclick="Settings.addStatus()" class="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-medium transition">' +
+          '<i class="fas fa-plus"></i></button>' +
+      '</div>' +
+      '<div id="statusList" class="space-y-2 max-h-[520px] overflow-y-auto"></div>');
+  }
+
+  function renderStatusList() {
+    var host = U.$('statusList');
+    if (!host) return;
+    var customs = (db().statuses || []).slice();
+
+    var builtins = root.Bids.allStatuses().filter(function (s) { return !s.custom; })
+      .map(function (s) {
+        var used = root.Bids.countStatus(s.key);
+        return '<div class="flex items-center gap-3 px-3 py-2 bg-raised/60 rounded-lg">' +
+          root.UI.badge(s.key, s.badge) +
+          '<span class="flex-1"></span>' +
+          '<span class="text-2xs text-faint" title="' +
+            U.escAttr(s.settable
+              ? 'Built in - the dashboard and the Active Bids list are counted from it'
+              : 'Issued by the Award/Lost decision, not typed') + '">built-in</span>' +
+          '<span class="text-xs text-faint w-20 text-right">' +
+            (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
+          '<span class="w-4"></span></div>';
+      }).join('');
+
+    var added = customs.length ? customs.map(function (s, i) {
+      var used = root.Bids.countStatus(s.name);
+      return '<div class="flex flex-wrap items-center gap-2 px-3 py-2 bg-raised rounded-lg">' +
+        '<input value="' + U.escAttr(s.name) + '" onchange="Settings.renameStatus(' + i + ',this.value)" ' +
+          'class="flex-1 min-w-[140px] px-2 py-1 bg-surface border border-line rounded text-sm outline-none focus:border-brand">' +
+        tonePicker('statusTone-' + i, s.tone || 'neutral') +
+        '<span class="text-xs text-faint w-20 text-right">' +
+          (used ? used + ' bid' + (used > 1 ? 's' : '') : '') + '</span>' +
+        '<button onclick="Settings.removeStatus(' + i + ')" class="text-danger hover:text-danger-ink text-xs">' +
+          '<i class="fas fa-trash"></i></button></div>';
+    }).join('') : '';
+
+    host.innerHTML = builtins +
+      (added
+        ? '<div class="pt-3 mt-3 border-t border-line text-3xs font-bold text-muted uppercase tracking-wider">' +
+          'Added by this shop</div>' + added
+        : '<p class="text-xs text-faint text-center pt-4 mt-3 border-t border-line">' +
+          'No stages of your own yet. Add one above &mdash; it will be offered on every bid.</p>');
+  }
+
   var COMPANY_FIELDS = [
     ['name', 'Company name'], ['address', 'Address'], ['phone', 'Phone'],
     ['email', 'Email'], ['brandSlogan', 'Slogan'], ['logoUrl', 'Logo URL']
@@ -411,6 +532,8 @@
     engineers: { html: engineersPanel, after: function () { root.Bids.renderEngineerList(); } },
     tasktypes: { html: taskTypesPanel, after: renderTaskTypeList },
     materials: { html: materialsPanel, after: renderMaterialList },
+    portals: { html: portalsPanel, after: renderPortalList },
+    statuses: { html: statusesPanel, after: renderStatusList },
     company: { html: companyPanel, after: null },
     employees: { html: employeesPanel, after: renderPeople },
     roles: { html: rolesPanel, after: renderRoles }
@@ -524,6 +647,151 @@
       d.materials.splice(i, 1);
       root.Store.save();
       renderMaterialList();
+    },
+
+    /* ---- portals ------------------------------------------------------- */
+
+    addPortal: function () {
+      var input = U.$('newPortal');
+      var name = input.value.trim();
+      if (!name) return;
+      var d = db();
+      if (d.portals.some(function (p) { return p.toLowerCase() === name.toLowerCase(); })) {
+        U.toast('That portal is already in the list.', 'warn');
+        return;
+      }
+      d.portals.push(name);
+      input.value = '';
+      root.Store.save();
+      renderPortalList();
+    },
+
+    renamePortal: function (i, value) {
+      var d = db();
+      var from = d.portals[i];
+      var to = String(value || '').trim();
+      if (from === undefined) return;
+      if (!to) { renderPortalList(); return; }
+      if (to === from) return;
+      if (d.portals.some(function (p, j) {
+        return j !== i && p.toLowerCase() === to.toLowerCase();
+      })) {
+        U.toast('"' + to + '" is already in the list.', 'warn');
+        renderPortalList();
+        return;
+      }
+      d.portals[i] = to;
+      // The bids move with it - the list and the bids are two views of one fact.
+      var moved = root.Bids.renamePortalOnBids(from, to);
+      root.Store.save();
+      renderPortalList();
+      root.Bids.refresh();
+      U.toast(moved ? 'Renamed on ' + moved + ' bid' + (moved > 1 ? 's' : '') + '.' : 'Renamed.', 'ok');
+    },
+
+    removePortal: function (i) {
+      var d = db();
+      var name = d.portals[i];
+      if (name === undefined) return;
+      var used = root.Bids.countPortal(name);
+      if (used && !confirm('"' + name + '" is on ' + used + ' bid(s).\n\n' +
+        'Remove it from the list anyway? Those bids keep the value but it will no ' +
+        'longer be offered on new ones.')) return;
+      d.portals.splice(i, 1);
+      root.Store.save();
+      renderPortalList();
+    },
+
+    /* ---- bid statuses -------------------------------------------------- */
+
+    /* The swatch row is a control, not a field: clicking one marks it and the
+       add/rename handlers read the mark. Kept in the DOM rather than in module
+       state so a panel re-render cannot leave the two disagreeing. */
+    pickTone: function (hostId, tone) {
+      var host = U.$(hostId);
+      if (!host) return;
+      Array.prototype.forEach.call(host.querySelectorAll('button'), function (b) {
+        var on = b.dataset.tone === tone;
+        b.classList.toggle('border-ink', on);
+        b.classList.toggle('border-transparent', !on);
+        b.innerHTML = on ? '<i class="fas fa-check"></i>' : '';
+      });
+      // A row's swatch commits immediately; the add form's waits for Add.
+      var m = /^statusTone-(\d+)$/.exec(hostId);
+      if (!m) return;
+      var d = db();
+      var s = d.statuses[Number(m[1])];
+      if (!s) return;
+      s.tone = tone;
+      root.Store.save();
+      root.Bids.refresh();
+    },
+
+    toneOf: function (hostId) {
+      var host = U.$(hostId);
+      var on = host && host.querySelector('button.border-ink');
+      return on ? on.dataset.tone : 'neutral';
+    },
+
+    addStatus: function () {
+      var input = U.$('newStatus');
+      var name = input.value.trim();
+      if (!name) return;
+      var taken = root.Bids.allStatuses().some(function (s) {
+        return s.key.toLowerCase() === name.toLowerCase();
+      });
+      if (taken) {
+        U.toast('"' + name + '" is already a status.', 'warn');
+        return;
+      }
+      var d = db();
+      d.statuses.push({ name: name, tone: root.Settings.toneOf('newStatusTone') });
+      input.value = '';
+      root.Store.save();
+      renderStatusList();
+      root.Bids.refresh();
+      U.toast('"' + name + '" is now offered on every bid.', 'ok');
+    },
+
+    renameStatus: function (i, value) {
+      var d = db();
+      var s = d.statuses[i];
+      var to = String(value || '').trim();
+      if (!s) return;
+      if (!to) { renderStatusList(); return; }
+      if (to === s.name) return;
+      var taken = root.Bids.allStatuses().some(function (x) {
+        return x.key !== s.name && x.key.toLowerCase() === to.toLowerCase();
+      });
+      if (taken) {
+        U.toast('"' + to + '" is already a status.', 'warn');
+        renderStatusList();
+        return;
+      }
+      var from = s.name;
+      s.name = to;
+      var moved = root.Bids.renameStatusOnBids(from, to);
+      root.Store.save();
+      renderStatusList();
+      root.Bids.refresh();
+      U.toast(moved ? 'Renamed on ' + moved + ' bid' + (moved > 1 ? 's' : '') + '.' : 'Renamed.', 'ok');
+    },
+
+    removeStatus: function (i) {
+      var d = db();
+      var s = d.statuses[i];
+      if (!s) return;
+      var used = root.Bids.countStatus(s.name);
+      /* The bids keep the status they are on. Blanking them would be worse than
+         an unknown value: statusOf treats one it does not recognise as open, so
+         those bids stay visible and can be moved on deliberately. */
+      if (used && !confirm('"' + s.name + '" is on ' + used + ' bid(s).\n\n' +
+        'Remove it from the list anyway? Those bids keep the status but it will no ' +
+        'longer be offered on new ones.')) return;
+      d.statuses.splice(i, 1);
+      root.Store.save();
+      renderStatusList();
+      root.Bids.refresh();
     },
 
     /* Deleting leaves the value on the rows that carry it: those rows are a

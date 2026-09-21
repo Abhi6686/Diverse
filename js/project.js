@@ -268,6 +268,20 @@
     return bid.dueDate ? U.esc(U.date(bid.dueDate)) : '';
   }
 
+  /* The address, with the map link beside it rather than instead of it: the
+     text is what gets typed onto a delivery note, and the pin is for working
+     out where the job actually is. U.mapsUrl refuses to build a link for an
+     empty address, so a blank field is just blank. */
+  function locationValue(bid) {
+    var loc = String(bid.location || '').trim();
+    if (!loc) return '';
+    return U.esc(loc) +
+      ' <a href="' + U.escAttr(U.mapsUrl(loc)) + '" target="_blank" rel="noopener noreferrer" ' +
+        'onclick="event.stopPropagation()" title="Open in Google Maps" ' +
+        'class="ml-1 text-brand hover:text-brand-ink whitespace-nowrap">' +
+        '<i class="fas fa-map-location-dot text-3xs"></i></a>';
+  }
+
   function revisedDueValue(bid) {
     var revised = String(bid.revisedDueDate || '').trim();
     if (!revised) return '';
@@ -297,6 +311,12 @@
     return b ? b.id : null;
   }
 
+  function portalOptions(bid) {
+    var list = (db().portals || []).slice();
+    if (bid.portal && list.indexOf(bid.portal) < 0) list.push(bid.portal);
+    return list;
+  }
+
   function detailsCard(bid) {
     var d = db();
 
@@ -316,13 +336,22 @@
         { field: 'dueDate', type: 'date', value: bid.dueDate || '' }) +
       edit('Revised Due', revisedDueValue(bid),
         { field: 'revisedDueDate', type: 'date', value: bid.revisedDueDate || '' }) +
+      // From the managed list, like Region beside it - see Settings > Portals.
+      // A bid on a portal since removed keeps it as an option of its own, so
+      // opening the editor cannot quietly rewrite the value.
       edit('Portal', U.esc(bid.portal),
         { field: 'portal', type: 'select', value: bid.portal,
-          options: ['PlanHub', 'ConstructConnect', 'BuildingConnected', 'PennBid', 'SmartBid', 'Other'] }) +
+          options: portalOptions(bid) }) +
       edit('Region', U.esc(bid.region) +
         (bid.inRegion === false ? '<span class="block text-3xs text-warn">out of region</span>' : ''),
         { field: 'region', type: 'select', value: bid.region,
           options: (d.regions || []).slice().sort() }) +
+      /* The site address, under the region it sits in. It is the same value the
+         printed proposal carries as PROJECT SITE ADDRESS - editing it either
+         here or in the proposal editor moves both, so there is one address per
+         project rather than two that quietly disagree. */
+      edit('Location', locationValue(bid),
+        { field: 'location', type: 'text', value: bid.location || '' }) +
       // Derived from the Products & Materials card below, so read-only here.
       field('Material', U.esc(bid.material)) +
       // Which stage's people and hours, matching the columns on the list you

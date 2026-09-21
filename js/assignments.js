@@ -49,6 +49,54 @@
    */
   var DEFAULT_DAYS = 3;
 
+  /* Which rows have their empty days showing, by row id.
+   *
+   * A view state and nothing else: it is about what this person has open on
+   * this screen right now, not about the booking. So it lives here and never
+   * goes near Store.save - writing it to the record would broadcast "AF opened
+   * a row" to every browser in the office as a change to the bid. */
+  var expanded = {};
+
+  /* The day most recently added by hand, per row.
+   *
+   * It has no hours on it yet - that is the point of having just added it - so
+   * the fold would hide it the instant it was created, which reads as the
+   * button doing nothing. It stays visible until something else happens on that
+   * row: typing hours into it (the usual next move), or folding the strip by
+   * hand. Same shape as `expanded`, and equally not part of the record. */
+  var justAdded = {};
+
+  /* ---- is this task finished -------------------------------------------- */
+
+  /* WHERE A TASK IS UP TO, PER PERSON.
+   *
+   * The bid already has a status, but that is the bid's - one word for work
+   * that three people are doing three parts of. "Is the takeoff done" and "has
+   * anybody started estimating" were questions you could only answer by asking
+   * the person, which is what this replaces.
+   *
+   * Three values and no more. A percentage invites arguing about whether
+   * something is 60 or 70 done; started/not started/finished is what a
+   * standup actually needs, and it rolls up into a count anybody can read.
+   *
+   * Stored as the key, not the label, so renaming what it says on screen does
+   * not rewrite every record. `tone` is the badge colouring, matching the bid
+   * statuses in js/bids.js so the same three ideas look the same everywhere.
+   */
+  var STATUS = {
+    todo:    { label: 'Not started', order: 0, cls: 'bg-neutral-soft text-neutral-ink' },
+    doing:   { label: 'In progress', order: 1, cls: 'bg-warn-soft text-warn-ink' },
+    done:    { label: 'Done',        order: 2, cls: 'bg-ok-soft text-ok-ink' }
+  };
+
+  var STATUS_KEYS = ['todo', 'doing', 'done'];
+
+  function statusOf(r) {
+    return STATUS[r && r.status] ? r.status : 'todo';
+  }
+
+  function isDone(r) { return statusOf(r) === 'done'; }
+
   function dayRows(r) {
     return (r && Array.isArray(r.days)) ? r.days : [];
   }
@@ -124,6 +172,9 @@
   function ensure(bid) {
     var changed = false;
     rows(bid).forEach(function (r) {
+      // A row from before completion was tracked is Not started, which is the
+      // only honest reading: nobody said it was done.
+      if (!STATUS[r.status]) { r.status = 'todo'; changed = true; }
       if (!r.startDate) { r.startDate = defaultStart(bid); changed = true; }
       if (!Array.isArray(r.days) || !r.days.length) {
         r.days = workingRun(r.startDate, DEFAULT_DAYS).map(function (d) {
@@ -153,9 +204,13 @@
    * nothing totals across them.
    */
   function totals(bid) {
-    var est = 0, asgn = 0;
-    rows(bid).forEach(function (r) { est += U.n(r.estHrs); asgn += U.n(r.asgnHrs); });
-    return { est: est, asgn: asgn, count: rows(bid).length };
+    var est = 0, asgn = 0, done = 0;
+    rows(bid).forEach(function (r) {
+      est += U.n(r.estHrs);
+      asgn += U.n(r.asgnHrs);
+      if (isDone(r)) done++;
+    });
+    return { est: est, asgn: asgn, count: rows(bid).length, done: done };
   }
 
   /* Distinct initials, in the order they were added - one engineer with three
@@ -213,6 +268,7 @@
     if (isWeekend(start)) start = nextWorkingDay(start);
     bid.assignments.push(syncRow({
       id: root.Store.uid('asg'), engineer: '', taskType: '', estHrs: 0, asgnHrs: 0,
+      status: 'todo', completedAt: '',
       startDate: start,
       days: workingRun(start, DEFAULT_DAYS).map(function (d) {
         return { date: d, hrs: null };
@@ -241,6 +297,17 @@
     }
     if (field === 'estHrs') {
       row[field] = U.n(value);
+    } else if (field === 'status') {
+      /* The completion date is stamped by moving the row to Done and cleared by
+         moving it back, rather than being a fourth thing to type. Re-selecting
+         Done on a row that is already done leaves the original date alone: the
+         task finished when it finished, not when somebody clicked the menu
+         again. */
+      var next = STATUS[value] ? value : 'todo';
+      var was = statusOf(row);
+      row.status = next;
+      if (next === 'done' && was !== 'done') row.completedAt = U.today();
+      if (next !== 'done') row.completedAt = '';
     } else if (field === 'startDate') {
       // Moving the start slides the whole booking, keeping the hours on the
       // same working day of the task: a job pushed back a week is the same
@@ -278,6 +345,8 @@
     if (!Array.isArray(row.days)) row.days = [];
     var cell = row.days.filter(function (d) { return d.date === date; })[0];
     var value = hrs === '' || hrs == null ? null : U.n(hrs);
+    // Whatever was added last has now been answered, one way or the other.
+    delete justAdded[rowId];
     if (cell) cell.hrs = value;
     else row.days.push({ date: date, hrs: value });
     row.days.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
@@ -285,17 +354,43 @@
     save(bid);
   }
 
-  /* Another working day on the end of the run. */
-  function addDay(bidId, rowId) {
+  /* Another day on the row.
+   *
+   * With no date, the next working day after the last one - which is what the
+   * keyboard path and every existing caller expect. With one, that day exactly:
+   * the picker offers the next few and the calendar reaches anything further
+   * out, and neither should have to step through the days in between. */
+  function addDay(bidId, rowId, iso) {
     var bid = bidById(bidId);
     var row = rowById(bid, rowId);
     if (!row) return;
-    begin(bid);
     if (!Array.isArray(row.days)) row.days = [];
-    var last = row.days.length
-      ? row.days[row.days.length - 1].date
-      : (row.startDate || U.today());
-    row.days.push({ date: row.days.length ? nextWorkingDay(last) : last, hrs: null });
+
+    var date;
+    if (iso) {
+      date = String(iso);
+      if (row.days.some(function (d) { return d.date === date; })) {
+        U.toast(U.date(date) + ' is already on this row.', 'warn');
+        return;
+      }
+    } else {
+      var last = row.days.length
+        ? row.days[row.days.length - 1].date
+        : (row.startDate || U.today());
+      date = row.days.length ? nextWorkingDay(last) : last;
+    }
+
+    begin(bid);
+    row.days.push({ date: date, hrs: null });
+    row.days.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    /* A day booked before the start IS the new start. Written directly rather
+       than through set(), which slides the whole booking to keep its shape -
+       here the shape is what just changed. */
+    if (!row.startDate || date < row.startDate) row.startDate = date;
+    // A day added by hand is one somebody is about to fill in, so it stays on
+    // screen until they do - otherwise the fold hides the box they just asked
+    // for. The rest of the empties stay folded.
+    justAdded[row.id] = date;
     syncRow(row);
     save(bid);
   }
@@ -306,12 +401,21 @@
     var bid = bidById(bidId);
     var row = rowById(bid, rowId);
     if (!row || !dayRows(row).length) return;
-    var last = row.days[row.days.length - 1];
-    if (U.n(last.hrs) &&
-        !confirm('Remove ' + U.date(last.date) + '?\n\n' +
-                 U.qty(U.n(last.hrs)) + ' hrs come off this row.')) return;
+    removeDayAt(bidId, rowId, row.days[row.days.length - 1].date);
+  }
+
+  /* One named day, from the × on its own box. */
+  function removeDayAt(bidId, rowId, date) {
+    var bid = bidById(bidId);
+    var row = rowById(bid, rowId);
+    if (!row || !dayRows(row).length) return;
+    var cell = row.days.filter(function (d) { return d.date === date; })[0];
+    if (!cell) return;
+    if (U.n(cell.hrs) &&
+        !confirm('Remove ' + U.date(cell.date) + '?\n\n' +
+                 U.qty(U.n(cell.hrs)) + ' hrs come off this row.')) return;
     begin(bid);
-    row.days.pop();
+    row.days = row.days.filter(function (d) { return d.date !== date; });
     syncRow(row);
     save(bid);
   }
@@ -380,6 +484,34 @@
       'outline-none focus:border-brand">';
   }
 
+  /* WHERE THIS PERSON'S TASK IS UP TO.
+
+     A select rather than a checkbox, because "started but not finished" is the
+     state most rows are actually in and a tick cannot say it. It is coloured
+     like the value it holds - the same three tones the bid statuses use - so a
+     card of six rows reads at a glance instead of needing each one opened.
+
+     The completion date sits under it rather than beside it: it is only there
+     on a finished row, and giving it a column of its own would leave four out
+     of five rows showing an empty cell. */
+  function statusCell(bidId, r) {
+    var key = statusOf(r);
+    var s = STATUS[key];
+    return '<select aria-label="Task status" ' +
+        'onchange="Assign.set(' + bidId + ',\'' + r.id + '\',\'status\',this.value)" ' +
+        'class="w-full px-2 py-1.5 border border-line rounded text-xs font-semibold ' +
+        'outline-none focus:border-brand ' + s.cls + '">' +
+        STATUS_KEYS.map(function (k) {
+          return '<option value="' + k + '"' + (k === key ? ' selected' : '') + '>' +
+            U.esc(STATUS[k].label) + '</option>';
+        }).join('') +
+      '</select>' +
+      (key === 'done' && r.completedAt
+        ? '<div class="text-3xs text-muted mt-0.5 whitespace-nowrap" title="Completed">' +
+          '<i class="fas fa-check text-ok mr-0.5"></i>' + U.esc(U.date(r.completedAt)) + '</div>'
+        : '');
+  }
+
   function row(bidId, r) {
     var types = db().taskTypes || [];
     // A value that predates the managed list stays selectable on its own row
@@ -410,6 +542,7 @@
           '<option value="__add">+ Add new task type...</option>' +
         '</select>' +
       '</td>' +
+      '<td class="py-2 pr-2 w-32">' + statusCell(bidId, r) + '</td>' +
       '<td class="py-2 pr-2 w-24">' + hoursInput(bidId, r, 'estHrs', 'Estimation hours') + '</td>' +
       // Read-only: this is the sum of the day cells below, and typing over it
       // would put the two into disagreement. See syncRow.
@@ -438,8 +571,25 @@
      real week; Add day steps over them. */
   function dayStrip(bidId, r) {
     var days = dayRows(r);
+    var booked = days.filter(function (d) { return U.n(d.hrs) > 0; });
+    /* WHAT A SAVED ROW SHOWS: THE DAYS SOMEBODY WORKED.
+     *
+     * Every booked day used to be a box whether or not anything went in it, so
+     * a three-week task was twenty boxes of which five had numbers and the rest
+     * were noise - and nothing on screen told the two apart.
+     *
+     * So the empties fold away behind a count, which opens them again. Two
+     * exceptions, both of them about not leaving somebody with nowhere to type:
+     * a row with nothing booked yet shows all of its days (that is every new
+     * row), and a row somebody has opened stays open until they close it. */
+    var open = expanded[r.id] || !booked.length;
+    var shown = open ? days : days.filter(function (d) {
+      return U.n(d.hrs) > 0 || d.date === justAdded[r.id];
+    });
+    var hidden = days.length - shown.length;
+
     return '<tr class="border-t border-line/60">' +
-      '<td colspan="5" class="pb-3 pt-1 pl-1">' +
+      '<td colspan="6" class="pb-3 pt-1 pl-1">' +
         '<div class="flex items-end gap-3 flex-wrap">' +
           '<div>' +
             '<div class="text-3xs font-bold text-faint uppercase tracking-wider mb-1">Starts</div>' +
@@ -448,22 +598,85 @@
               'Assign.set(' + bidId + ',&quot;' + r.id + '&quot;,&quot;startDate&quot;,this.value)') +
           '</div>' +
           '<div class="flex items-end gap-1 flex-wrap">' +
-            days.map(function (d) { return dayCell(bidId, r, d); }).join('') +
-            '<button onclick="Assign.addDay(' + bidId + ',\'' + r.id + '\')" ' +
-              'title="Book another working day" ' +
+            shown.map(function (d) { return dayCell(bidId, r, d); }).join('') +
+            (hidden
+              ? '<button onclick="Assign.toggleEmpty(' + bidId + ',\'' + r.id + '\')" ' +
+                'title="' + U.escAttr(hidden + ' booked day(s) with no hours on them yet') + '" ' +
+                'class="h-[30px] mb-px px-2 rounded border border-dashed border-line-strong ' +
+                'text-3xs font-semibold text-faint hover:text-brand hover:border-brand">' +
+                '+' + hidden + ' empty</button>'
+              : '') +
+            (open && days.length > booked.length && booked.length
+              ? '<button onclick="Assign.toggleEmpty(' + bidId + ',\'' + r.id + '\')" ' +
+                'title="Show only the days with hours on them" ' +
+                'class="h-[30px] mb-px px-2 rounded text-3xs font-semibold text-faint hover:text-ink">' +
+                'Hide empty</button>'
+              : '') +
+            '<button id="asg-addday-' + r.id + '" ' +
+              'onclick="Assign.openDayPicker(this,' + bidId + ',\'' + r.id + '\')" ' +
+              'title="Book another day" ' +
               'class="w-9 h-[30px] mb-px rounded border border-dashed border-line-strong ' +
               'text-faint hover:text-brand hover:border-brand text-xs">' +
               '<i class="fas fa-plus text-3xs"></i></button>' +
-            (days.length > 1
-              ? '<button onclick="Assign.removeDay(' + bidId + ',\'' + r.id + '\')" ' +
-                'title="Drop the last day" ' +
-                'class="w-6 h-[30px] mb-px text-faint hover:text-danger text-xs">' +
-                '<i class="fas fa-minus text-3xs"></i></button>'
-              : '') +
           '</div>' +
         '</div>' +
       '</td>' +
     '</tr>';
+  }
+
+  /* WHICH DAY TO BOOK NEXT, OFFERED RATHER THAN GUESSED.
+   *
+   * The + used to append the next working day and nothing else, so a task
+   * starting a fortnight out was ten clicks and ten boxes to delete
+   * afterwards. It opens a short list instead: the next few working days, and
+   * the calendar for anything past them.
+   *
+   * Five, because that is a working week - far enough to cover "some time next
+   * week" without becoming a second calendar to read. */
+  var PICK_AHEAD = 5;
+
+  function nextWorkingDays(r, count) {
+    var days = dayRows(r);
+    var from = days.length ? days[days.length - 1].date : (r.startDate || U.today());
+    var out = [];
+    var day = from;
+    while (out.length < count) {
+      day = nextWorkingDay(day);
+      out.push(day);
+    }
+    return out;
+  }
+
+  function dayPickerHTML(bidId, r) {
+    var have = {};
+    dayRows(r).forEach(function (d) { have[d.date] = true; });
+
+    return '<div class="w-48">' +
+      '<div class="px-2 pt-1 pb-1.5 text-3xs font-bold text-muted uppercase tracking-wider">' +
+        'Book a day</div>' +
+      nextWorkingDays(r, PICK_AHEAD).map(function (iso) {
+        var dt = U.parseDate(iso);
+        var label = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()] + ' ' +
+          dt.getDate() + ' ' +
+          ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][dt.getMonth()];
+        // A day already on the row is shown greyed rather than left out, so the
+        // list does not quietly renumber itself between two openings.
+        if (have[iso]) {
+          return '<div class="px-2 py-1.5 text-xs text-faint flex items-center justify-between">' +
+            U.esc(label) + '<span class="text-3xs">booked</span></div>';
+        }
+        // Closes first: the row re-renders underneath, and a panel left hanging
+        // over it would be pointing at boxes that have been replaced.
+        return '<button onclick="UI.closePopover();Assign.addDay(' + bidId + ',\'' + r.id +
+            '\',\'' + iso + '\')" ' +
+          'class="w-full text-left px-2 py-1.5 rounded text-xs text-ink hover:bg-raised">' +
+          U.esc(label) + '</button>';
+      }).join('') +
+      '<div class="border-t border-line mt-1 pt-1">' +
+        '<button onclick="Assign.pickDayFromCalendar(' + bidId + ',\'' + r.id + '\')" ' +
+          'class="w-full text-left px-2 py-1.5 rounded text-xs text-brand hover:bg-raised">' +
+          '<i class="fas fa-calendar-days mr-1.5"></i>Pick a date...</button>' +
+      '</div></div>';
   }
 
   function dayCell(bidId, r, d) {
@@ -471,7 +684,18 @@
     var dt = U.parseDate(d.date);
     var dow = dt ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()] : '';
     var dom = dt ? String(dt.getDate()) : '';
-    return '<label class="block text-center" title="' + U.escAttr(U.date(d.date)) + '">' +
+    /* Each day carries its own delete, on hover - the same arrangement the
+       takeoff's grid columns use. It replaced a "drop the last day" button at
+       the end of the strip, which stopped making sense once the last day can be
+       one of the hidden empties. */
+    return '<label class="group/day block text-center relative" title="' +
+        U.escAttr(U.date(d.date)) + '">' +
+      '<button onclick="event.preventDefault();Assign.removeDayAt(' + bidId + ',\'' + r.id +
+          '\',\'' + d.date + '\')" ' +
+        'title="Remove this day" tabindex="-1" ' +
+        'class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-surface border border-line ' +
+        'text-3xs text-faint hover:text-danger hover:border-danger leading-none ' +
+        'opacity-0 group-hover/day:opacity-100 transition">&times;</button>' +
       '<span class="block text-3xs uppercase tracking-wider ' +
         (weekend ? 'text-faint' : 'text-muted') + '">' + dow + '</span>' +
       '<span class="block text-3xs ' + (weekend ? 'text-faint' : 'text-muted') + ' mb-0.5">' +
@@ -495,12 +719,31 @@
         (t.count ? t.count + ' row' + (t.count > 1 ? 's' : '') +
           ' &middot; ' + engineerList(bid).length + ' engineer' + (engineerList(bid).length === 1 ? '' : 's')
         : '') + '</td>' +
+      // The completion count sits under the column it counts, which is what
+      // makes it read as a total of that column rather than a stray figure.
+      '<td class="py-2.5 pr-2 text-xs font-semibold ' +
+        (t.count && t.done === t.count ? 'text-ok-ink' : 'text-muted') + '">' +
+        (t.count ? t.done + ' of ' + t.count + ' done' : '') + '</td>' +
       '<td class="py-2.5 pr-2 text-right font-mono text-sm font-bold text-ink-strong" id="asgTotalEst">' +
         U.qty(t.est) + '</td>' +
       '<td class="py-2.5 pr-2 text-right font-mono text-sm font-bold text-ink-strong" id="asgTotalAsgn">' +
         U.qty(t.asgn) + '</td>' +
       '<td class="py-2.5 text-center text-3xs text-faint">hrs</td>' +
     '</tr>';
+  }
+
+  /* How much of the team's work is finished, on the card header - so the answer
+     is there before the card is read, and still there when it is collapsed into
+     a screenshot. Absent on a card with no rows, where 0 of 0 would be noise. */
+  function progressPill(bid) {
+    var t = totals(bid);
+    if (!t.count) return '';
+    var all = t.done === t.count;
+    return '<span class="px-2 py-0.5 rounded-full text-3xs font-semibold ' +
+      (all ? 'bg-ok-soft text-ok-ink' : 'bg-neutral-soft text-muted') + '" ' +
+      'title="Tasks marked done on this project">' +
+      (all ? '<i class="fas fa-check mr-1"></i>' : '') +
+      t.done + '/' + t.count + ' done</span>';
   }
 
   function card(bid) {
@@ -510,6 +753,7 @@
           '<thead><tr class="text-3xs font-bold text-faint uppercase tracking-wider text-left">' +
             '<th class="pb-2 pr-2 w-28">Engineer</th>' +
             '<th class="pb-2 pr-2">Description</th>' +
+            '<th class="pb-2 pr-2 w-32">Status</th>' +
             '<th class="pb-2 pr-2 text-right">Estm Hrs</th>' +
             '<th class="pb-2 pr-2 text-right">Asgn Hrs</th>' +
             '<th class="pb-2"></th>' +
@@ -528,6 +772,7 @@
       '<div class="px-5 py-3 border-b border-line bg-raised flex items-center justify-between gap-3">' +
         '<h3 class="text-sm font-bold text-ink flex items-center gap-2">' +
           '<i class="fas fa-users text-faint"></i>Team &amp; Hours' +
+          progressPill(bid) +
         '</h3>' +
         '<button onclick="Assign.add(' + bid.id + ')" ' +
           'class="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5">' +
@@ -577,6 +822,22 @@
     rows: rows,
     totals: totals,
     engineerList: engineerList,
+
+    /* Completion, for the callers outside this card: the bids table marks a
+       finished engineer's chip, the change log names the state, and the
+       workbook export carries both columns. */
+    STATUS: STATUS,
+    statusOf: statusOf,
+    isDone: isDone,
+    statusLabel: function (r) { return STATUS[statusOf(r)].label; },
+    /* Every row this person has on this bid is finished. One engineer can hold
+       two tasks, and a chip must not say done while half their work is open. */
+    engineerDone: function (bid, initials) {
+      var mine = rows(bid).filter(function (r) {
+        return U.low(r.engineer) === U.low(initials);
+      });
+      return mine.length > 0 && mine.every(isDone);
+    },
     card: card,
     render: render,
     wire: wire,
@@ -591,6 +852,40 @@
     setDay: setDay,
     addDay: addDay,
     removeDay: removeDay,
+    removeDayAt: removeDayAt,
+
+    /* Show or fold this row's days with nothing booked to them. */
+    toggleEmpty: function (bidId, rowId) {
+      expanded[rowId] = !expanded[rowId];
+      // Folding by hand is an explicit "I am done with these", including the
+      // one just added.
+      delete justAdded[rowId];
+      render(bidById(bidId));
+    },
+
+    /* The next few working days, and a way to reach any other one. */
+    openDayPicker: function (anchor, bidId, rowId) {
+      var row = rowById(bidById(bidId), rowId);
+      if (!row) return;
+      root.UI.popover(anchor, dayPickerHTML(bidId, row), { cls: 'p-1' });
+    },
+
+    pickDayFromCalendar: function (bidId, rowId) {
+      var row = rowById(bidById(bidId), rowId);
+      if (!row) return;
+      var anchor = U.$('asg-addday-' + rowId);
+      if (!anchor) return;
+      var days = dayRows(row);
+      U.openDatePicker(anchor, {
+        // Opens on the month the booking is in rather than on this one, which
+        // is where the next day to book almost always is.
+        value: days.length ? days[days.length - 1].date : (row.startDate || U.today()),
+        onPick: function (iso) {
+          root.UI.closePopover();
+          if (iso) addDay(bidId, rowId, iso);
+        }
+      });
+    },
     syncRow: syncRow,
     isWeekend: isWeekend,
     nextWorkingDay: nextWorkingDay,

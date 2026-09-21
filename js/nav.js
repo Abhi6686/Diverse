@@ -79,6 +79,8 @@
         { key: 'engineers', label: 'Engineers', icon: 'fa-user-gear', dom: 'settings', perm: 'settings.view' },
         { key: 'tasktypes', label: 'Task Types', icon: 'fa-list-check', dom: 'settings', perm: 'settings.view' },
         { key: 'materials', label: 'Materials', icon: 'fa-layer-group', dom: 'settings', perm: 'settings.view' },
+        { key: 'portals', label: 'Portals', icon: 'fa-globe', dom: 'settings', perm: 'settings.view' },
+        { key: 'statuses', label: 'Bid Statuses', icon: 'fa-flag', dom: 'settings', perm: 'settings.view' },
         { key: 'company', label: 'Company', icon: 'fa-building', dom: 'settings', perm: 'settings.view' },
         /* Administration. Separate permissions from settings.view so a role can
            be given the shop's reference data without also being handed the

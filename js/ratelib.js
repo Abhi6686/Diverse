@@ -14,8 +14,10 @@
     if (view.q) {
       var q = view.q.toLowerCase();
       list = list.filter(function (c) {
+        // The three columns on screen. Searching the hidden feature as well
+        // returned rows with no visible reason for matching.
         return U.low(c.description).indexOf(q) >= 0 || U.low(c.partNo).indexOf(q) >= 0 ||
-          U.low(c.vendor).indexOf(q) >= 0 || U.low(c.feature).indexOf(q) >= 0;
+          U.low(c.vendor).indexOf(q) >= 0;
       });
     }
     if (view.vendor) list = list.filter(function (c) { return c.vendor === view.vendor; });
@@ -93,7 +95,17 @@
       '<div class="overflow-x-auto max-h-[560px] overflow-y-auto"><table class="w-full text-xs grid-table">' +
       '<thead class="sticky-header"><tr>' +
         '<th class="px-2 py-2 w-8"></th>' +
-        [['Vendor', 'left'], ['Part No', 'left'], ['Description', 'left'], ['Feature', 'left'],
+        /* NO FEATURE COLUMN. It held the scope name a part was bought for -
+           "Top Rail" against every length of pipe - which is the takeoff's
+           Features column restated on the wrong side of the app: the takeoff
+           says what a row is for, the library says what a part is. On screen it
+           made every page of parts look like one job.
+
+           The value is still on the record and still does its one real job,
+           which is matching a scope to a part it has been bought for before -
+           see Catalog.byFeature. It is simply not a column anybody maintains
+           by hand any more. */
+        [['Vendor', 'left'], ['Part No', 'left'], ['Description', 'left'],
          ['Material', 'left'], ['Grade', 'left'], ['U/M', 'center'],
          ['Length/PKT Qty', 'right'], ['Stock U/M', 'center'], ['Unit Cost', 'right'],
          ['Used On', 'left'], ['Used', 'center'], ['Source', 'center'], ['', 'center']]
@@ -107,7 +119,7 @@
           '<td class="px-2 py-1 col-center"><input type="checkbox" ' + (view.sel[c.id] ? 'checked' : '') +
             ' onchange="RateLib.toggleSel(\'' + c.id + '\')"></td>' +
           inp(c, 'vendor', 'w-24') + inp(c, 'partNo', 'w-24') +
-          inp(c, 'description', 'min-w-[260px] w-full') + inp(c, 'feature', 'w-28') +
+          inp(c, 'description', 'min-w-[260px] w-full') +
           inp(c, 'material', 'w-24') + inp(c, 'grade', 'w-20') + inp(c, 'um', 'w-12', 'col-center') +
           /* What the vendor sells it in. Blank on everything seeded from the
              workbook, which never recorded it - the takeoff learns it the first
@@ -135,13 +147,13 @@
             (c.source === 'seed' ? 'seed' : 'learned') + '</span></td>' +
           '<td class="px-2 py-1 col-center"><button onclick="RateLib.del(\'' + c.id + '\')" class="text-faint hover:text-danger"><i class="fas fa-times"></i></button></td>' +
           '</tr>' +
-          '<tr id="hist-' + c.id + '" class="hidden bg-brand-soft/40"><td></td><td colspan="14" class="px-3 py-2">' +
+          '<tr id="hist-' + c.id + '" class="hidden bg-brand-soft/40"><td></td><td colspan="13" class="px-3 py-2">' +
             '<div class="text-3xs text-muted"><strong>Price history:</strong> ' +
             hist.map(function (h) {
               return U.currency2(h.cost) + ' <span class="text-faint">(' +
                 (h.at ? U.date(h.at) : 'seed') + (h.project ? ', ' + U.esc(h.project) : '') + ')</span>';
             }).join(' &larr; ') + '</div></td></tr>';
-      }).join('') : '<tr><td colspan="15" class="px-3 py-10 text-center text-faint">No parts match those filters.</td></tr>') +
+      }).join('') : '<tr><td colspan="14" class="px-3 py-10 text-center text-faint">No parts match those filters.</td></tr>') +
       '</tbody></table></div></div>';
   }
 

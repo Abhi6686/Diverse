@@ -1546,6 +1546,73 @@
 
   /* ---- drawing grid ---------------------------------------------------- */
 
+  /* WHAT A COLUMN IS MEASURED IN, AS A LIST RATHER THAN A BOX.
+
+     It was a free-text input with a datalist hint behind it, which took "lf",
+     "Feet", "ln ft" and a typo just as readily as LF - and the unit is not
+     decoration. It is printed on the material row, checked against the vendor's
+     stock unit (see the mismatch warning on the Materials tab) and carried onto
+     the proposal, so a column measured in "ln ft" is a column none of that can
+     reason about.
+
+     A unit already stored that is not on the list is carried as its own option
+     rather than being dropped, which would silently rewrite a record just by
+     rendering it. Same rule as the status select on the bid form. */
+  function unitSelect(col) {
+    var cur = String(col.um || '');
+    var known = M.UNITS.indexOf(cur) >= 0;
+    return '<select onchange="Takeoff.setColUnit(\'' + col.key + '\',this.value)" ' +
+      'title="What this column is measured in" aria-label="Unit for ' + U.escAttr(col.label) + '" ' +
+      'class="w-16 px-1 py-0.5 bg-raised border border-line rounded text-3xs text-center ' +
+      'outline-none focus:border-brand">' +
+      '<option value=""' + (cur ? '' : ' selected') + '>&mdash;</option>' +
+      (cur && !known
+        ? '<option value="' + U.escAttr(cur) + '" selected>' + U.esc(cur) + '</option>'
+        : '') +
+      M.UNITS.map(function (u) {
+        return '<option value="' + u + '"' + (u === cur ? ' selected' : '') + '>' + u + '</option>';
+      }).join('') +
+      '</select>';
+  }
+
+  /* THE FORM THAT BUILDS THE GRID.
+
+     Two fields, because a column is two facts: what is being measured and what
+     it is measured in. It replaced a pair of browser prompt() dialogs - one
+     asking for the name, one pasting the unit list into its message text - which
+     was survivable while the grid arrived pre-filled and is not now that every
+     column is typed.
+
+     Laid out like the add-document bar on the Documents tab, and for the same
+     reason: it is the same job, so it should not be a second thing to learn. */
+  function columnForm(p) {
+    var unit = (p && p.unit) || 'LF';
+    return '<div class="mt-3 p-3 bg-raised border border-line rounded-lg">' +
+      '<div class="flex flex-wrap items-end gap-2">' +
+        '<div class="flex-1 min-w-[220px]">' +
+          '<label class="block text-3xs font-semibold text-muted uppercase tracking-wider mb-1" ' +
+            'for="gridColName">What are you measuring?</label>' +
+          '<input id="gridColName" placeholder="Top Rail 1-1/2&quot; Pipe" autocomplete="off" ' +
+            'onkeydown="if(event.key===\'Enter\'){event.preventDefault();Takeoff.addCol()}" ' +
+            'class="w-full px-2 py-1.5 bg-surface border border-line rounded text-xs outline-none focus:border-brand"></div>' +
+        '<div>' +
+          '<label class="block text-3xs font-semibold text-muted uppercase tracking-wider mb-1" ' +
+            'for="gridColUnit">Measured in</label>' +
+          '<select id="gridColUnit" ' +
+            'class="px-2 py-1.5 bg-surface border border-line rounded text-xs outline-none focus:border-brand">' +
+            M.UNITS.map(function (u) {
+              // The product's own unit first in line: rail is measured in feet,
+              // bollards are counted, and that is right far more often than not.
+              return '<option value="' + u + '"' + (u === unit ? ' selected' : '') + '>' + u + '</option>';
+            }).join('') +
+          '</select></div>' +
+        '<button onclick="Takeoff.addCol()" ' +
+          'class="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-xs font-semibold">' +
+          '<i class="fas fa-plus mr-1"></i>Add column</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   function renderGrid(p) {
     var g = currentGroup();
     var subs = M.gridSubtotals(g);
@@ -1560,6 +1627,38 @@
     function scopeFor(col) {
       var k = M.scopeKey(col.label);
       return scopes.filter(function (s) { return s.key === k; })[0] || null;
+    }
+
+    /* NOTHING MEASURED YET.
+
+       A product no longer arrives with its workbook's columns laid out (see the
+       note in js/rates.js), so this is what the tab opens on. A table with one
+       column headed Drawing Ref. No and a lone + in the corner says nothing
+       about what to do; the panel names the two things a column is - what is
+       being measured, and what it is measured in - and puts the form to create
+       one underneath. */
+    if (!cols.length) {
+      return '<div class="flex flex-wrap items-center gap-2 mb-4">' + groupTabs + '</div>' +
+        /* Still shown when another group of this product has measured
+           something: the strip is about the product, not this tab, and a
+           bollard's second group opening with no idea what the first one holds
+           is how the same scope gets measured twice. Empty on a product with
+           nothing on it at all - scopeStrip returns '' for that. */
+        scopeStrip(p, scopes) +
+        '<div class="border border-dashed border-line-strong rounded-lg py-10 px-4 text-center">' +
+          '<i class="fas fa-ruler-combined text-3xl text-chrome-ink mb-3"></i>' +
+          '<p class="text-sm text-muted max-w-md mx-auto">Nothing measured on <strong>' +
+            U.esc(g.name) + '</strong> yet. Name what you are measuring and pick the unit ' +
+            'it is measured in &mdash; then add a drawing reference and type the quantities ' +
+            'off the sheet.</p>' +
+        '</div>' +
+        columnForm(p) +
+        '<div class="mt-3 text-2xs text-faint space-y-1">' +
+          '<p>One column per thing being measured. Each one that ends up with a quantity in it ' +
+          'becomes a row on the <strong>Materials</strong> tab under its own name.</p>' +
+          '<p>Two columns of the same name are one scope and total together, wherever they are ' +
+          'in this product &mdash; so the same rail measured on two sheets is one order.</p>' +
+        '</div>';
     }
 
     return '<div class="flex flex-wrap items-center gap-2 mb-4">' + groupTabs + '</div>' +
@@ -1593,13 +1692,15 @@
                     p.type + '. They total as one scope.') + '">' +
                   '<i class="fas fa-link"></i> &times;' + s.columns.length + '</span>'
                 : '') +
-              '<input list="umList" value="' + U.escAttr(col.um || '') + '" ' +
-                'onchange="Takeoff.setColUnit(\'' + col.key + '\',this.value)" ' +
-                'title="What this column is measured in" aria-label="Unit for ' + U.escAttr(col.label) + '" ' +
-                'class="w-12 px-1 py-0.5 bg-raised border border-line rounded text-3xs text-center uppercase outline-none focus:border-brand">' +
+              unitSelect(col) +
             '</div></th>';
         }).join('') +
-        '<th class="px-2 py-2 w-8"><button onclick="Takeoff.addCol()" class="text-faint hover:text-brand" title="Add column"><i class="fas fa-plus"></i></button></th>' +
+        /* Focuses the form below rather than opening a dialog of its own. The
+           grid scrolls sideways, so this + is only on screen when you happen to
+           be at the right-hand end of it - fine as a shortcut, no good as the
+           only way in. */
+        '<th class="px-2 py-2 w-8"><button onclick="Takeoff.focusColumnForm()" ' +
+          'class="text-faint hover:text-brand" title="Add a column"><i class="fas fa-plus"></i></button></th>' +
       '</tr></thead><tbody>' +
       (g.grid.rows.length ? g.grid.rows.map(function (row, ri) {
         return '<tr class="border-t border-line hover:bg-raised/60">' +
@@ -1636,6 +1737,9 @@
         }).join('') + '<td></td></tr></tfoot></table></div>' +
       umDatalist() +
       '<button onclick="Takeoff.addRow()" class="mt-3 px-4 py-2 bg-neutral-soft hover:bg-line text-ink rounded-lg text-xs font-semibold"><i class="fas fa-plus mr-1.5"></i>Add drawing reference</button>' +
+      // Under the table, where the next column is added from - the + in the
+      // header is a shortcut to this, not a second way of doing it.
+      columnForm(p) +
       '<div class="mt-3 text-2xs text-faint space-y-1">' +
         '<p>Every column with a quantity in it becomes a row on the <strong>Materials</strong> tab under its own name. ' +
         'Two columns with the same name are one scope and total together, wherever they are in this product.</p>' +
@@ -2093,20 +2197,68 @@
       save();
     },
 
-    /* Name it after the thing being bought - that name is what the material row
-       will be called, and what a second column of the same name totals with, so
-       it is worth typing carefully. The unit is asked for separately rather
-       than being written into the heading, because the order quantity divides
-       by it and cannot read prose. */
-    addCol: function () {
-      var label = prompt('What is being measured? (e.g. \'Top Rail 1-1/2" Pipe\')\n\n' +
-        'A material row is created under this name, and another column called ' +
-        'the same thing totals with it.', '');
-      if (label == null || !label.trim()) return;
-      var um = prompt('What is it measured in?\n\n' + M.UNITS.join('  '), 'LF');
-      if (um == null) return;
-      currentGroup().grid.columns.push(M.newColumn(label.trim(), um.trim().toUpperCase()));
+    /* ADDING A COLUMN, WHICH IS NOW HOW EVERY GRID GETS BUILT.
+     *
+     * Name it after the thing being bought: that name is what the material row
+     * will be called, and what a second column of the same name totals with, so
+     * it is worth typing carefully. The unit is a field of its own rather than
+     * something written into the heading, because the order quantity divides by
+     * it and cannot read prose.
+     *
+     * Both arguments are optional. Called with none - from the form's button,
+     * its Enter key - it reads the two controls; called with them, from a test
+     * or from anywhere else in the app, it does the same work without a DOM.
+     * One entry point either way, so the path the office uses is the path that
+     * is tested.
+     */
+    addCol: function (label, um) {
+      var g = currentGroup(), p = product();
+      if (!g) return;
+      var nameEl = U.$('gridColName'), unitEl = U.$('gridColUnit');
+      var typed = String(label == null ? (nameEl ? nameEl.value : '') : label).trim();
+      if (!typed) {
+        U.toast('Name what is being measured first - "Top Rail 1-1/2\\" Pipe", "Base Plate".', 'warn');
+        if (nameEl) nameEl.focus();
+        return;
+      }
+
+      /* A heading pasted off the workbook still carries its unit - 'Top Rail
+         (LF)' - and that is the estimator saying what it is measured in just as
+         much as the picker is. So the typed one wins, and the label keeps only
+         what it is actually called. */
+      var split = M.splitColumnUnit(typed);
+      var unit = split.um ||
+        String(um == null ? (unitEl ? unitEl.value : '') : um).trim().toUpperCase() ||
+        (p && p.unit) || 'LF';
+
+      // Two columns of one name are a feature - the same rail measured on two
+      // sheets is one order - but it should be a decision, not a surprise.
+      var twin = p ? M.findScope(p, M.scopeKey(split.label)) : null;
+      g.grid.columns.push(M.newColumn(split.label, unit));
+
+      /* Somewhere to put a number, straight away. Without this the first column
+         lands above an empty table and the estimator has to find a second
+         button before they can type anything. */
+      if (!g.grid.rows.length) g.grid.rows.push({ ref: '', values: {} });
+
+      if (nameEl) nameEl.value = '';
       save();
+      if (twin) {
+        U.toast('"' + split.label + '" is already measured elsewhere on ' + p.type +
+          ' - the two columns total as one scope.', 'info');
+      }
+      // The unit stays on whatever was last chosen and the cursor goes back to
+      // the name, so a run of columns is typed straight through.
+      root.Takeoff.focusColumnForm();
+    },
+
+    /* The + in the header scrolls the form into view and puts the cursor in it,
+       rather than opening a dialog of its own. */
+    focusColumnForm: function () {
+      var el = U.$('gridColName');
+      if (!el) return;
+      el.focus();
+      if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
     },
     removeCol: function (key) {
       var g = currentGroup(), p = product();

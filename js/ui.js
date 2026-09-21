@@ -545,14 +545,92 @@
       'status-completed':  'ok',
       'status-awarded':    'ok',
       'status-lost':       'danger',
-      'status-noscope':    'info'
+      'status-noscope':    'info',
+      /* The palette a shop-added status picks from - see Settings > Bid
+         Statuses. Listed here so the dashboard's Status chart colours one the
+         same way the badge does, rather than dropping it into grey. */
+      'status-tone-neutral': 'neutral',
+      'status-tone-brand':   'brand',
+      'status-tone-warn':    'warn',
+      'status-tone-ok':      'ok',
+      'status-tone-danger':  'danger',
+      'status-tone-info':    'info'
     },
 
     statusColor: function (status) {
       var s = root.Bids && root.Bids.statusOf && root.Bids.statusOf(status);
       return UI.color((s && UI.BADGE_TONE[s.badge]) || 'neutral');
-    }
+    },
+
+    /* ---- an anchored panel ---------------------------------------------- *
+     *
+     * The one exception to "no DOM, no state" at the top of this file, and it
+     * earns it: a small panel hung under the control that opened it, nudged
+     * back inside the window, dismissed by clicking away or pressing Escape.
+     *
+     * Fixed rather than absolute, because every caller so far sits inside
+     * something that scrolls - a table body, a project card - where an
+     * absolutely positioned panel is clipped by its own container.
+     *
+     * js/bidgrid.js keeps its own copy of this deliberately. Its popovers are
+     * entangled with the grid's scroll containers and a documented rule about
+     * scrolling *inside* a popover not dismissing it; merging the two is a
+     * separate job from adding this one.
+     */
+    popover: function (anchor, html, o) {
+      UI.closePopover();
+      o = o || {};
+      var el = document.createElement('div');
+      el.className = 'fixed z-[55] bg-surface border border-line rounded-xl shadow-pop ' +
+        (o.cls || 'p-2');
+      el.setAttribute('role', 'dialog');
+      el.innerHTML = html;
+      el.addEventListener('click', function (e) { e.stopPropagation(); });
+      document.body.appendChild(el);
+
+      var r = anchor.getBoundingClientRect();
+      var w = el.offsetWidth || 240, h = el.offsetHeight || 200;
+      var top = r.bottom + 4;
+      if (top + h > root.innerHeight - 8) top = Math.max(8, r.top - h - 4);
+      el.style.left = Math.max(8, Math.min(r.left, root.innerWidth - w - 8)) + 'px';
+      el.style.top = top + 'px';
+
+      popover = el;
+      // Next tick: the click that opened this one is still travelling.
+      setTimeout(function () {
+        document.addEventListener('mousedown', onDown, true);
+        document.addEventListener('keydown', onKey, true);
+      }, 0);
+      return el;
+    },
+
+    closePopover: closePopover
   };
+
+  /* ---- popover plumbing --------------------------------------------------- */
+
+  var popover = null;
+
+  function closePopover() {
+    if (!popover) return;
+    popover.remove();
+    popover = null;
+    document.removeEventListener('mousedown', onDown, true);
+    document.removeEventListener('keydown', onKey, true);
+  }
+
+  function onDown(e) {
+    if (popover && popover.contains(e.target)) return;
+    /* Not while the calendar is up. "Pick a date..." opens DatePicker on the
+       same anchor, and that click lands outside this panel - closing here would
+       take the popover down with the calendar still pointing at it. */
+    if (root.DatePicker && root.DatePicker.isOpen()) return;
+    closePopover();
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') { closePopover(); }
+  }
 
   root.UI = UI;
 })(window);

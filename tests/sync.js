@@ -264,6 +264,39 @@ async function main() {
       B.Store.db.taskTypes.includes('Weld inspection'),
       JSON.stringify(B.Store.db.taskTypes));
 
+    /* EVERY SHOP LIST, NOT JUST THE ONES SOMEBODY REMEMBERED.
+     *
+     * SETTING_KEYS is written out twice - js/remote.js decides what a browser
+     * sends, server/schema.js what the server will store - and a key on one
+     * side only is a list that quietly stops syncing. `materials` was exactly
+     * that: managed from Settings like regions and task types, edited by one
+     * person, and never once sent to anybody else. */
+    const serverKeys = require(path.join(ROOT, 'server/schema.js')).SETTING_KEYS;
+    check('the client and the server agree on which lists sync',
+      JSON.stringify(A.Remote.SETTING_KEYS.slice().sort()) ===
+      JSON.stringify(serverKeys.slice().sort()),
+      A.Remote.SETTING_KEYS.join(',') + '  vs  ' + serverKeys.join(','));
+    check('and every list Settings can edit is among them',
+      ['regions', 'productTypes', 'taskTypes', 'materials', 'portals', 'statuses',
+       'references', 'rates', 'company']
+        .every(k => serverKeys.indexOf(k) >= 0), serverKeys.join(','));
+
+    A.Store.db.portals.push('Dodge');
+    A.Store.db.materials.push('Bronze');
+    A.Store.db.statuses.push({ name: 'On Hold', tone: 'warn' });
+    A.Store.save();
+    await wait(1400);
+    check('a new portal reaches the other browser',
+      B.Store.db.portals.includes('Dodge'), JSON.stringify(B.Store.db.portals));
+    check('so does a material, which used to go nowhere at all',
+      B.Store.db.materials.includes('Bronze'), JSON.stringify(B.Store.db.materials));
+    check('and a status the shop added',
+      (B.Store.db.statuses || []).some(s => s.name === 'On Hold'),
+      JSON.stringify(B.Store.db.statuses));
+    check('which the other browser then offers on its own bid form',
+      B.Bids.settableStatuses().some(s => s.key === 'On Hold'),
+      B.Bids.settableStatuses().map(s => s.key).join(','));
+
     /* A record too big to travel with its own change. The server withholds the
        body from both the log and the stream, and js/remote.js fetches it from
        /api/records before anything downstream sees the change - so from here

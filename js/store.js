@@ -51,6 +51,13 @@
     'Site measure', 'Proposal prep', 'Revisions', 'Coordination'
   ];
 
+  /* Where a bid came in from. Six <option> tags in the Add/Edit Bid form until
+     the office started using a portal that was not one of them; a managed list
+     now, like materials and task types, editable from Settings > Portals. */
+  var DEFAULT_PORTALS = [
+    'PlanHub', 'ConstructConnect', 'BuildingConnected', 'PennBid', 'SmartBid', 'Other'
+  ];
+
   var DB = null;
   var idb = null;                 // IDBDatabase once open
   var backend = 'memory';
@@ -183,6 +190,13 @@
       productTypes: DEFAULT_PRODUCT_TYPES.slice(),
       taskTypes: DEFAULT_TASK_TYPES.slice(),
       materials: DEFAULT_MATERIALS.slice(),
+      portals: DEFAULT_PORTALS.slice(),
+      /* The statuses this shop has ADDED. The seven the lifecycle is built on
+         live in the STATUSES table in js/bids.js and are not data: Awarded and
+         Lost are issued by the award decision, and each one's bucket decides
+         what counts as open. These are the extra stages an office wants beside
+         them - "On Hold", "Waiting on drawings" - and they are all open work. */
+      statuses: [],
       engineers: seedEngineers(bids),
       references: JSON.parse(JSON.stringify(root.REFERENCE_SEED || [])),
       bids: bids,
@@ -880,6 +894,13 @@
     if (!Array.isArray(db.materials) || !db.materials.length) {
       db.materials = DEFAULT_MATERIALS.slice();
     }
+    if (!Array.isArray(db.portals) || !db.portals.length) {
+      db.portals = DEFAULT_PORTALS.slice();
+    }
+    /* Not `|| !length`: an empty custom-status list is the normal state, and
+       treating it as missing would put the seed back every time somebody
+       deleted the last one they added. */
+    if (!Array.isArray(db.statuses)) db.statuses = [];
     if (!Array.isArray(db.references) || !db.references.length) {
       db.references = JSON.parse(JSON.stringify(root.REFERENCE_SEED || []));
     }
@@ -1423,6 +1444,7 @@
     migrateUI: migrateUI,
     DEFAULT_PRODUCT_TYPES: DEFAULT_PRODUCT_TYPES,
     DEFAULT_TASK_TYPES: DEFAULT_TASK_TYPES,
+    DEFAULT_PORTALS: DEFAULT_PORTALS,
     uid: uid,
     /* The shape of a bid's product rows. Exported because js/products.js needs
        the same conversion for the bid form and there must be one definition. */

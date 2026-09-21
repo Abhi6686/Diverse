@@ -48,6 +48,18 @@
     return p.frameLogo ? 'white' : 'none';
   }
 
+  /* HOW LONG A PRICE IS GOOD FOR.
+
+     The office quotes a fortnight, and it was being counted on a calendar and
+     typed - so it was sometimes thirteen days, sometimes sixteen, and sometimes
+     the last proposal's date left on the document. It follows the submitted
+     date now: two weeks after whatever that says, worked out by U.addDays so
+     month ends are the calendar's problem.
+
+     Automatic is not the same as fixed. A deadline somebody has set by hand is
+     never overwritten - see setSubmittedDate. */
+  var APPROVAL_DAYS = 14;
+
   function blank(bid) {
     return {
       id: root.Store.uid('pro'),
@@ -63,8 +75,10 @@
       hasManuallyToggledLogoFrame: false,
       showRollupLines: true,
       proposalData: Object.assign({
-        proposalNo: '', submittedDate: U.today(), approvalDeadline: '',
-        projectName: bid ? bid.project : '', projectAddress: ''
+        proposalNo: '', submittedDate: U.today(),
+        approvalDeadline: U.addDays(U.today(), APPROVAL_DAYS),
+        projectName: bid ? bid.project : '',
+        projectAddress: bid ? (bid.location || '') : ''
       }, JSON.parse(JSON.stringify(root.PROPOSAL_DEFAULTS || {}))),
       companyData: Object.assign({}, db().company || root.COMPANY_DEFAULT || {}),
       scopeItems: []
@@ -231,13 +245,24 @@
     p.takeoffId = t.id;
     p.generatedAt = new Date().toISOString();
     p.proposalData.projectName = t.project.name || p.proposalData.projectName;
-    p.proposalData.projectAddress = t.project.location || p.proposalData.projectAddress;
+    /* The bid's Location wins: it is the field the office actually maintains,
+       and the takeoff's copy was seeded from it. Falling back the other way
+       round keeps a takeoff written before the bid carried an address. */
+    p.proposalData.projectAddress = (bid && bid.location) ||
+      t.project.location || p.proposalData.projectAddress;
     // The bid is where the proposal number is entered, so it wins over the
     // takeoff's copy of it and over anything already on the document.
     p.proposalData.proposalNo = (bid && bid.proposalNo) ||
       t.project.proposalNo || p.proposalData.proposalNo;
     if (!p.proposalData.submittedDate) p.proposalData.submittedDate = U.today();
-    if (t.project.bidDueDate) p.proposalData.approvalDeadline = t.project.bidDueDate;
+    /* Two weeks from submission, not the bid's due date - which is when the
+       client wanted the price, not how long the price stands. The old rule put
+       a deadline on the document that had usually already passed by the time it
+       was sent. Anything set by hand still survives a refresh. */
+    if (!p.proposalData.approvalDeadline) {
+      p.proposalData.approvalDeadline =
+        U.addDays(p.proposalData.submittedDate, APPROVAL_DAYS);
+    }
 
     d.proposals[p.id] = p;
     if (bid) bid.proposalId = p.id;
@@ -290,17 +315,17 @@
   function renderPicker() {
     var d = db();
     var list = Object.keys(d.proposals).map(function (k) { return d.proposals[k]; });
-    return '<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-8">' +
-      '<h3 class="text-lg font-bold text-slate-800 mb-1">Proposal</h3>' +
-      '<p class="text-sm text-slate-500 mb-6">Generate one from a takeoff, or start a blank document.</p>' +
+    return '<div class="bg-surface rounded-xl shadow-sm border border-line p-8">' +
+      '<h3 class="text-lg font-bold text-ink-strong mb-1">Proposal</h3>' +
+      '<p class="text-sm text-muted mb-6">Generate one from a takeoff, or start a blank document.</p>' +
       (list.length ? '<div class="space-y-2 mb-6">' + list.map(function (p) {
-        return '<button onclick="Proposal.open(\'' + p.id + '\')" class="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50/40 transition flex items-center justify-between">' +
-          '<span class="text-sm font-semibold text-slate-800">' + U.esc(p.proposalData.projectName || 'Untitled') + '</span>' +
-          '<span class="text-sm font-mono text-slate-600">' + U.currency(total(p)) + '</span></button>';
+        return '<button onclick="Proposal.open(\'' + p.id + '\')" class="w-full text-left px-4 py-3 rounded-lg border border-line hover:border-brand hover:bg-brand-soft/40 transition flex items-center justify-between">' +
+          '<span class="text-sm font-semibold text-ink-strong">' + U.esc(p.proposalData.projectName || 'Untitled') + '</span>' +
+          '<span class="text-sm font-mono text-muted">' + U.currency(total(p)) + '</span></button>';
       }).join('') + '</div>' : '') +
       '<div class="flex gap-3">' +
-        '<button onclick="Proposal.createBlank()" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold"><i class="fas fa-plus mr-1.5"></i>Blank proposal</button>' +
-        '<button onclick="Proposal.pickTemplateFile()" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold"><i class="fas fa-folder-open mr-1.5"></i>Load template (.json)</button>' +
+        '<button onclick="Proposal.createBlank()" class="px-4 py-2.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold"><i class="fas fa-plus mr-1.5"></i>Blank proposal</button>' +
+        '<button onclick="Proposal.pickTemplateFile()" class="px-4 py-2.5 bg-neutral-soft hover:bg-line text-ink rounded-lg text-sm font-semibold"><i class="fas fa-folder-open mr-1.5"></i>Load template (.json)</button>' +
       '</div></div>';
   }
 
@@ -316,24 +341,24 @@
   function sourceBar(p) {
     var t = p.takeoffId ? db().takeoffs[p.takeoffId] : null;
     if (!t) {
-      return '<div class="px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] text-slate-400">' +
+      return '<div class="px-4 py-2 border-b border-line bg-raised text-[11px] text-faint">' +
         'Not linked to a takeoff &mdash; scope items and prices are hand-entered.</div>';
     }
     var regen = '<button onclick="Proposal.generateFromTakeoff(\'' + t.id + '\')" ' +
       'class="px-2.5 py-1 rounded text-[11px] font-semibold whitespace-nowrap ';
 
     if (isStale(p)) {
-      return '<div class="px-4 py-2.5 border-b border-amber-200 bg-amber-50 flex items-center gap-2">' +
-        '<i class="fas fa-triangle-exclamation text-amber-500 text-xs"></i>' +
-        '<span class="flex-1 text-[11px] text-amber-900 leading-snug">The takeoff has changed since this ' +
+      return '<div class="px-4 py-2.5 border-b border-warn/40 bg-warn-soft flex items-center gap-2">' +
+        '<i class="fas fa-triangle-exclamation text-warn text-xs"></i>' +
+        '<span class="flex-1 text-[11px] text-warn-ink leading-snug">The takeoff has changed since this ' +
           'proposal was generated. Costs and linear feet below may be out of date.</span>' +
-        regen + 'bg-amber-600 hover:bg-amber-500 text-white">Regenerate</button></div>';
+        regen + 'bg-warn hover:bg-warn-hover text-white">Regenerate</button></div>';
     }
-    return '<div class="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center gap-2">' +
-      '<span class="flex-1 text-[11px] text-slate-500">' +
+    return '<div class="px-4 py-2 border-b border-line bg-raised flex items-center gap-2">' +
+      '<span class="flex-1 text-[11px] text-muted">' +
         (p.generatedAt ? 'Generated from the takeoff on ' + U.esc(U.stamp(p.generatedAt))
                        : 'Linked to a takeoff.') + '</span>' +
-      regen + 'bg-slate-100 hover:bg-slate-200 text-slate-700">Regenerate</button></div>';
+      regen + 'bg-neutral-soft hover:bg-line text-ink">Regenerate</button></div>';
   }
 
   /* Three swatches rather than a checkbox, because the answer is which colour
@@ -343,7 +368,7 @@
   function logoFrameControl(p) {
     var on = frameOf(p);
     return '<div>' +
-      '<label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' +
+      '<label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' +
         'Background behind the logo</label>' +
       '<div class="flex items-center gap-1.5">' +
         Object.keys(LOGO_FRAMES).map(function (key) {
@@ -351,13 +376,13 @@
           return '<button onclick="Proposal.setLogoFrame(\'' + key + '\')" ' +
             'title="' + U.escAttr(f.hint) + '" ' +
             'class="flex-1 flex items-center gap-2 px-2 py-1.5 rounded-lg border text-xs transition ' +
-            (on === key ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold'
-                        : 'border-slate-200 text-slate-600 hover:border-slate-300') + '">' +
-            '<span class="w-4 h-4 rounded border border-slate-300 shrink-0 ' + f.swatch + '"></span>' +
+            (on === key ? 'border-brand bg-brand-soft text-brand-ink font-semibold'
+                        : 'border-line text-muted hover:border-line-strong') + '">' +
+            '<span class="w-4 h-4 rounded border border-line-strong shrink-0 ' + f.swatch + '"></span>' +
             f.label + '</button>';
         }).join('') +
       '</div>' +
-      '<p class="text-[10px] text-slate-400 mt-1">' + U.esc(LOGO_FRAMES[on].hint) + '. ' +
+      '<p class="text-[10px] text-faint mt-1">' + U.esc(LOGO_FRAMES[on].hint) + '. ' +
         'Kept with the company details, so new proposals start here.</p>' +
     '</div>';
   }
@@ -368,48 +393,52 @@
 
     function field(label, path, type, ph) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
-      return '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' + label + '</label>' +
+      return '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' + label + '</label>' +
         '<input type="' + (type || 'text') + '" value="' + U.escAttr(val) + '" placeholder="' + (ph || '') + '" ' +
         'onchange="Proposal.set(\'' + path + '\',this.value)" ' +
-        'class="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"></div>';
+        'class="w-full px-2.5 py-1.5 bg-raised border border-line rounded-lg text-sm outline-none focus:border-brand"></div>';
     }
     /* MM-DD-YYYY text field rather than <input type="date">, whose display order
        follows the browser locale and cannot be set from the page. */
-    function dateField(label, path) {
+    function dateField(label, path, hint) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
       var id = 'pd-' + path.replace(/\./g, '-');
       // U.dateFieldHTML rather than a second copy of it. This was a hand-rolled
       // duplicate of the same text-box-plus-calendar pair, which meant two
       // places to fix when the calendar behind it was replaced.
-      return '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' +
-        label + ' <span class="text-slate-400 font-normal normal-case">(MM-DD-YYYY)</span></label>' +
+      return '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' +
+        label + ' <span class="text-faint font-normal normal-case">(MM-DD-YYYY)</span></label>' +
         U.dateFieldHTML(id, val,
-          'w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm ' +
-          'outline-none focus:border-blue-400',
+          'w-full px-2.5 py-1.5 bg-raised border border-line rounded-lg text-sm ' +
+          'outline-none focus:border-brand',
           'Proposal.setDate(&quot;' + path + '&quot;,&quot;' + id + '&quot;)') +
+        // A field that fills itself in has to say so, or the next person to
+        // change the submitted date is surprised by the box below it moving.
+        (hint ? '<p class="text-[10px] text-faint mt-1">' + hint + '</p>' : '') +
       '</div>';
     }
     function area(label, path, rows) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
-      return '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' + label + '</label>' +
+      return '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' + label + '</label>' +
         '<textarea rows="' + (rows || 2) + '" onchange="Proposal.set(\'' + path + '\',this.value)" ' +
-        'class="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400 resize-y">' + U.esc(val) + '</textarea></div>';
+        'class="w-full px-2.5 py-1.5 bg-raised border border-line rounded-lg text-sm outline-none focus:border-brand resize-y">' + U.esc(val) + '</textarea></div>';
     }
     function rich(label, path) {
       var val = path.split('.').reduce(function (o, k) { return o == null ? '' : o[k]; }, p);
       var id = 'rt-' + path.replace(/\./g, '-');
-      return '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">' + label + '</label>' +
+      return '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' + label + '</label>' +
         toolbar(id) +
         '<div id="' + id + '" contenteditable="true" data-path="' + path + '" ' +
         'oninput="Proposal.richInput(this)" ' +
-        'class="prose-mini w-full px-2.5 py-2 bg-white border border-slate-200 rounded-b-lg text-sm outline-none focus:border-blue-400 max-h-56 overflow-y-auto">' +
+        'class="prose-mini w-full px-2.5 py-2 bg-surface border border-line rounded-b-lg text-sm outline-none focus:border-brand max-h-56 overflow-y-auto">' +
         U.sanitizeHTML(U.toHTMLList(val)) + '</div></div>';
     }
 
     var sections = {
       content: field('Proposal No.', 'proposalData.proposalNo') +
         dateField('Submitted Date', 'proposalData.submittedDate') +
-        dateField('Approval Deadline', 'proposalData.approvalDeadline') +
+        dateField('Approval Deadline', 'proposalData.approvalDeadline',
+          'Two weeks after the submitted date. Set your own and it stays put.') +
         field('Project Name', 'proposalData.projectName') +
         field('Project Site Address', 'proposalData.projectAddress') +
         field('Proposal Type Slogan', 'proposalData.type') +
@@ -427,10 +456,10 @@
         field('Phone Number', 'companyData.phone') +
         field('Email Address', 'companyData.email') +
         field('Brand Subtitle / Slogan', 'companyData.brandSlogan') +
-        '<div><label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Company Logo</label>' +
+        '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">Company Logo</label>' +
           '<div class="flex items-center gap-2">' +
             '<input type="file" accept="image/*" onchange="Proposal.pickLogo(this)" class="text-xs flex-1">' +
-            (cd.logoType === 'custom' ? '<button onclick="Proposal.clearLogo()" class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded">Clear</button>' : '') +
+            (cd.logoType === 'custom' ? '<button onclick="Proposal.clearLogo()" class="px-2 py-1 text-xs text-danger hover:bg-danger-soft rounded">Clear</button>' : '') +
           '</div>' +
           (cd.logoType === 'custom' && cd.logoUrl ? '<img src="' + cd.logoUrl + '" class="mt-2 h-12 object-contain">' : '') +
         '</div>' +
@@ -439,34 +468,34 @@
 
     var tabs = [['content', 'Details'], ['scope', 'Scope Items'], ['terms', 'Terms'], ['company', 'Company']];
 
-    return '<div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden sticky top-4">' +
-      '<div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">' +
-        '<h3 class="text-sm font-bold text-slate-800">Bid Proposal Generator</h3>' +
-        '<button onclick="Proposal.open(null)" class="text-xs text-slate-400 hover:text-slate-700" title="Choose another proposal"><i class="fas fa-exchange-alt"></i></button></div>' +
+    return '<div class="bg-surface rounded-xl shadow-sm border border-line overflow-hidden sticky top-4">' +
+      '<div class="px-4 py-3 border-b border-line bg-raised flex items-center justify-between">' +
+        '<h3 class="text-sm font-bold text-ink-strong">Bid Proposal Generator</h3>' +
+        '<button onclick="Proposal.open(null)" class="text-xs text-faint hover:text-ink" title="Choose another proposal"><i class="fas fa-exchange-alt"></i></button></div>' +
 
       sourceBar(p) +
 
-      '<div class="px-4 py-3 border-b border-slate-200">' +
-        '<label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Style Template</label>' +
-        '<select onchange="Proposal.set(\'selectedStyle\',Number(this.value))" class="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400">' +
+      '<div class="px-4 py-3 border-b border-line">' +
+        '<label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">Style Template</label>' +
+        '<select onchange="Proposal.set(\'selectedStyle\',Number(this.value))" class="w-full px-2.5 py-1.5 bg-raised border border-line rounded-lg text-sm outline-none focus:border-brand">' +
         Object.keys(S).map(function (k) {
           return '<option value="' + k + '"' + (Number(k) === p.selectedStyle ? ' selected' : '') + '>' +
             k + '. ' + U.esc(S[k].name) + (S[k].isDark ? ' (dark)' : '') + '</option>';
         }).join('') + '</select></div>' +
 
-      '<div class="flex border-b border-slate-200 bg-slate-50 overflow-x-auto">' +
+      '<div class="flex border-b border-line bg-raised overflow-x-auto">' +
         tabs.map(function (t) {
           var on = state.editing === t[0];
           return '<button onclick="Proposal.setEditing(\'' + t[0] + '\')" class="px-4 py-2.5 text-xs font-semibold whitespace-nowrap ' +
-            (on ? 'text-blue-700 border-b-2 border-blue-600 bg-white' : 'text-slate-500 hover:text-slate-800') + '">' + t[1] + '</button>';
+            (on ? 'text-brand-ink border-b-2 border-brand bg-surface' : 'text-muted hover:text-ink-strong') + '">' + t[1] + '</button>';
         }).join('') + '</div>' +
 
       '<div class="p-4 space-y-3 max-h-[560px] overflow-y-auto">' + sections[state.editing] + '</div>' +
 
-      '<div class="p-3 border-t border-slate-200 bg-slate-50 grid grid-cols-2 gap-2">' +
-        '<button onclick="Proposal.print()" class="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold"><i class="fas fa-file-pdf mr-1"></i>Export PDF</button>' +
-        '<button onclick="Proposal.exportTemplate()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"><i class="fas fa-download mr-1"></i>Save .json</button>' +
-        (p.takeoffId ? '<button onclick="Proposal.generateFromTakeoff(\'' + p.takeoffId + '\')" class="col-span-2 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold"><i class="fas fa-sync mr-1"></i>Refresh from takeoff</button>' : '') +
+      '<div class="p-3 border-t border-line bg-raised grid grid-cols-2 gap-2">' +
+        '<button onclick="Proposal.print()" class="px-3 py-2 bg-chrome hover:bg-chrome-soft text-white rounded-lg text-xs font-semibold"><i class="fas fa-file-pdf mr-1"></i>Export PDF</button>' +
+        '<button onclick="Proposal.exportTemplate()" class="px-3 py-2 bg-neutral-soft hover:bg-line text-ink rounded-lg text-xs font-semibold"><i class="fas fa-download mr-1"></i>Save .json</button>' +
+        (p.takeoffId ? '<button onclick="Proposal.generateFromTakeoff(\'' + p.takeoffId + '\')" class="col-span-2 px-3 py-2 bg-brand-soft hover:bg-brand-soft/60 text-brand-ink rounded-lg text-xs font-semibold"><i class="fas fa-sync mr-1"></i>Refresh from takeoff</button>' : '') +
       '</div></div>';
   }
 
@@ -474,49 +503,49 @@
     function b(cmd, icon, title, arg) {
       return '<button type="button" onmousedown="event.preventDefault()" ' +
         'onclick="Proposal.exec(\'' + targetId + '\',\'' + cmd + '\'' + (arg ? ",'" + arg + "'" : '') + ')" ' +
-        'title="' + title + '" class="px-2 py-1 hover:bg-slate-200 rounded text-slate-600 text-xs"><i class="fas ' + icon + '"></i></button>';
+        'title="' + title + '" class="px-2 py-1 hover:bg-line rounded text-muted text-xs"><i class="fas ' + icon + '"></i></button>';
     }
-    return '<div class="flex gap-0.5 bg-slate-100 border border-slate-200 border-b-0 rounded-t-lg px-1 py-1">' +
+    return '<div class="flex gap-0.5 bg-neutral-soft border border-line border-b-0 rounded-t-lg px-1 py-1">' +
       b('bold', 'fa-bold', 'Bold') + b('italic', 'fa-italic', 'Italic') +
       b('underline', 'fa-underline', 'Underline') +
-      '<span class="w-px bg-slate-300 mx-1"></span>' +
+      '<span class="w-px bg-line-strong mx-1"></span>' +
       b('insertUnorderedList', 'fa-list-ul', 'Bulleted list') +
       b('insertOrderedList', 'fa-list-ol', 'Numbered list') +
-      '<span class="w-px bg-slate-300 mx-1"></span>' +
+      '<span class="w-px bg-line-strong mx-1"></span>' +
       b('outdent', 'fa-outdent', 'Outdent') + b('indent', 'fa-indent', 'Indent') +
       '</div>';
   }
 
   function renderScopeEditor(p) {
     return '<div class="space-y-2">' + p.scopeItems.map(function (s, i) {
-      return '<div class="border border-slate-200 rounded-lg p-3 ' + (s.locked ? 'bg-amber-50/50 border-amber-200' : 'bg-slate-50/50') + '">' +
+      return '<div class="border border-line rounded-lg p-3 ' + (s.locked ? 'bg-warn-soft/40 border-warn/40' : 'bg-raised/50') + '">' +
         '<div class="flex items-center gap-2 mb-2">' +
-          '<span class="w-6 h-6 rounded bg-slate-200 text-slate-600 text-[10px] font-bold flex items-center justify-center">' + (i + 1) + '</span>' +
+          '<span class="w-6 h-6 rounded bg-line text-muted text-[10px] font-bold flex items-center justify-center">' + (i + 1) + '</span>' +
           '<input value="' + U.escAttr(s.description) + '" onchange="Proposal.setScope(' + i + ',\'description\',this.value)" ' +
-            'class="flex-1 px-2 py-1 bg-white border border-slate-200 rounded text-sm font-semibold outline-none focus:border-blue-400">' +
+            'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm font-semibold outline-none focus:border-brand">' +
           '<button onclick="Proposal.toggleLock(' + i + ')" title="' + (s.locked ? 'Unlock - regeneration will overwrite this wording' : 'Lock the wording so regenerating the proposal keeps it') + '" ' +
-            'class="w-6 h-6 rounded text-xs ' + (s.locked ? 'text-amber-600' : 'text-slate-300 hover:text-slate-600') + '"><i class="fas fa-' + (s.locked ? 'lock' : 'lock-open') + '"></i></button>' +
-          '<button onclick="Proposal.removeScope(' + i + ')" class="w-6 h-6 rounded text-slate-300 hover:text-red-600 text-xs"><i class="fas fa-times"></i></button>' +
+            'class="w-6 h-6 rounded text-xs ' + (s.locked ? 'text-warn' : 'text-faint hover:text-muted') + '"><i class="fas fa-' + (s.locked ? 'lock' : 'lock-open') + '"></i></button>' +
+          '<button onclick="Proposal.removeScope(' + i + ')" class="w-6 h-6 rounded text-faint hover:text-danger text-xs"><i class="fas fa-times"></i></button>' +
         '</div>' +
         toolbar('sc-' + i) +
         '<div id="sc-' + i + '" contenteditable="true" data-scope="' + i + '" oninput="Proposal.scopeRichInput(this)" ' +
-          'class="prose-mini px-2 py-2 bg-white border border-slate-200 rounded-b text-xs outline-none focus:border-blue-400 max-h-40 overflow-y-auto">' +
+          'class="prose-mini px-2 py-2 bg-surface border border-line rounded-b text-xs outline-none focus:border-brand max-h-40 overflow-y-auto">' +
           U.sanitizeHTML(U.toHTMLList(s.details)) + '</div>' +
         '<div class="flex items-center gap-2 mt-2">' +
-          '<span class="text-[10px] font-bold text-slate-500 uppercase">Cost</span>' +
+          '<span class="text-[10px] font-bold text-muted uppercase">Cost</span>' +
           '<input type="number" step="any" value="' + (s.cost == null ? '' : s.cost) + '" onchange="Proposal.setScope(' + i + ',\'cost\',this.value)" ' +
-            'class="w-32 px-2 py-1 bg-white border border-slate-200 rounded text-sm text-right font-mono outline-none focus:border-blue-400">' +
+            'class="w-32 px-2 py-1 bg-surface border border-line rounded text-sm text-right font-mono outline-none focus:border-brand">' +
         '</div></div>';
     }).join('') +
-      '<button onclick="Proposal.addScope()" class="w-full px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"><i class="fas fa-plus mr-1"></i>Add scope item</button>' +
-      '<label class="flex items-start gap-2 text-xs text-slate-600 pt-2"><input type="checkbox" class="mt-0.5" ' +
+      '<button onclick="Proposal.addScope()" class="w-full px-3 py-2 bg-neutral-soft hover:bg-line text-ink rounded-lg text-xs font-semibold"><i class="fas fa-plus mr-1"></i>Add scope item</button>' +
+      '<label class="flex items-start gap-2 text-xs text-muted pt-2"><input type="checkbox" class="mt-0.5" ' +
         (p.showRollupLines ? 'checked' : '') + ' onchange="Proposal.set(\'showRollupLines\',this.checked)"> ' +
         '<span>Show freight / tax / roundoff as separate lines' +
-        '<span class="block text-[10px] text-slate-400">Untick to fold them into the product prices too. ' +
+        '<span class="block text-[10px] text-faint">Untick to fold them into the product prices too. ' +
         'Miscellaneous is always folded in and never shown.</span></span></label>' +
-      '<div class="flex items-center justify-between pt-3 mt-2 border-t-2 border-slate-800">' +
-        '<span class="text-xs font-bold uppercase tracking-wider text-slate-700">Total Bid Price</span>' +
-        '<span class="font-mono text-base font-bold text-slate-900">' + U.currency2(total(p)) + '</span></div>' +
+      '<div class="flex items-center justify-between pt-3 mt-2 border-t-2 border-line-strong">' +
+        '<span class="text-xs font-bold uppercase tracking-wider text-ink">Total Bid Price</span>' +
+        '<span class="font-mono text-base font-bold text-ink-strong">' + U.currency2(total(p)) + '</span></div>' +
       '</div>';
   }
 
@@ -765,7 +794,32 @@
     var target = keys.reduce(function (o, k) { return o[k]; }, p);
     target[last] = value;
     if (path.indexOf('companyData.') === 0) db().company[last] = value;
+    if (path === 'proposalData.projectAddress') syncAddressToBid(p, value);
     save();
+  }
+
+  /* THE ADDRESS IS ONE FACT, EDITABLE FROM TWO PLACES.
+   *
+   * bid.location is where it lives - the bid form and the project card both
+   * write it, the takeoff copies it, and generateFromTakeoff prints it. But the
+   * address is also frequently corrected here, on the document, because that is
+   * where anybody proof-reading it sees that it is wrong.
+   *
+   * So a correction made here goes back to the bid, and to the takeoff that
+   * sits between them, rather than living on one document while the register
+   * keeps the old version. The write only happens when the value actually
+   * differs, which is what stops it looping through the render that follows.
+   */
+  function syncAddressToBid(p, value) {
+    if (!p || p.bidId == null) return;
+    var bid = db().bids.filter(function (b) { return b.id === p.bidId; })[0];
+    if (!bid) return;
+    var next = String(value == null ? '' : value).trim();
+    if ((bid.location || '') === next) return;
+
+    root.History.track(bid, function () { bid.location = next; });
+    var t = bid.takeoffId ? db().takeoffs[bid.takeoffId] : null;
+    if (t && t.project) t.project.location = next;
   }
 
   /* ---- template file I/O (v3-compatible) ------------------------------- */
@@ -871,12 +925,28 @@
       var typed = el.value.trim();
       var iso = U.inputToDate(typed);
       if (typed && iso === null) {
-        el.classList.add('border-red-400', 'bg-red-50');
+        el.classList.add('border-danger', 'bg-danger-soft');
         U.toast('Enter the date as MM-DD-YYYY.', 'err');
         return;
       }
-      el.classList.remove('border-red-400', 'bg-red-50');
+      el.classList.remove('border-danger', 'bg-danger-soft');
       el.value = U.dateToInput(iso);
+
+      /* Moving the submitted date carries the approval deadline with it, so the
+         two weeks are counted from when the proposal actually went out.
+         Only while the deadline is still the automatic one, though: it matches
+         against what the old submitted date implied, so a fortnight nobody
+         touched follows along and a date somebody chose on purpose does not get
+         quietly overwritten. */
+      if (path === 'proposalData.submittedDate') {
+        var p = current();
+        var pd = p.proposalData;
+        var automatic = !pd.approvalDeadline ||
+          pd.approvalDeadline === U.addDays(pd.submittedDate, APPROVAL_DAYS);
+        setPath(path, iso || '');
+        if (automatic && iso) setPath('proposalData.approvalDeadline', U.addDays(iso, APPROVAL_DAYS));
+        return;
+      }
       setPath(path, iso || '');
     },
 

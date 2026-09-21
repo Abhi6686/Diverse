@@ -235,7 +235,9 @@
       bidId: bid ? bid.id : null,
       project: {
         name: bid ? bid.project : '',
-        location: '',
+        // The site address is the bid's, like the project name and the proposal
+        // number beside it. Typed once on the bid, not again here.
+        location: bid ? (bid.location || '') : '',
         // The proposal number belongs to the bid; the takeoff and the proposal
         // document both take their copy from there rather than being retyped.
         proposalNo: bid ? (bid.proposalNo || '') : '',
@@ -567,7 +569,13 @@
     item.vendor = c.vendor;
     item.partNo = c.partNo;
     item.description = c.description;
-    if (c.feature) item.feature = c.feature;
+    /* The row's Feature is only filled in when it is EMPTY, never overwritten.
+       It is the scope this row measures - what the takeoff decided this line is
+       for - while the part is merely what gets bought for it. Writing the
+       library's copy over it renamed rows to whatever the part happened to be
+       filed under the first time anybody bought one, which is how a page of
+       different parts ended up all calling themselves "Top Rail". */
+    if (c.feature && !item.feature) item.feature = c.feature;
     if (c.option) item.option = c.option;
     item.material = c.material;
     item.grade = c.grade;

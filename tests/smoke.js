@@ -236,8 +236,35 @@ Takeoff.addProduct('Steel Guardrail');
 const t = Store.db.takeoffs[bid.takeoffId];
 const prod = t.products[0];
 check('product seeded with its group', prod.groups.length === 1);
-check('grid columns seeded from the template', prod.groups[0].grid.columns.length === 15,
+/* The template supplies the group and nothing inside it. A product used to
+   arrive with its whole workbook sheet laid out - fifteen columns on Steel
+   Guardrail - of which a job uses three or four, so the estimator's first act
+   was deleting eleven. Every column is typed now. */
+check('but its drawing grid starts empty', prod.groups[0].grid.columns.length === 0,
   String(prod.groups[0].grid.columns.length));
+
+// Built the way the office builds it, through the same entry point the form
+// uses. The inch marks matter: the TK("...") escaping below is tested on them.
+Takeoff.setTab('grid');
+Takeoff.addCol('Top Rail_1-1/2" Pipe', 'LF');
+check('a typed column lands on the grid',
+  prod.groups[0].grid.columns.length === 1 &&
+  prod.groups[0].grid.columns[0].label === 'Top Rail_1-1/2" Pipe' &&
+  prod.groups[0].grid.columns[0].um === 'LF',
+  JSON.stringify(prod.groups[0].grid.columns[0]));
+check('and the first one brings a drawing reference with it, to type into',
+  prod.groups[0].grid.rows.length === 1, String(prod.groups[0].grid.rows.length));
+// A heading pasted with its unit in it keeps the unit and loses the brackets.
+Takeoff.addCol('Base Plate (EA)', 'LF');
+check('a unit typed into the name wins over the picker',
+  prod.groups[0].grid.columns[1].label === 'Base Plate' &&
+  prod.groups[0].grid.columns[1].um === 'EA',
+  JSON.stringify(prod.groups[0].grid.columns[1]));
+check('a column with no name is refused',
+  (Takeoff.addCol('   ', 'LF'), prod.groups[0].grid.columns.length === 2),
+  String(prod.groups[0].grid.columns.length));
+prod.groups[0].grid.columns.length = 1;      // back to the one the rest of this file uses
+prod.groups[0].grid.rows = [];
 
 Takeoff.setTotalLF(442.43);
 check('engineering hours auto-filled (442.43*0.3+16)',
@@ -2879,6 +2906,95 @@ console.log('\n--- the settings page ---');
   Settings.setCompany('phone', '(555) 010-0100');
   check('company details save', Store.db.company.phone === '(555) 010-0100');
 
+  /* PORTALS: six <option> tags in the page until the office signed up to one
+     that was not among them. A managed list now, like regions beside it. */
+  App.switchTab('portals');
+  check('the portals panel renders its list',
+    !!U.$('portalList') && /PlanHub/.test(U.$('portalList').innerHTML));
+  const portalsBefore = Store.db.portals.length;
+  U.$('newPortal').value = 'Dodge';
+  Settings.addPortal();
+  check('a portal can be added', Store.db.portals.includes('Dodge') &&
+    Store.db.portals.length === portalsBefore + 1);
+  U.$('newPortal').value = 'dodge';
+  Settings.addPortal();
+  check('and a duplicate is refused whatever its casing',
+    Store.db.portals.length === portalsBefore + 1, JSON.stringify(Store.db.portals));
+
+  const pBid = Store.db.bids[0];
+  const wasPortal = pBid.portal;
+  pBid.portal = 'Dodge';
+  Settings.renamePortal(Store.db.portals.indexOf('Dodge'), 'Dodge Construction');
+  check('renaming a portal carries onto the bids filed under it',
+    pBid.portal === 'Dodge Construction' &&
+    Store.db.portals.includes('Dodge Construction'), pBid.portal);
+
+  // The form reads the list rather than the markup.
+  Bids.openAdd();
+  const portalOpts = Array.from(U.$('mPortal').options).map(o => o.value);
+  check('the bid form offers the list, not a hardcoded six',
+    portalOpts.includes('Dodge Construction') && portalOpts.includes('PlanHub'),
+    portalOpts.join(','));
+  U.$('bidModal').classList.add('hidden');
+
+  Settings.removePortal(Store.db.portals.indexOf('Dodge Construction'));
+  check('removing a portal leaves the value on the bid that carries it',
+    !Store.db.portals.includes('Dodge Construction') &&
+    pBid.portal === 'Dodge Construction', pBid.portal);
+  // A bid on a portal no longer in the list keeps it as an option of its own.
+  Bids.edit(pBid.id);
+  check('and that bid still shows its own portal on the form',
+    U.$('mPortal').value === 'Dodge Construction', U.$('mPortal').value);
+  U.$('bidModal').classList.add('hidden');
+  pBid.portal = wasPortal;
+
+  /* BID STATUSES: the seven the lifecycle is built on are facts; what a shop
+     adds beside them is open work on Active Bids and nothing more. */
+  App.switchTab('statuses');
+  check('the statuses panel lists the built-ins as read-only',
+    /built-in/.test(U.$('statusList').innerHTML) &&
+    !/Settings.renameStatus/.test(U.$('statusList').innerHTML));
+  U.$('newStatus').value = 'On Hold';
+  Settings.pickTone('newStatusTone', 'warn');
+  Settings.addStatus();
+  const onHold = Store.db.statuses.filter(s => s.name === 'On Hold')[0];
+  check('a status can be added, with its colour', !!onHold && onHold.tone === 'warn',
+    JSON.stringify(Store.db.statuses));
+  U.$('newStatus').value = 'completed';
+  Settings.addStatus();
+  check('and one that clashes with a built-in is refused',
+    Store.db.statuses.length === 1, JSON.stringify(Store.db.statuses));
+
+  check('a custom status is offered on the form',
+    Bids.settableStatuses().some(s => s.key === 'On Hold'),
+    Bids.settableStatuses().map(s => s.key).join(','));
+  check('it is open work, so the bid stays on Active Bids and counts as open',
+    Bids.bucketOf({ status: 'On Hold' }) === 'open' &&
+    Bids.onActiveOf({ status: 'On Hold' }) === true);
+  check('and it draws in the colour it was given',
+    /status-tone-warn/.test(Bids.statusBadge('On Hold')), Bids.statusBadge('On Hold'));
+  check('the Active Bids status filter offers it too',
+    (Bids.setView('active'), Array.from(U.$('filterStatus').options)
+      .some(o => o.value === 'On Hold')),
+    Array.from(U.$('filterStatus').options).map(o => o.value).join(','));
+
+  const sBid = Store.db.bids.filter(b => b.active)[0] || Store.db.bids[0];
+  const wasStatus = sBid.status;
+  sBid.status = 'On Hold';
+  App.switchTab('statuses');
+  Settings.renameStatus(0, 'Waiting on client');
+  check('renaming a custom status carries onto the bids on it',
+    sBid.status === 'Waiting on client' &&
+    Store.db.statuses[0].name === 'Waiting on client', sBid.status);
+  Settings.removeStatus(0);
+  check('and removing it leaves those bids alone, still readable as open',
+    !Store.db.statuses.length && sBid.status === 'Waiting on client' &&
+    Bids.bucketOf(sBid) === 'open', sBid.status);
+  sBid.status = wasStatus;
+
+  // The sync half of this - that both copies of SETTING_KEYS name every shop
+  // list - is checked in tests/sync.js, which has the server to compare with.
+
   App.switchTab('ratelib');
   check('Rate Library still renders, inside the settings shell',
     U.$('section-ratelib').innerHTML.length > 1000 &&
@@ -3618,6 +3734,75 @@ console.log('\n--- hours are booked against days ---');
     Assign.totals(b).asgn ===
       Assign.rows(b).reduce((s, x) => s + x.asgnHrs, 0),
     String(Assign.totals(b).asgn));
+
+  /* WHAT A SAVED ROW SHOWS.
+     Every booked day used to be a box whether anything went in it or not, so a
+     three-week task was twenty boxes of which five carried numbers. The empties
+     fold away behind a count once there is something to fold them behind. */
+  const boxes = () => Assign.dayRows(r)
+    .filter(d => !!U.$('asg-day-' + r.id + '-' + d.date)).length;
+
+  Assign.set(b.id, r.id, 'startDate', '11-02-2026');
+  Assign.addDay(b.id, r.id);
+  Assign.addDay(b.id, r.id);                       // five days on the row
+  check('a row with nothing booked shows all of its days',
+    boxes() === Assign.dayRows(r).length, boxes() + ' of ' + Assign.dayRows(r).length);
+
+  const five = Assign.dayRows(r).map(d => d.date);
+  Assign.setDay(b.id, r.id, five[0], '4');
+  Assign.setDay(b.id, r.id, five[3], '2');
+  check('once hours are on it, only the days worked are shown',
+    boxes() === 2, String(boxes()));
+  check('and the rest are behind a count of what is folded away',
+    /\+3 empty/.test(U.$('assignCard').innerHTML));
+  check('nothing was deleted to do it', Assign.dayRows(r).length === 5,
+    String(Assign.dayRows(r).length));
+
+  Assign.toggleEmpty(b.id, r.id);
+  check('the count opens them again for editing', boxes() === 5, String(boxes()));
+  check('and offers to fold them back', /Hide empty/.test(U.$('assignCard').innerHTML));
+  Assign.toggleEmpty(b.id, r.id);
+  check('which it does', boxes() === 2, String(boxes()));
+
+  /* ADDING A DAY: the next few, or any other one. Stepping day by day to reach
+     a date three weeks out was the alternative, and it left twenty boxes. */
+  Assign.addDay(b.id, r.id, '2026-12-01');
+  check('a day can be booked by date, without stepping through the ones between',
+    Assign.dayRows(r).some(d => d.date === '2026-12-01'));
+  check('and lands in date order',
+    Assign.dayRows(r).every((d, i, a) => i === 0 || d.date > a[i - 1].date),
+    Assign.dayRows(r).map(d => d.date).join(','));
+  const countBeforeDup = Assign.dayRows(r).length;
+  Assign.addDay(b.id, r.id, '2026-12-01');
+  check('a day already on the row is refused rather than doubled',
+    Assign.dayRows(r).length === countBeforeDup, String(Assign.dayRows(r).length));
+
+  Assign.addDay(b.id, r.id, '2026-10-26');
+  check('a day before the start moves the start back to it',
+    r.startDate === '2026-10-26' && Assign.dayRows(r)[0].date === '2026-10-26',
+    r.startDate);
+
+  // The picker itself: the next five working days, and a way to any other.
+  const addBtn = U.$('asg-addday-' + r.id);
+  Assign.openDayPicker(addBtn, b.id, r.id);
+  const pop = win.document.querySelector('[role=dialog]');
+  check('the + offers a short list rather than appending blindly',
+    !!pop && /Book a day/.test(pop.innerHTML));
+  check('five working days, none of them a weekend',
+    (pop.innerHTML.match(/Assign.addDay\([0-9]+,'[^']+','[^']+'\)/g) || []).length +
+      (pop.innerHTML.match(/>booked</g) || []).length === 5 &&
+      !/Sat |Sun /.test(pop.innerHTML), pop.innerHTML.replace(/<[^>]*>/g, ' ').trim());
+  check('with the calendar behind "Pick a date..."',
+    /Assign.pickDayFromCalendar/.test(pop.innerHTML));
+  UI.closePopover();
+  check('and it closes again', !win.document.querySelector('[role=dialog]'));
+
+  // Each box carries its own delete now: "drop the last day" stopped making
+  // sense once the last day can be one of the folded empties.
+  const gone = Assign.dayRows(r)[0].date;
+  Assign.removeDayAt(b.id, r.id, gone);
+  check('a day can be removed from its own box',
+    !Assign.dayRows(r).some(d => d.date === gone), gone);
 
   Assign.remove(b.id, r.id);
 }

@@ -141,7 +141,12 @@ function buildTakeoff() {
   rail.totalLF = 76.96;
   M.applyDerived(rail);
   const g = rail.groups[0];
-  const topRail = g.grid.columns[0];
+  // A product arrives with its group and an empty grid, so the column measured
+  // below is created here - name and unit, the way the Drawing Takeoff tab
+  // creates one. The inch marks are load-bearing: the TK("...") escaping
+  // further down is tested against this exact label.
+  const topRail = M.newColumn('Top Rail_1-1/2" Pipe', 'LF');
+  g.grid.columns.push(topRail);
   g.grid.rows.push({ ref: 'A1.5', values: { [topRail.key]: 40 } });
   g.grid.rows.push({ ref: 'A2.1', values: { [topRail.key]: 35.79 } });
   // The stock column labels carry inch marks - Top Rail_1-1/2" Pipe (LF) - so

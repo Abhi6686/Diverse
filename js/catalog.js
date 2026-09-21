@@ -108,7 +108,6 @@
         match = Math.max(
           fuzzyScore(q, c.partNo || ''),
           fuzzyScore(q, c.description || ''),
-          fuzzyScore(q, c.feature || ''),
           fuzzyScore(q, c.vendor || '') * 0.7
         );
         if (match <= 0) continue;
@@ -318,7 +317,14 @@
     root.Store.save();
   }
 
-  var CSV_COLS = ['vendor', 'partNo', 'description', 'feature', 'option',
+  /* What the exported file carries, and therefore what the template a vendor is
+     asked to fill in looks like. `feature` is deliberately absent: it is no
+     longer a column anybody maintains (see the note in js/ratelib.js), so
+     offering it in the template would invite it being typed again.
+
+     Import is unaffected - importCSV maps by header name, so a file exported by
+     an older build still loads with its feature column intact. */
+  var CSV_COLS = ['vendor', 'partNo', 'description', 'option',
     'material', 'grade', 'um', 'packQty', 'packUm', 'unitCost', 'weightPerUnit',
     'sowTags'];
 

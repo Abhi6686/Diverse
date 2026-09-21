@@ -26,6 +26,8 @@
     engineers: function () { root.Settings.render(); },
     tasktypes: function () { root.Settings.render(); },
     materials: function () { root.Settings.render(); },
+    portals: function () { root.Settings.render(); },
+    statuses: function () { root.Settings.render(); },
     company: function () { root.Settings.render(); },
     employees: function () { root.Settings.render(); },
     roles: function () { root.Settings.render(); }
@@ -214,23 +216,60 @@
 
   /* Somebody else's edit arriving - from another tab on this machine, or from
      another person on the shared server. Either way the rule is the same: the
-     screen catches up, unless the cursor is in a field, in which case a bar
-     appears instead of the value being yanked out from under them. */
+     screen catches up, unless somebody is mid-edit - in which case a bar
+     appears, and the repaint waits until they have finished rather than being
+     dropped altogether. */
+
+  /* IS SOMEBODY IN THE MIDDLE OF SOMETHING.
+
+     Three ways to be mid-edit, and a repaint would wreck all of them: the
+     cursor in a field, an inline editor open on the project card (UI.beginEdit
+     marks its host data-editing), or a modal up. The first was already
+     checked; the other two were not, and a colleague's save arriving while the
+     Add Bid form was open rebuilt the page behind it. */
+  function midEdit() {
+    var el = document.activeElement;
+    if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return true;
+    if (document.querySelector('[data-editing]')) return true;
+    if (document.querySelector('.modal-overlay:not(.hidden)')) return true;
+    return false;
+  }
+
+  /* A repaint that was held back because of the above. It is run as soon as the
+     edit finishes, so the screen catches up on its own rather than leaving the
+     banner as the only way to see what changed. */
+  var deferred = null;
+
+  /* Only the latest is kept: two changes arriving while you type need one
+     repaint between them, not two. */
+  function defer(fn) { deferred = fn; }
+
+  function runDeferred() {
+    if (!deferred || midEdit()) return;
+    var fn = deferred;
+    deferred = null;
+    fn();
+  }
+
   function wireExternalChanges() {
     root.Store.onExternalChange(function (info) {
       var bar = U.$('externalChangeBar');
       if (!bar) return;
-      var typing = document.activeElement &&
-        /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+      var busy = midEdit();
 
       // A remote change is already applied to the in-memory copy by the time we
       // hear about it, so there is nothing to reload - only to repaint.
       if (info && info.remote) {
         var who = info.by ? U.esc(info.by) : 'Someone else';
-        if (typing) {
+        if (busy) {
           bar.classList.remove('hidden');
           bar.querySelector('.change-message').innerHTML =
-            who + ' changed this project while you were typing. Your edit is still here.';
+            who + ' changed this project while you were editing. Your edit is still here, ' +
+            'and the screen will catch up when you finish.';
+          defer(function () {
+            bar.classList.add('hidden');
+            repaint();
+          });
           return;
         }
         repaint();
@@ -238,12 +277,30 @@
         return;
       }
 
-      if (typing) { bar.classList.remove('hidden'); return; }
+      if (busy) {
+        bar.classList.remove('hidden');
+        defer(function () {
+          root.Store.reload().then(function () {
+            bar.classList.add('hidden');
+            repaint();
+          });
+        });
+        return;
+      }
       root.Store.reload().then(function () {
         repaint();
         U.toast('Updated from another window.', 'info');
       });
     });
+
+    /* The moment the edit ends. focusout covers the field and the inline editor
+       (which commits on blur); the click catches a modal being dismissed. Both
+       are checked a tick later, because at the instant of a blur the focus has
+       not landed on whatever is next - and tabbing between two fields is not
+       the end of anything. */
+    function later() { setTimeout(runDeferred, 0); }
+    document.addEventListener('focusout', later);
+    document.addEventListener('click', later);
 
     /* A conflict is the one case where somebody's own edit did not stick: the
        server had a newer copy. Say so plainly rather than letting the screen
@@ -259,9 +316,15 @@
     });
   }
 
+  /* One wrapper covers every page: Bids.refresh rebuilds the table, and the
+     renderers rebuild the project card, the takeoff and the settings pages the
+     same way. Without it a repaint you did not ask for scrolls the screen back
+     to the top left - see U.preserveView. */
   function repaint() {
-    root.Bids.refresh();
-    if (RENDERERS[currentTab]) RENDERERS[currentTab]();
+    U.preserveView(function () {
+      root.Bids.refresh();
+      if (RENDERERS[currentTab]) RENDERERS[currentTab]();
+    });
   }
 
   function describe(changes) {

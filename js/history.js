@@ -79,6 +79,7 @@
     { key: 'revisedDueDate', label: 'Revised Due',   fmt: function (v) { return v ? U.date(v) : ''; } },
     { key: 'portal',         label: 'Portal' },
     { key: 'region',         label: 'Region' },
+    { key: 'location',       label: 'Location' },
     { key: 'price',          label: 'Bid Price',     fmt: function (v) { return v == null || v === '' ? '' : U.currency(v); } },
     { key: 'priceLocked',    label: 'Price lock',    fmt: function (v) { return v ? 'locked' : 'unlocked'; } },
     { key: 'engineer',       label: 'Engineer' },
@@ -93,7 +94,12 @@
     { key: 'assignments', label: 'Team & Hours', fmt: function (v, bid) {
         return (root.Assign.rows(bid) || []).map(function (r) {
           return (r.engineer || '?') + ' ' + U.qty(U.n(r.asgnHrs)) + ' hrs' +
-                 (r.taskType ? ' (' + r.taskType + ')' : '');
+                 (r.taskType ? ' (' + r.taskType + ')' : '') +
+                 // So marking a task finished is an entry in the log rather
+                 // than a change nobody can see afterwards. Plain words, no
+                 // brackets: this line is read by a person, and a bracket in it
+                 // makes the log look like it is quoting JSON at them.
+                 ' - ' + root.Assign.statusLabel(r).toLowerCase();
         }).join(', ');
       } },
     { key: 'productLines', label: 'Products & Materials', fmt: function (v, bid) {

@@ -29,6 +29,20 @@ body { font-family: 'Inter', sans-serif; background: rgb(var(--c-canvas)); color
 .status-lost       { background: rgb(var(--c-danger-soft));  color: rgb(var(--c-danger-ink)); }
 .status-noscope    { background: rgb(var(--c-info-soft));    color: rgb(var(--c-info-ink)); }
 
+/* THE PALETTE A SHOP-ADDED STATUS PICKS FROM. Settings > Bid Statuses offers
+   these six as swatches; the seven above are the lifecycle's own and are not
+   chosen from anywhere.
+
+   Real CSS on the tone tokens rather than Tailwind classes, because the class
+   name is assembled at runtime from what somebody picked - 'status-tone-' +
+   tone - and the compiler only ships class names it can see written out. */
+.status-tone-neutral { background: rgb(var(--c-neutral-soft)); color: rgb(var(--c-neutral-ink)); }
+.status-tone-brand   { background: rgb(var(--c-brand-soft));   color: rgb(var(--c-brand-ink)); }
+.status-tone-warn    { background: rgb(var(--c-warn-soft));    color: rgb(var(--c-warn-ink)); }
+.status-tone-ok      { background: rgb(var(--c-ok-soft));      color: rgb(var(--c-ok-ink)); }
+.status-tone-danger  { background: rgb(var(--c-danger-soft));  color: rgb(var(--c-danger-ink)); }
+.status-tone-info    { background: rgb(var(--c-info-soft));    color: rgb(var(--c-info-ink)); }
+
 /* THE ONE CELL THAT OPENS THE PROJECT.
 
    The click used to be on the whole row, which made every cell a trapdoor -

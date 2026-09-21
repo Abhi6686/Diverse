@@ -167,6 +167,21 @@
         '-' + String(d.getDate()).padStart(2, '0');
     },
 
+    /* n days either side of an ISO date, as an ISO date. Goes through Date so
+       month ends and leap years are the calendar's problem rather than ours -
+       adding 14 to 02-20 lands in March without anybody counting.
+
+       The one implementation: the proposal's approval deadline and the day
+       booking in js/assignments.js both step dates, and two copies of this
+       would eventually disagree about the end of February. */
+    addDays: function (iso, n) {
+      var d = U.parseDate(iso);
+      if (!d) return '';
+      d.setDate(d.getDate() + Number(n || 0));
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+        '-' + String(d.getDate()).padStart(2, '0');
+    },
+
     esc: function (t) {
       if (t == null) return '';
       return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -200,6 +215,15 @@
     safeUrl: function (raw) {
       var s = String(raw == null ? '' : raw).trim();
       return /^https?:\/\/\S/i.test(s) ? s : null;
+    },
+
+    /* A typed address as a maps search. Built rather than stored: an address is
+       a line of text somebody wrote on a bid, not a URL, and encodeURIComponent
+       is what makes it safe to put in one. Empty in, empty out, so a caller can
+       test it the same way it tests safeUrl. */
+    mapsUrl: function (address) {
+      var s = String(address == null ? '' : address).trim();
+      return s ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(s) : '';
     },
 
     n: function (v) {
@@ -327,6 +351,69 @@
       if (el) {
         el.value = U.dateToInput(iso);
         el.classList.remove('border-danger', 'bg-danger-soft');
+      }
+    },
+
+    /* RUN A REPAINT WITHOUT THROWING THE SCREEN AWAY.
+     *
+     * Every page in this app renders by replacing a host's innerHTML, which is
+     * simple and fast and costs two things the browser was holding for us: the
+     * scroll offsets of anything inside, and the caret.
+     *
+     * That was invisible while a repaint only followed your own click. On a
+     * shared server it follows everybody's: a colleague saving a bid three
+     * desks away re-rendered the table under you, and a register scrolled right
+     * to reach Bid Price snapped back to the far left. Same for the caret, and
+     * "the screen jumped while I was reading" is indistinguishable from a bug.
+     *
+     * So the two things are taken down first and put back after. Scroll
+     * containers opt in with data-keep-scroll and are matched by id, because
+     * the element itself does not survive the innerHTML that replaces it - only
+     * its id does. The focused element is matched the same way, and its
+     * selection restored with it, so a half-typed value keeps its caret in the
+     * middle rather than at the end.
+     *
+     * Anything without an id is simply not restored. That is deliberate: a
+     * guess at which new node corresponds to which old one would put the scroll
+     * position somewhere nobody asked for, which is the fault being fixed.
+     */
+    preserveView: function (fn) {
+      var scrolls = [];
+      var nodes = document.querySelectorAll('[data-keep-scroll]');
+      for (var i = 0; i < nodes.length; i++) {
+        if (!nodes[i].id) continue;
+        scrolls.push({ id: nodes[i].id, left: nodes[i].scrollLeft, top: nodes[i].scrollTop });
+      }
+
+      var active = document.activeElement;
+      var focus = active && active.id && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)
+        ? { id: active.id, start: null, end: null }
+        : null;
+      if (focus) {
+        // Only text inputs have a selection; reading it off a number input or a
+        // select throws in some browsers, so it is asked for defensively.
+        try { focus.start = active.selectionStart; focus.end = active.selectionEnd; }
+        catch (e) { /* not a control with a caret */ }
+      }
+
+      try {
+        return fn();
+      } finally {
+        scrolls.forEach(function (s) {
+          var el = U.$(s.id);
+          if (!el) return;
+          el.scrollLeft = s.left;
+          el.scrollTop = s.top;
+        });
+        if (focus) {
+          var back = U.$(focus.id);
+          if (back && back.focus) {
+            back.focus();
+            if (focus.start != null && back.setSelectionRange) {
+              try { back.setSelectionRange(focus.start, focus.end); } catch (e) { /* no caret */ }
+            }
+          }
+        }
       }
     },
 

@@ -127,19 +127,31 @@
     <!-- One line of five. Each tile is a figure and, underneath, the one fact
          that makes the figure mean something - a count on its own tells you
          nothing about whether it is a good number. -->
-    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3" id="kpiRow">
+    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3" id="kpiRow">
       <div class="bg-surface rounded-xl border border-line shadow-card px-4 py-3">
         <div class="flex items-center gap-2 text-3xs font-bold text-muted uppercase tracking-wider">
           <i class="fas fa-clipboard-list text-brand"></i>Total Bids</div>
         <p class="text-2xl font-bold text-ink-strong mt-1 tabular-nums" id="kpiTotal">0</p>
         <p class="text-2xs text-muted mt-0.5" id="kpiTotalNote">&nbsp;</p>
       </div>
-      <div class="bg-surface rounded-xl border border-line shadow-card px-4 py-3">
+      <!-- Submitted for review and Completed are two different states and were
+           one tile: a bid out with the client is not a bid the estimator has
+           finished, and rolling them together hid whichever of the two anybody
+           was actually looking for. Both open the list they count. -->
+      <button type="button" onclick="Bids.goToStatus('Submitted to review')"
+              class="text-left bg-surface rounded-xl border border-line shadow-card px-4 py-3 hover:border-brand transition">
         <div class="flex items-center gap-2 text-3xs font-bold text-muted uppercase tracking-wider">
-          <i class="fas fa-paper-plane text-info"></i>Submitted</div>
+          <i class="fas fa-paper-plane text-info"></i>Submitted for review</div>
         <p class="text-2xl font-bold text-ink-strong mt-1 tabular-nums" id="kpiSubmitted">0</p>
         <p class="text-2xs text-muted mt-0.5" id="kpiSubmittedNote">&nbsp;</p>
-      </div>
+      </button>
+      <button type="button" onclick="Bids.goToStatus('Completed')"
+              class="text-left bg-surface rounded-xl border border-line shadow-card px-4 py-3 hover:border-brand transition">
+        <div class="flex items-center gap-2 text-3xs font-bold text-muted uppercase tracking-wider">
+          <i class="fas fa-circle-check text-ok"></i>Completed</div>
+        <p class="text-2xl font-bold text-ink-strong mt-1 tabular-nums" id="kpiCompleted">0</p>
+        <p class="text-2xs text-muted mt-0.5" id="kpiCompletedNote">&nbsp;</p>
+      </button>
       <div class="bg-surface rounded-xl border border-line shadow-card px-4 py-3">
         <div class="flex items-center gap-2 text-3xs font-bold text-muted uppercase tracking-wider">
           <i class="fas fa-spinner text-warn"></i>In Progress</div>
@@ -298,13 +310,21 @@
         </div>
         <div>
           <label class="block text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">Portal *</label>
-          <select id="mPortal" required class="w-full px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none">
-            <option>PlanHub</option><option>ConstructConnect</option><option>BuildingConnected</option><option>PennBid</option><option>SmartBid</option><option>Other</option>
-          </select>
+          <!-- Filled from db.portals by Bids.populatePortalSelect, not written
+               here: the list is managed in Settings > Portals. -->
+          <select id="mPortal" required class="w-full px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none"></select>
         </div>
         <div>
           <label class="block text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">Region/County *</label>
           <select id="mRegion" required onchange="Bids.onRegionChange(this)" class="w-full px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none"></select>
+        </div>
+        <!-- The site address, under the region it is in. One field, entered
+             once: the takeoff and the printed proposal both take their copy
+             from here rather than being retyped - see Proposal.syncAddressToBid. -->
+        <div class="md:col-span-4">
+          <label class="block text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">Location
+            <span class="text-faint normal-case font-normal">(project site address - used on the proposal)</span></label>
+          <input type="text" id="mLocation" class="w-full px-3 py-2 bg-raised border border-line rounded-lg text-sm focus:border-brand outline-none" placeholder="400 W. Hemlock Avenue, East Kane, PA-16735">
         </div>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
