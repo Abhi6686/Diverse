@@ -197,8 +197,11 @@
       title: 'Saving, backups and exports',
       blurb: 'Nothing has to be saved by hand - the footer says when it last was.',
       points: [
-        'Save downloads a full backup as a .json file. An administrator can load one back, ' +
-          'which replaces the shared database for everyone.',
+        'Every edit is written to the shared database as you make it, and reaches ' +
+          'everyone else\'s screen straight away. There is no Save button because ' +
+          'there is nothing waiting to be saved.',
+        'Backing the office up is copying the diverse.db file on the server; ' +
+          'restoring one is putting that file back.',
         'The bids table exports to Excel, as does a takeoff.',
         'Proposals export to PDF.'
       ]

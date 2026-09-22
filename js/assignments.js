@@ -679,6 +679,61 @@
       '</div></div>';
   }
 
+  /* HOW MUCH OF THIS PERSON'S DAY IS LEFT, under the box you book into.
+   *
+   * The figure that decides whether somebody can take this work, and until now
+   * the only way to get it was to open every other active bid and add up. It is
+   * their shift length minus everything they have booked that day ACROSS THE
+   * WHOLE DATABASE - the hours that fill someone's Friday are usually on a
+   * project you are not looking at, so counting only this bid would produce a
+   * confident wrong answer, which is worse than none.
+   *
+   * Blank on a row with nobody on it: hours remaining for nobody is not a
+   * number, and a 9 sitting under an empty engineer box reads as a promise.
+   *
+   * The id is what preview() repaints through while somebody is typing - see
+   * there - so the figure moves with the keystrokes rather than waiting for the
+   * change event.
+   */
+  function remainingCell(r, d) {
+    if (!String(r.engineer || '').trim()) {
+      return '<span class="block h-3 mt-0.5" id="asg-left-' + r.id + '-' + d.date + '"></span>';
+    }
+    return '<span class="block text-3xs mt-0.5 font-mono leading-none ' +
+      'whitespace-nowrap ' + remainingClass(r.engineer, d.date) + '" ' +
+      'id="asg-left-' + r.id + '-' + d.date + '" ' +
+      'title="' + U.escAttr(remainingTitle(r.engineer, d.date)) + '">' +
+      remainingText(r.engineer, d.date) + '</span>';
+  }
+
+  function remainingText(engineer, iso) {
+    var left = root.Schedule.remainingFor(engineer, iso);
+    if (left == null) return '';
+    return left < 0 ? '+' + U.qty(-left) + ' over' : U.qty(left) + ' left';
+  }
+
+  function remainingClass(engineer, iso) {
+    var left = root.Schedule.remainingFor(engineer, iso);
+    if (left == null) return 'text-faint';
+    if (left < 0) return 'text-danger font-bold';
+    if (left === 0) return 'text-faint';
+    return 'text-ok-ink';
+  }
+
+  /* The arithmetic, spelled out. Without it a "0 left" sitting under a box
+     showing 4.5 looks like a bug - the missing half is on another project, and
+     this is the only place that can say so. */
+  function remainingTitle(engineer, iso) {
+    var shift = root.Schedule.dayHoursFor(engineer);
+    var booked = root.Schedule.bookedFor(engineer, iso);
+    var n = root.Schedule.projectsOn(engineer, iso);
+    var left = shift - booked;
+    return engineer + ' on ' + U.date(iso) + ': ' +
+      U.qty(shift) + ' hr day, ' + U.qty(booked) + ' booked' +
+      (n > 1 ? ' across ' + n + ' projects' : n === 1 ? ' on 1 project' : '') + ', ' +
+      (left < 0 ? U.qty(-left) + ' over' : U.qty(left) + ' left') + '.';
+  }
+
   function dayCell(bidId, r, d) {
     var weekend = isWeekend(d.date);
     var dt = U.parseDate(d.date);
@@ -709,6 +764,7 @@
         'class="w-11 px-1 py-1 border rounded text-xs font-mono text-center outline-none ' +
         'focus:border-brand ' +
         (weekend ? 'bg-raised border-line text-muted' : 'bg-surface border-line') + '">' +
+      remainingCell(r, d) +
     '</label>';
   }
 
@@ -808,6 +864,7 @@
       dayRows(r).forEach(function (d) {
         var cell = U.$('asg-day-' + r.id + '-' + d.date);
         rowAsgn += U.n(cell ? cell.value : d.hrs);
+        previewRemaining(r, d, cell);
       });
       var a = U.$('asg-asgnHrs-' + r.id);
       if (a) a.textContent = U.qty(rowAsgn);
@@ -816,6 +873,28 @@
     var te = U.$('asgTotalEst'), ta = U.$('asgTotalAsgn');
     if (te) te.textContent = U.qty(est);
     if (ta) ta.textContent = U.qty(asgn);
+  }
+
+  /* The hours-left figure, moved to match what is in the box right now.
+   *
+   * The stored index still holds the SAVED hours for this cell, so typing 6
+   * over a saved 4 has to swap one for the other rather than add: take what is
+   * booked everywhere, remove this cell's saved contribution, add what is
+   * typed. Anything booked on another project stays in the figure, which is the
+   * whole point of it. */
+  function previewRemaining(r, d, cell) {
+    var host = U.$('asg-left-' + r.id + '-' + d.date);
+    if (!host) return;
+    var engineer = String(r.engineer || '').trim();
+    if (!engineer) { host.textContent = ''; host.className = 'block h-3 mt-0.5'; return; }
+
+    var typed = U.n(cell ? cell.value : d.hrs);
+    var left = root.Schedule.dayHoursFor(engineer) -
+      (root.Schedule.bookedFor(engineer, d.date) - U.n(d.hrs) + typed);
+
+    host.textContent = left < 0 ? '+' + U.qty(-left) + ' over' : U.qty(left) + ' left';
+    host.className = 'block text-3xs mt-0.5 font-mono leading-none whitespace-nowrap ' +
+      (left < 0 ? 'text-danger font-bold' : left === 0 ? 'text-faint' : 'text-ok-ink');
   }
 
   root.Assign = {

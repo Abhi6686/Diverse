@@ -96,13 +96,17 @@
 
   /* Every dated booking on a bid, flattened. One row per engineer per day, so
      a bid with two people on the same Tuesday yields two. */
+  /* `rowId` rides along because the schedule draws a line per ASSIGNMENT ROW,
+     not per person: hours are stored per row, and somebody holding two tasks on
+     one bid has two separate bookings that must not be summed into a line that
+     can say neither which task they belong to nor whether either is finished. */
   function bookings(bid) {
     var out = [];
     root.Assign.rows(bid).forEach(function (r) {
       root.Assign.dayRows(r).forEach(function (d) {
         if (!d.date) return;
-        out.push({ engineer: r.engineer || '', date: d.date, hrs: U.n(d.hrs),
-                   taskType: r.taskType || '' });
+        out.push({ rowId: r.id, engineer: r.engineer || '', date: d.date,
+                   hrs: U.n(d.hrs), taskType: r.taskType || '' });
       });
     });
     return out;
@@ -225,17 +229,21 @@
    */
   function plan(bids) {
     var perEngineer = {};   // bidId -> engineer -> date -> hrs
+    var perRow = {};        // bidId -> rowId   -> date -> hrs
     var perBid = {};        // bidId -> date -> hrs
     var perDay = {};        // date -> hrs
 
     (bids || []).forEach(function (b) {
       if (!b) return;
       var eng = perEngineer[b.id] || (perEngineer[b.id] = {});
+      var row = perRow[b.id] || (perRow[b.id] = {});
       var bid = perBid[b.id] || (perBid[b.id] = {});
       bookings(b).forEach(function (k) {
         if (!k.hrs) return;
         var days = eng[k.engineer] || (eng[k.engineer] = {});
         days[k.date] = (days[k.date] || 0) + k.hrs;
+        var rd = row[k.rowId] || (row[k.rowId] = {});
+        rd[k.date] = (rd[k.date] || 0) + k.hrs;
         bid[k.date] = (bid[k.date] || 0) + k.hrs;
         perDay[k.date] = (perDay[k.date] || 0) + k.hrs;
       });
@@ -259,6 +267,12 @@
       hours: function (bid, engineer, period) {
         var eng = bid && perEngineer[bid.id];
         return sum(eng && eng[engineer], period);
+      },
+      /* One assignment row's hours. What the schedule's cells actually read,
+         since a line on the schedule is a row and not a person. */
+      rowHours: function (bid, rowId, period) {
+        var row = bid && perRow[bid.id];
+        return sum(row && row[rowId], period);
       },
       bidHours: function (bid, period) {
         return sum(bid && perBid[bid.id], period);
@@ -286,12 +300,101 @@
     return plan(bids).total(period);
   }
 
+  /* ---- how much of somebody's day is left -------------------------------- */
+
+  /* WHAT THIS PERSON HAS ON, EVERYWHERE, ON A GIVEN DAY.
+   *
+   * plan() above answers the same question but only over the bids it is handed,
+   * which on the Team & Hours card is one bid. That is the wrong denominator:
+   * the whole point of showing hours remaining is that AJP being full on Friday
+   * is usually the fault of a project you are not looking at. So this walks
+   * every bid in the database, not a list somebody passed in.
+   *
+   * Memoized, because a card with six rows and three weeks of day boxes asks it
+   * a hundred times per render and the answer cannot change in between.
+   * Invalidated by a write rather than by a clock - the index is a pure function
+   * of the records, so a save is the only thing that can make it wrong. See
+   * Schedule.invalidate, called from Store.save.
+   */
+  var loadCache = null;
+
+  function dayLoad() {
+    if (loadCache) return loadCache;
+    var out = {};
+    var all = (root.Store && root.Store.db && root.Store.db.bids) || [];
+    all.forEach(function (b) {
+      bookings(b).forEach(function (k) {
+        if (!k.hrs || !k.engineer) return;
+        var key = U.low(k.engineer);
+        var days = out[key] || (out[key] = {});
+        days[k.date] = (days[k.date] || 0) + k.hrs;
+      });
+    });
+    loadCache = out;
+    return out;
+  }
+
+  function bookedFor(initials, iso) {
+    if (!initials) return 0;
+    var days = dayLoad()[U.low(initials)];
+    return (days && days[iso]) || 0;
+  }
+
+  /* Shift length minus everything booked. Negative is a real answer and is
+     meant to be shown as one - somebody is on for eleven hours of a nine hour
+     day and that is the thing worth seeing. */
+  function remainingFor(initials, iso) {
+    if (!initials) return null;
+    return dayHoursFor(initials) - bookedFor(initials, iso);
+  }
+
+  /* How many separate bids this person is booked to that day, for the tooltip
+     that explains where the hours went. Counted rather than listed: the names
+     would not fit and the count is what makes the figure believable. */
+  function projectsOn(initials, iso) {
+    if (!initials) return 0;
+    var key = U.low(initials);
+    var n = 0;
+    ((root.Store && root.Store.db && root.Store.db.bids) || []).forEach(function (b) {
+      var hit = bookings(b).some(function (k) {
+        return k.hrs && k.date === iso && U.low(k.engineer) === key;
+      });
+      if (hit) n++;
+    });
+    return n;
+  }
+
   /* ---- how loaded is that ------------------------------------------------ */
 
-  /* A working day is eight hours. A week and a month are that times their
-     working days, so the same "is this too much" question can be asked at every
-     zoom without the answer changing meaning. */
-  var HOURS_PER_DAY = 8;
+  /* HOW LONG A WORKING DAY IS.
+   *
+   * It was a flat eight, written here, and the office works nine. Worse, it was
+   * the only figure of its kind: "is this day overbooked" was answered against
+   * eight while the person reading the answer was rostered for nine.
+   *
+   * Three places are asked, in order, and the first that has an answer wins:
+   *
+   *   the engineer's own record   a part-timer on 4.5
+   *   db.company.dayHours         what this shop's day is
+   *   DEFAULT_DAY_HOURS           9
+   *
+   * Per-person rather than per-shop-only because the moment one person works
+   * half days, a shop-wide figure is wrong for everybody: it either overstates
+   * their capacity or understates everyone else's.
+   */
+  var DEFAULT_DAY_HOURS = 9;
+
+  function shopDayHours() {
+    var c = root.Store && root.Store.db && root.Store.db.company;
+    var n = U.n(c && c.dayHours);
+    return n > 0 ? n : DEFAULT_DAY_HOURS;
+  }
+
+  function dayHoursFor(initials) {
+    var e = root.Bids && root.Bids.findEngineer ? root.Bids.findEngineer(initials) : null;
+    var own = U.n(e && e.dayHours);
+    return own > 0 ? own : shopDayHours();
+  }
 
   function workingDaysIn(period) {
     var n = 0, d = period.start, guard = 0;
@@ -302,8 +405,18 @@
     return n;
   }
 
+  /* `people` is either a count - the old contract, still used where only a
+     headcount is to hand - or a list of initials, which is better: it sums what
+     those particular people actually work instead of assuming they are
+     interchangeable. A shop of four on nine hours and one on four and a half
+     has a capacity of 40.5, not 45. */
   function capacityOf(period, people) {
-    return workingDaysIn(period) * HOURS_PER_DAY * Math.max(1, people || 1);
+    var days = workingDaysIn(period);
+    if (Array.isArray(people)) {
+      if (!people.length) return days * shopDayHours();
+      return days * people.reduce(function (s, i) { return s + dayHoursFor(i); }, 0);
+    }
+    return days * shopDayHours() * Math.max(1, people || 1);
   }
 
   /* 0 for nothing booked, rising to 3 for over capacity. The grid turns this
@@ -320,7 +433,20 @@
 
   root.Schedule = {
     ZOOMS: ZOOMS,
-    HOURS_PER_DAY: HOURS_PER_DAY,
+    DEFAULT_DAY_HOURS: DEFAULT_DAY_HOURS,
+    shopDayHours: shopDayHours,
+    dayHoursFor: dayHoursFor,
+
+    /* Hours left in somebody's day, counting every bid and not just the one on
+       screen. The Team & Hours card draws these under each day box. */
+    dayLoad: dayLoad,
+    bookedFor: bookedFor,
+    remainingFor: remainingFor,
+    projectsOn: projectsOn,
+    /* Called by Store.save. The index is a pure function of the records, so a
+       write is the only thing that can invalidate it. */
+    invalidate: function () { loadCache = null; },
+
     periods: periods,
     windowOf: windowOf,
     windowLabel: windowLabel,

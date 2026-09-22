@@ -347,9 +347,13 @@
         }
         return;
       }
+      /* Ctrl+S used to download a .json backup. There is nothing to download
+         any more - every edit is already written - but the reflex is real and
+         the browser's own "Save page as" is worse than useless here. So it
+         still means something: push anything queued out now, and say so. */
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        App.saveProject();
+        root.Store.flush().then(function () { U.toast('Saved.', 'ok'); });
       }
     });
   }
@@ -419,13 +423,17 @@
     if (currentTab === 'dashboard') RENDERERS.dashboard();
   }
 
-  /* The three whole-database buttons in the header. One table, each with the
-     permission it needs, for the same reason Nav.MENU carries one: the access
-     levels are legible in a column instead of scattered through markup.
+  /* The header buttons. One table, each with the permission it needs, for the
+     same reason Nav.MENU carries one: the access levels are legible in a column
+     instead of scattered through markup.
 
-     Load is Admin-only. On a single-user app it replaced your own data; on a
-     shared server it replaces everyone's, so it is not an ordinary action any
-     more. Save - downloading a backup - stays open to all, as drawn. */
+     SAVE AND LOAD USED TO LIVE HERE AND ARE GONE. They were a whole-database
+     round trip through a .json file, written when the app ran off one browser's
+     storage and a backup was the only way to move the data anywhere. It runs off
+     a shared SQLite file now, synced live - so Save handed you a copy that was
+     stale the moment a colleague typed, and Load wrote that stale copy over
+     everyone's afternoon. Backing the office up is copying diverse.db; there is
+     nothing for a button to do. */
   var HEADER_ACTIONS = [
     /* The theme, cycling light -> dark -> auto. No permission and no `when`:
        it is nobody's data, only how this person's eyes are getting on with the
@@ -437,10 +445,6 @@
        anybody's data, it is what the buttons around it mean. */
     { icon: 'fa-circle-question', onclick: 'Guide.open()', when: yes,
       title: 'User guide - what each part of the app does' },
-    { label: 'Save', icon: 'fa-save', onclick: 'App.saveProject()', perm: 'project.save',
-      title: 'Download a .json backup of everything' },
-    { label: 'Load', icon: 'fa-folder-open', onclick: 'App.pickProjectFile()', perm: 'project.load',
-      title: 'Restore from a .json backup - replaces the shared database for everyone' },
     /* Settings holds panels governed by three different permissions, so the
        button appears when any one of them lets this person in rather than being
        tied to a single key. */
@@ -468,9 +472,11 @@
           '<i class="fas ' + value(a.icon) + '"></i>' + (label ? ' ' + U.esc(label) : '') + '</button>';
       }).join('');
     }
-    // Reset wipes the database back to seed data - the same blast radius as
-    // Load, and it was never meant to be within reach of everybody on a shared
-    // server. It stays hidden unless the role may restore a backup.
+    // Reset wipes the database back to seed data, and it was never meant to be
+    // within reach of everybody on a shared server. project.load is the key
+    // that gates it - it used to gate restoring a backup over everything, which
+    // is the same blast radius, and it kept the narrower job when that button
+    // went. See the note on it in server/permissions.js.
     var reset = U.$('resetButton');
     if (reset) reset.classList.toggle('hidden', !root.Auth.can('project.load'));
   }
@@ -490,7 +496,8 @@
         'open <code class="bg-warn/20 px-1 rounded">http://localhost:9000</code> for the full database.'
       : '<i class="fas fa-exclamation-triangle mr-2"></i><strong>Nothing is being saved.</strong> ' +
         'No browser storage is available, so all changes will be lost when this tab closes. ' +
-        'Use Save Project to download a backup before you go.';
+        'Run <code class="bg-warn/20 px-1 rounded">node serve.js</code> and open ' +
+        '<code class="bg-warn/20 px-1 rounded">http://localhost:9000</code> before entering anything.';
   }
 
   root.App = {
@@ -524,38 +531,6 @@
       if (target) switchTab(target);
     },
 
-    saveProject: function () {
-      root.Store.exportFile().then(function (docCount) {
-        U.toast('Project file downloaded.' +
-          (docCount ? ' ' + docCount + ' document(s) listed but not included - use Export documents for the files.' : ''),
-          'ok');
-      });
-    },
-    pickProjectFile: function () { U.$('projectFileInput').click(); },
-    loadProject: function (file) {
-      // On a shared server this is not "replaces your data" - it is everyone's,
-      // including work colleagues did five minutes ago. Say so.
-      var scope = root.Store.shared
-        ? 'This replaces the shared database for everyone in the office - every bid, ' +
-          'takeoff, proposal and rate, including anything your colleagues have entered ' +
-          'since this backup was taken. It cannot be undone.'
-        : 'This replaces everything currently in the app - bids, takeoffs, proposals ' +
-          'and the rate library.';
-      if (!confirm('Load "' + file.name + '"?\n\n' + scope + '\n\nSave a backup first if you need one.')) {
-        U.$('projectFileInput').value = '';
-        return;
-      }
-      root.Store.importFile(file, function (err, db, docIndex) {
-        U.$('projectFileInput').value = '';
-        if (err) { U.toast(err.message, 'err'); return; }
-        root.Bids.refresh();
-        switchTab('active');
-        U.toast('Project loaded.' +
-          (docIndex && docIndex.length
-            ? ' ' + docIndex.length + ' document(s) are referenced but their files are not in this backup.'
-            : ''), 'ok');
-      });
-    },
     dismissExternalChange: function () {
       U.$('externalChangeBar').classList.add('hidden');
     },

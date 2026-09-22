@@ -74,11 +74,33 @@
       '<div id="regionList" class="space-y-2 max-h-[520px] overflow-y-auto"></div>');
   }
 
+  /* THE LENGTH OF A WORKING DAY, and the per-person exceptions to it.
+     It sits at the top of the Engineers panel rather than under Company,
+     because it is not letterhead - it is the number every "hours left today"
+     figure on the Team & Hours card is measured against, and the overrides it
+     is the default for are in the list directly below it. */
+  function dayHoursRow() {
+    var shop = root.Schedule.shopDayHours();
+    return '<div class="flex flex-wrap items-center gap-3 px-3 py-2.5 mb-4 bg-raised rounded-lg border border-line">' +
+      '<i class="fas fa-clock text-faint"></i>' +
+      '<label for="shopDayHours" class="text-sm text-ink">Hours in a working day</label>' +
+      '<input type="number" id="shopDayHours" step="0.5" min="0" max="24" ' +
+        'value="' + U.escAttr(shop) + '" ' +
+        'onchange="Settings.setDayHours(this.value)" ' +
+        'class="w-20 px-2 py-1 bg-surface border border-line rounded text-sm font-mono text-right ' +
+        'outline-none focus:border-brand">' +
+      '<span class="text-xs text-muted flex-1 min-w-[220px]">' +
+        'What everyone is rostered for unless their own row below says otherwise. ' +
+        'Hours booked past it show as overbooked.</span>' +
+    '</div>';
+  }
+
   function engineersPanel() {
     return panel('Engineers', 'Initials appear on the bids table; the full name shows on hover. ' +
       'Renaming initials carries the change onto every bid that used them. Entries marked ' +
       '<span class="text-brand font-semibold">account</span> belong to somebody who signs in &mdash; ' +
       'add or remove those under People.',
+      dayHoursRow() +
       '<div class="flex gap-2 mb-4">' +
         '<input type="text" id="newEngineerInitials" placeholder="Initials" maxlength="6" ' +
           'class="w-24 px-3 py-2 bg-raised border border-line rounded-lg text-sm font-semibold uppercase focus:border-brand outline-none" ' +
@@ -556,6 +578,24 @@
       db().company[key] = String(value == null ? '' : value).trim();
       root.Store.save();
       U.toast('Company details saved.', 'ok');
+    },
+
+    /* The shop's working day. Stored as a number on company - it rides the
+       settings row that is already synced - and refused rather than silently
+       clamped when it is nonsense, because a zero-hour day would make every
+       person on the schedule permanently overbooked. */
+    setDayHours: function (value) {
+      var n = U.n(value);
+      if (!(n > 0) || n > 24) {
+        U.toast('A working day has to be between 0 and 24 hours.', 'warn');
+        render();          // put the box back to what is actually stored
+        return;
+      }
+      db().company.dayHours = n;
+      root.Store.save();
+      // Every hours-left figure on every open card is measured against this.
+      if (root.Bids) root.Bids.refresh();
+      U.toast('A working day is now ' + U.qty(n) + ' hours.', 'ok');
     },
 
     addTaskType: function () {

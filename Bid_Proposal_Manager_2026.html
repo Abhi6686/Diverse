@@ -80,10 +80,10 @@
         <div class="relative hidden sm:block h-12 w-px bg-surface/15"></div>
         <h1 class="relative text-xl sm:text-2xl font-semibold tracking-tight text-chrome-ink">Project Management</h1>
       </div>
-      <!-- Save / Load act on the whole database, so they stay global. Anything
-           that only makes sense for one module lives in that module's toolbar.
-           Rendered by js/app.js from one table, because which of them a role may
-           use is a permission and not something to spell out in markup. -->
+      <!-- The global actions: theme, guide, settings. Anything that only makes
+           sense for one module lives in that module's toolbar. Rendered by
+           js/app.js from one table, because which of them a role may use is a
+           permission and not something to spell out in markup. -->
       <div class="flex items-center gap-2 flex-wrap">
         <div id="headerActions" class="flex items-center gap-2 flex-wrap"></div>
         <!-- Who is signed in, and their menu. Empty when the app is running off
@@ -106,8 +106,6 @@
   </div>
 </div>
 
-<input type="file" id="projectFileInput" accept=".json" class="hidden"
-       onchange="if(this.files[0])App.loadProject(this.files[0])">
 <input type="file" id="proposalTemplateInput" accept=".json" class="hidden"
        onchange="if(this.files[0]){Proposal.loadTemplate(this.files[0]);this.value=''}">
 <input type="file" id="catalogCsvInput" accept=".csv" class="hidden"

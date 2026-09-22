@@ -45,10 +45,19 @@ const PERMISSIONS = [
   { key: 'settings.view', group: 'Settings', label: 'Open Settings' },
   { key: 'settings.edit', group: 'Settings', label: 'Change rates, regions, references, company' },
 
-  { key: 'project.save', group: 'Whole database', label: 'Download a backup' },
-  /* Load replaces everything, for everyone. See the note in serve-side
-     enforcement below and in the README. */
-  { key: 'project.load', group: 'Whole database', label: 'Restore a backup over everything' },
+  /* Both of these gated the Save and Load buttons, which are gone: the database
+     is a shared file that is written as you type, so there is no backup to
+     download through the browser and nothing to restore through it either.
+
+     THE KEYS STAY. Dropping one from this list would silently revoke it from
+     every saved role - clean() keeps only keys it recognises - and that is a
+     migration, not a deletion. project.load kept a real job on the way past: it
+     is what gates Reset, which wipes the database back to seed data and has the
+     same blast radius restoring a backup did. project.save now gates nothing
+     and is granted to nobody; it is left here so an old role row carrying it
+     stays readable rather than being quietly rewritten. */
+  { key: 'project.save', group: 'Whole database', label: 'Unused - was: download a backup' },
+  { key: 'project.load', group: 'Whole database', label: 'Reset the database to seed data' },
 
   { key: 'admin.users', group: 'Administration', label: 'Create and manage people' },
   { key: 'admin.roles', group: 'Administration', label: 'Create roles and change what they may do' }
@@ -68,8 +77,7 @@ const ROLE_DEFAULTS = {
   Employee: [
     'module.dashboard', 'module.bids',
     'bid.create', 'bid.edit', 'bid.award', 'bid.export',
-    'takeoff.edit', 'proposal.edit', 'list.extend',
-    'project.save'
+    'takeoff.edit', 'proposal.edit', 'list.extend'
   ]
 };
 

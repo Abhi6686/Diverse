@@ -23,7 +23,7 @@
   var IDB_NAME = 'diverse-bid';
   var IDB_VERSION = 1;
   var STATE_KEY = 'db';
-  var SCHEMA_VERSION = 16;
+  var SCHEMA_VERSION = 17;
   /* Column layouts version separately from the records. They have to: since
      accounts arrived they live in the server's user_prefs table and reach the
      app on their own route, so a migration gated on the record schema never
@@ -348,6 +348,35 @@
      the record. Every saved layout has to swap one for the other, in place, or
      BidGrid.cfg() would append the new column past Actions. Sr. No. is on every
      view: it is just the row number. */
+  /* The Task column - what each person on a bid is doing and whether it is
+     finished - sits directly after Engineer, because the two are read together:
+     a name is only useful next to the job it is attached to.
+
+     Switched on where there is a team to describe. All Bids is the intake
+     register, where nobody has been booked yet and the column would be empty on
+     every row. */
+  function migrateTaskColumn(db) {
+    var grids = (db.ui && db.ui.grids) || {};
+    Object.keys(grids).forEach(function (view) {
+      var g = grids[view];
+      if (!g) return;
+
+      function place(list, show) {
+        if (!Array.isArray(list)) return list;
+        var out = list.filter(function (k) { return k !== 'task'; });
+        if (!show) return out;
+        var i = out.indexOf('team');
+        // No Engineer column in this layout - put it at the end rather than
+        // guessing at a position it has no anchor for.
+        out.splice(i < 0 ? out.length : i + 1, 0, 'task');
+        return out;
+      }
+
+      g.order = place(g.order, true);
+      g.visible = place(g.visible, view !== 'all');
+    });
+  }
+
   function migrateSrColumn(db) {
     var grids = (db.ui && db.ui.grids) || {};
     Object.keys(grids).forEach(function (view) {
@@ -881,6 +910,28 @@
       db.schemaVersion = 16;
     }
 
+    if (v < 17) {
+      /* THREE THINGS THE OFFICE REVIEW ASKED FOR, AND ONE STEP FOR ALL OF THEM.
+       *
+       * THE WORKING DAY became a stored figure. It was a flat eight written into
+       * js/schedule.js, and the office works nine - so every "is this day
+       * overbooked" answer was measured against a day nobody works. Written
+       * here rather than left to default so it is visible and editable in
+       * Settings from the first load rather than only once somebody saves it.
+       *
+       * RE-OPENED BIDS carry a revision. Nothing is backfilled: every field is
+       * absent-means-not-a-revision, and inventing a revision number for a bid
+       * that was never re-opened would be inventing history. The keys are
+       * listed in the backfill below so a partial file reads consistently.
+       *
+       * THE TASK COLUMN is a grid layout change, and saved layouts do not know
+       * the key. migrateTaskColumn places it. */
+      if (!db.company) db.company = Object.assign({}, root.COMPANY_DEFAULT || {});
+      if (!(root.U.n(db.company.dayHours) > 0)) db.company.dayHours = 9;
+      migrateTaskColumn(db);
+      db.schemaVersion = 17;
+    }
+
     // Backfill containers a hand-edited or partial file might be missing.
     ['regions', 'bids', 'catalog', 'engineers'].forEach(function (k) {
       if (!Array.isArray(db[k])) db[k] = [];
@@ -924,6 +975,13 @@
       if (b.activatedAt === undefined) b.activatedAt = null;
       if (b.decidedAt === undefined) b.decidedAt = null;
       if (!Array.isArray(b.assignments)) b.assignments = [];
+      /* The re-opening chain. Absent on every bid that has never been
+         re-opened, which is nearly all of them - so these are nulls rather
+         than a revision number invented for work that was only bid once. */
+      if (b.revision === undefined) b.revision = null;
+      if (b.revisionOf === undefined) b.revisionOf = null;
+      if (b.revisionBase === undefined) b.revisionBase = null;
+      if (b.reopenedInto === undefined) b.reopenedInto = null;
     });
     if (!Array.isArray(db.taskTypes) || !db.taskTypes.length) {
       db.taskTypes = DEFAULT_TASK_TYPES.slice();
@@ -1011,6 +1069,12 @@
   }
 
   function notify() {
+    /* The schedule's cross-bid hours index is derived from the records, so any
+       write makes it stale. Here rather than in save() because notify() is also
+       what runs when a COLLEAGUE'S change arrives off the stream - somebody
+       else booking AJP four hours on Friday has to move the "hours left" figure
+       on this screen too, and that write never goes through save() at all. */
+    if (root.Schedule) root.Schedule.invalidate();
     listeners.forEach(function (fn) {
       try { fn(DB); } catch (e) { console.error(e); }
     });
@@ -1542,63 +1606,14 @@
       return DB;
     },
 
-    /* ---- project file I/O ---------------------------------------------- */
+    /* exportFile and importFile - the whole database in and out of a .json -
+       were here and are gone with the Save/Load buttons that were their only
+       callers. The database is a shared file on the server now; a backup is a
+       copy of diverse.db, and restoring one is putting that file back. Going
+       through the browser could only ever produce a copy that was already stale.
 
-    /* Documents are deliberately excluded - a project with 100 MB of drawings
-       would produce a 130 MB base64 .json. Their metadata rides along so a
-       restored file still knows what was attached; the blobs come from the
-       separate zip export. */
-    exportFile: function () {
-      return flush()
-        .then(function () { return Docs.all(); })
-        .then(function (docs) {
-          var payload = JSON.parse(JSON.stringify(DB));
-          payload.documentIndex = docs.map(function (d) {
-            return {
-              id: d.id, bidId: d.bidId, name: d.name, type: d.type,
-              size: d.size, category: d.category, addedAt: d.addedAt, addedBy: d.addedBy
-            };
-          });
-          payload.exportedAt = new Date().toISOString();
-          downloadJSON(payload, 'DiVerse-Bids-' + root.U.stampDate(new Date()) + '.json');
-          return payload.documentIndex.length;
-        });
-    },
-
-    importFile: function (file, done) {
-      var reader = new FileReader();
-      reader.onload = function (ev) {
-        try {
-          var parsed = JSON.parse(ev.target.result);
-          if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.bids)) {
-            throw new Error('This does not look like a saved project file ' +
-              '(no "bids" array). If you meant to load a proposal template, use ' +
-              'Load Template on the Proposal tab instead.');
-          }
-          if ((parsed.schemaVersion || 0) > SCHEMA_VERSION) {
-            throw new Error('This file was saved by a newer version of the app ' +
-              '(schema ' + parsed.schemaVersion + ' vs ' + SCHEMA_VERSION + ').');
-          }
-          var index = parsed.documentIndex || [];
-          delete parsed.documentIndex;
-          delete parsed.exportedAt;
-          var ui = DB && DB.ui;
-          DB = migrate(parsed);
-          // The layout in a backup belongs to whoever exported it. Keep the
-          // person doing the restore on their own.
-          if (ui) DB.ui = ui;
-          nextReason = 'load';
-          if (root.Rates && root.Rates.ensure) root.Rates.ensure(DB);
-          if (root.Catalog && root.Catalog.ensure) root.Catalog.ensure(DB);
-          save();
-          done(null, DB, index);
-        } catch (err) {
-          done(err);
-        }
-      };
-      reader.onerror = function () { done(new Error('Could not read the file.')); };
-      reader.readAsText(file);
-    }
+       downloadJSON and downloadBlob below stay - the proposal template export
+       and every XLSX download go through them. */
   };
 
   function downloadJSON(obj, filename) {

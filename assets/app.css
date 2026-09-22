@@ -194,17 +194,23 @@ body.col-resizing * { cursor: col-resize !important; }
    a heavier right edge so the join between the record and the calendar reads as
    one boundary rather than as one more column rule. */
 .grid-table .sched-name {
-  width: 132px; min-width: 132px;
   border-right: 2px solid rgb(var(--c-line-strong));
 }
+
+/* The two placed columns at the calendar's edge: who, then what they are on.
+   Both fixed, so a stack of chips or a long task name cannot reflow the join
+   as the table is resized. Task is the wider of the two - it carries a name
+   and a status pill where Engineer carries initials. */
+.grid-table .sched-team { width: 132px; min-width: 132px; }
+.grid-table .sched-task { width: 190px; min-width: 190px; }
 
 /* The ordinary columns keep a usable width while a month of calendar is
    competing with them for the table. Left to itself the browser apportions
    whatever is spare and Portal ends up two characters wide. The frozen ones are
    sized in JavaScript and are not touched here. */
-.grid-table.sched-day th:not(.sched-col):not(.col-sticky):not(.sched-name),
-.grid-table.sched-week th:not(.sched-col):not(.col-sticky):not(.sched-name),
-.grid-table.sched-month th:not(.sched-col):not(.col-sticky):not(.sched-name) { min-width: 110px; }
+.grid-table.sched-day th:not(.sched-col):not(.col-sticky):not(.sched-name):not(.sched-team),
+.grid-table.sched-week th:not(.sched-col):not(.col-sticky):not(.sched-name):not(.sched-team),
+.grid-table.sched-month th:not(.sched-col):not(.col-sticky):not(.sched-name):not(.sched-team) { min-width: 110px; }
 
 /* One line per engineer, in the frozen block and in every period cell, so a
    name on the left and its hours on the right sit on the same line. A fixed
@@ -239,11 +245,21 @@ body.col-resizing * { cursor: col-resize !important; }
 .grid-table .sched-cell.load-3 { background: rgb(var(--c-danger) / 0.20); }
 .grid-table .sched-cell.load-3 span { color: rgb(var(--c-danger-ink)); }
 
-/* The shop's total per period, under everything. */
+/* The shop's total per period, under everything - and under that, what is
+   left. Two pinned rows, so Booked has to sit the height of one row up or the
+   pair would stack on top of each other at the bottom of the scroller.
+   --sched-foot IS that height: 0.5rem padding either side of a 1rem line. */
 .grid-table tr.sched-totals td {
+  --sched-foot: 2rem;
   border-top: 2px solid rgb(var(--c-line-strong));
   background: rgb(var(--c-raised));
-  position: sticky; bottom: 0; z-index: 4;
+  position: sticky; bottom: var(--sched-foot); z-index: 4;
+}
+/* The lower of the two, and the only one with a rule above it - between Booked
+   and Free the border would read as a second table edge. */
+.grid-table tr.sched-free td {
+  bottom: 0;
+  border-top: 1px solid rgb(var(--c-line));
 }
 .grid-table tr.sched-totals .col-sticky { z-index: 6; }
 

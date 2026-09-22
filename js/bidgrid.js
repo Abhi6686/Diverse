@@ -206,6 +206,32 @@
       values: function (b) { return root.Assign.engineerList(b); },
       render: function (b) { return root.Bids.teamCell(b); } },
 
+    /* WHAT THAT PERSON IS DOING, beside the name doing it.
+       The Engineer column said who was on a bid and nothing else, so "is the
+       take-off finished" meant opening the project. One line per task here,
+       lining up with the names to the left.
+
+       Filtered on the task type - "show me every bid with an open Estimating
+       task" - which is why it carries `values` rather than only a text value. */
+    { key: 'task', label: 'Task', panelLabel: 'Task & status (team)',
+      align: 'left', type: 'multi',
+      value: function (b) {
+        return root.Assign.rows(b).map(function (r) {
+          return (r.taskType || '-') + ' (' + root.Assign.statusLabel(r) + ')';
+        }).join(', ');
+      },
+      values: function (b) {
+        var seen = {}, out = [];
+        root.Assign.rows(b).forEach(function (r) {
+          var v = r.taskType || '';
+          if (!v || seen[v]) return;
+          seen[v] = true;
+          out.push(v);
+        });
+        return out;
+      },
+      render: function (b) { return taskStack(b); } },
+
     /* No LF column. Linear feet is a takeoff figure, not a property of the bid
        record: it is computed from the estimating sheet, it is meaningless on a
        bid nobody has estimated yet, and on the register it was a column of
@@ -321,16 +347,16 @@
     // first-pass engineer and hours. No Proposal No. - a bid has not got one
     // until somebody picks it up, so the column would be all em-dashes.
     all: { on: ['sr', 'createdAt', 'engineer', 'estHrs', 'assignedHrs'],
-           off: ['proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs', 'location'],
+           off: ['proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs', 'location'],
            first: ['sr', 'createdAt'] },
 
     // Working: the team and what it has booked. The intake pair is deliberately
     // absent - showing both would put two "Estm Hrs" columns side by side.
-    active: { on: ['sr', 'proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs'],
+    active: { on: ['sr', 'proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs'],
               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'] },
 
     // On a won job, what it cost in effort is the point, so the hours stay on.
-    awarded: { on: ['sr', 'result', 'proposalNo', 'team', 'activeEstHrs', 'activeAsgnHrs'],
+    awarded: { on: ['sr', 'result', 'proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs'],
                off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'],
                // Read by the project number, so it leads - behind the row
                // counter, which always comes first.
@@ -505,12 +531,19 @@
      It is placed at render time and never written into `order`, so the position
      it has on Comfortable and Compact is untouched. Everything else here is in
      whatever order the column chooser has been set to. */
+  /* Engineer and Task are placed, in that order, hard against the calendar:
+     the reading runs name, then what they are doing, then their hours across
+     the dates, left to right with nothing in between. Task follows Engineer
+     because it is the narrower fact - you find the person, then read what they
+     are on. Neither is written into `order`, so the position they have on
+     Comfortable and Compact is untouched. */
+  var SCHEDULE_LAST = ['team', 'task'];
+
   function scheduleColumns(g) {
     var keys = g.order.filter(function (k) {
-      return k !== 'team' && g.visible.indexOf(k) >= 0;
+      return SCHEDULE_LAST.indexOf(k) < 0 && g.visible.indexOf(k) >= 0;
     });
-    keys.push('team');
-    return keys.map(col).filter(Boolean);
+    return keys.concat(SCHEDULE_LAST).map(col).filter(Boolean);
   }
 
   /* What stays put while the calendar scrolls: which row you are on, and no
@@ -792,18 +825,44 @@
      Now both render from this, so the alignment is by construction. `key` is
      what the hours are looked up by, and the empty string is a real key - the
      one work booked to a row with no engineer on it is filed under. */
+  /* A LINE IS ONE ASSIGNMENT ROW, NOT ONE PERSON.
+   *
+   * It used to be one line per distinct engineer, and that could not answer the
+   * question the office actually asks: AJP holding both the take-off and the
+   * estimating appeared once, with his two bookings summed into a single figure
+   * that said neither which task the hours were against nor whether either of
+   * them was finished. Hours are STORED per assignment row, so a line per row
+   * is the shape the data already has - and it is what lets the Task column
+   * beside it name a task and a status per line.
+   *
+   * So an engineer with two tasks appears twice. That repetition is the point.
+   */
   function scheduleLines(bid) {
-    var lines = root.Assign.engineerList(bid).map(function (e) {
-      return { key: e, label: e, named: true };
+    var lines = root.Assign.rows(bid).map(function (r) {
+      return {
+        key: r.id,
+        label: String(r.engineer || '').trim(),
+        taskType: r.taskType || '',
+        status: root.Assign.statusOf(r),
+        completedAt: r.completedAt || '',
+        named: !!String(r.engineer || '').trim()
+      };
     });
-    // Work nobody is named on gets a line of its own, so it is visible rather
-    // than only summed. A bid with nobody on it at all gets the same line, or
-    // the row would have no height and the calendar beside it would sit wrong.
-    var loose = root.Schedule.bookings(bid).some(function (k) {
-      return !k.engineer && k.hrs;
-    });
-    if (loose || !lines.length) lines.push({ key: '', label: 'unassigned', named: false });
+    // Work booked to no row at all - there is none today, but a hand-edited or
+    // part-synced record can still produce it, and a bid with nothing on it
+    // needs a line or the row has no height and the calendar sits wrong.
+    if (!lines.length) {
+      lines.push({ key: '', label: 'unassigned', taskType: '', status: 'todo',
+                   completedAt: '', named: false });
+    }
     return lines;
+  }
+
+  /* How many PEOPLE are on the bid, which is not how many lines it has. Used
+     for capacity: a person holding two tasks must not double the bid's
+     apparent ability to absorb hours. */
+  function schedulePeople(bid) {
+    return root.Assign.engineerList(bid);
   }
 
   /* The name column. Each person's initials sit on their own colour with a bar
@@ -815,18 +874,56 @@
   function engineerStack(bid) {
     return scheduleLines(bid).map(function (l) {
       if (!l.named) {
-        return '<span class="sched-line text-xs text-faint">' + U.esc(l.label) + '</span>';
+        return '<span class="sched-line text-xs text-faint">' +
+          U.esc(l.label || 'unassigned') + '</span>';
       }
       return '<span class="sched-line text-xs">' +
-        root.Bids.personChip(l.label, { cls: 'text-2xs' }) + '</span>';
+        root.Bids.personChip(l.label, {
+          cls: 'text-2xs',
+          // The chip's tick means "this task is done", not "this person is
+          // done" - there is a line per task now, so it can finally say the
+          // narrower thing it always looked like it was saying.
+          done: l.status === 'done',
+          title: l.label + (l.taskType ? ' - ' + l.taskType : '') +
+                 ' - ' + root.Assign.STATUS[l.status].label.toLowerCase()
+        }) + '</span>';
+    }).join('');
+  }
+
+  /* WHAT EACH PERSON ON THE ROW IS ACTUALLY DOING, and whether it is finished.
+     One line per assignment row, lining up with the Engineer stack beside it
+     and with the figures in the calendar to the right - all three render from
+     scheduleLines, so the alignment is by construction rather than by three
+     functions agreeing to count the same way. */
+  function taskStack(bid) {
+    return scheduleLines(bid).map(function (l) {
+      var s = root.Assign.STATUS[l.status] || root.Assign.STATUS.todo;
+      if (!l.taskType) {
+        return '<span class="sched-line text-xs text-faint">&mdash;</span>';
+      }
+      return '<span class="sched-line text-xs flex items-center gap-1.5 min-w-0" title="' +
+          U.escAttr((l.label ? l.label + ' - ' : '') + l.taskType + ' - ' + s.label +
+            (l.status === 'done' && l.completedAt ? ' ' + U.date(l.completedAt) : '')) + '">' +
+        '<span class="truncate text-ink">' + U.esc(l.taskType) + '</span>' +
+        '<span class="shrink-0 px-1 py-px rounded text-3xs font-semibold ' + s.cls + '">' +
+          U.esc(s.label) + '</span>' +
+      '</span>';
     }).join('');
   }
 
   /* The Engineer column, where the record stops and the calendar begins. A
      fixed width so a stack of initials does not reflow as the table is resized,
      and an edge so the join reads as a join rather than as one more column. */
+  /* The frozen block's right-hand edge, where the record stops and the calendar
+     begins. It belongs to whichever of the two placed columns is last, so the
+     join still reads as a join now that Task sits between Engineer and the
+     dates. Both get a fixed width so a stack of chips does not reflow as the
+     table is resized. */
   function nameClass(c) {
-    return (isSchedule() && c.key === 'team') ? ' sched-name' : '';
+    if (!isSchedule()) return '';
+    if (c.key === 'task') return ' sched-task sched-name';
+    if (c.key === 'team') return ' sched-team';
+    return '';
   }
 
   /* The classes every calendar cell shares: the weekend wash, the marker on
@@ -909,7 +1006,10 @@
      scan than a column of gaps. */
   function periodCell(bid, p, idx, cal) {
     var lines = scheduleLines(bid);
-    var level = root.Schedule.loadLevel(idx.bidHours(bid, p), p, lines.length);
+    // Capacity is measured against the PEOPLE on the bid, not the lines: one
+    // person holding two tasks is one person's worth of day, and counting the
+    // lines would report an overbooked bid as comfortable.
+    var level = root.Schedule.loadLevel(idx.bidHours(bid, p), p, schedulePeople(bid));
     var due = dueMark(bid, p) || dueOffscreen(bid, p, cal);
 
     return '<td class="sched-col sched-cell load-' + level + periodClass(p) +
@@ -917,8 +1017,12 @@
       // Hours in the colour of the person they belong to, but only where there
       // are any: an empty day left clear is what keeps the load wash under the
       // cell - how hard the whole shop is booked that day - readable.
+      //
+      // Looked up per ROW, matching the line it is drawn on. Reading them per
+      // person would put one engineer's two tasks' hours on both of their
+      // lines, so a 4 and a 5 would show as 9 twice.
       lines.map(function (l) {
-        var hrs = idx.hours(bid, l.key, p);
+        var hrs = l.key ? idx.rowHours(bid, l.key, p) : 0;
         if (!hrs) return '<span class="sched-line font-mono text-xs text-faint">&middot;</span>';
         return '<span class="sched-line is-booked font-mono text-xs ' +
           (l.named ? root.Bids.colorClass(l.label) : 'pal-none') + '">' +
@@ -983,26 +1087,56 @@
       root.Assign.engineerList(b).forEach(function (e) { set[e] = true; });
       return set;
     }, {});
-    var headcount = Math.max(1, Object.keys(people).length);
+    // The names, not a count: capacity sums what these particular people work,
+    // so a shop with a part-timer in it is not measured as though everybody
+    // does a full day. See Schedule.capacityOf.
+    var roster = Object.keys(people);
 
-    return '<tr class="sched-totals">' +
-      cols.map(function (c, i) {
+    /* The label sits in the last cell before the calendar, so it reads as the
+       heading of the row of figures it is actually labelling. */
+    function label(text, cls) {
+      return cols.map(function (c, i) {
         var s = sticky(run, c.key, false);
-        // The label sits in the last cell before the calendar - which is the
-        // Engineer column - so it reads as the heading of the row of figures it
-        // is actually labelling.
         return '<td class="px-3 py-2 col-' + c.align + s.cls + nameClass(c) + '"' + s.style + '>' +
           (i === cols.length - 1
-            ? '<span class="text-3xs font-bold uppercase tracking-wider text-muted">Booked</span>'
+            ? '<span class="text-3xs font-bold uppercase tracking-wider ' + cls + '">' +
+              text + '</span>'
             : '') + '</td>';
-      }).join('') +
+      }).join('');
+    }
+
+    return '<tr class="sched-totals">' +
+      label('Booked', 'text-muted') +
       cal.map(function (p) {
         var hrs = idx.total(p);
-        var level = root.Schedule.loadLevel(hrs, p, headcount);
+        var level = root.Schedule.loadLevel(hrs, p, roster);
         return '<td class="sched-col sched-cell load-' + level + periodClass(p) + '">' +
           '<span class="font-mono text-xs font-bold ' +
             (hrs ? 'text-ink-strong' : 'text-faint') + '">' +
             (hrs ? U.qty(hrs) : '&middot;') + '</span></td>';
+      }).join('') +
+    '</tr>' +
+    /* AND WHAT IS LEFT OF IT. Booked says how hard the shop is working; this
+       says whether it can take any more, which is the question somebody
+       scheduling has actually come here with. Weekends show nothing rather
+       than a full day free - nobody is rostered, so "45 free" would be an
+       invitation to book work on a Saturday. */
+    '<tr class="sched-totals sched-free">' +
+      label('Free', 'text-muted') +
+      cal.map(function (p) {
+        var cap = root.Schedule.capacityOf(p, roster);
+        var free = cap - idx.total(p);
+        var none = !cap;
+        return '<td class="sched-col sched-cell' + periodClass(p) + '">' +
+          '<span class="font-mono text-xs font-semibold ' +
+            (none ? 'text-faint' : free < 0 ? 'text-danger' : free === 0 ? 'text-faint' : 'text-ok-ink') +
+            '" title="' + U.escAttr(none
+              ? 'Nobody is rostered on this day'
+              : U.qty(cap) + ' hrs across ' + roster.length + ' ' +
+                (roster.length === 1 ? 'person' : 'people') + ', ' +
+                U.qty(idx.total(p)) + ' booked') + '">' +
+            (none ? '&middot;' : free < 0 ? '+' + U.qty(-free) + ' over' : U.qty(free)) +
+          '</span></td>';
       }).join('') +
     '</tr>';
   }

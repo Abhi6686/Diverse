@@ -3884,8 +3884,80 @@ console.log('\n--- the Employee view ---');
     Schedule.loadLevel(4, week[0], 1) === 1, String(Schedule.loadLevel(4, week[0], 1)));
   check('an overbooked day is',
     Schedule.loadLevel(12, week[0], 1) === 3, String(Schedule.loadLevel(12, week[0], 1)));
-  check('one person, one day, eight hours',
-    Schedule.capacityOf(week[0], 1) === 8, String(Schedule.capacityOf(week[0], 1)));
+  /* A WORKING DAY IS NINE HOURS, AND IT IS A SETTING.
+     It was a flat 8 written into js/schedule.js; the office works 9, and one
+     person in four works something else again. Three answers, in priority
+     order: the engineer's own row, then the shop, then the built-in default. */
+  check('one person, one day, the shop\'s working day',
+    Schedule.capacityOf(week[0], 1) === 9, String(Schedule.capacityOf(week[0], 1)));
+  check('and the default is 9, not the 8 it used to be',
+    Schedule.DEFAULT_DAY_HOURS === 9 && Schedule.shopDayHours() === 9,
+    Schedule.DEFAULT_DAY_HOURS + '/' + Schedule.shopDayHours());
+
+  Store.db.company.dayHours = 10;
+  check('the shop can say otherwise', Schedule.shopDayHours() === 10,
+    String(Schedule.shopDayHours()));
+  check('and everyone follows it', Schedule.dayHoursFor('AF') === 10,
+    String(Schedule.dayHoursFor('AF')));
+
+  // A per-person shift lives on the register entry, so there has to be one.
+  const af = Bids.findEngineer('AF') || Bids.addEngineer('AF', '');
+  af.dayHours = 4.5;
+  check('until somebody works a different day', Schedule.dayHoursFor('AF') === 4.5,
+    String(Schedule.dayHoursFor('AF')));
+  check('which does not move anybody else', Schedule.dayHoursFor('MGJ') === 10,
+    String(Schedule.dayHoursFor('MGJ')));
+  /* Capacity given NAMES sums what those people actually work, rather than
+     multiplying a headcount by a figure none of them is on. */
+  check('a mixed team\'s capacity is the sum of its people, not a headcount',
+    Schedule.capacityOf(week[0], ['AF', 'MGJ']) === 14.5,
+    String(Schedule.capacityOf(week[0], ['AF', 'MGJ'])));
+
+  /* HOURS LEFT IN THE DAY - counted across every bid, which is the only
+     reading that is any use: the hours that fill a Friday are usually on a
+     project you are not looking at. */
+  Schedule.invalidate();
+  check('what somebody has booked that day, from the whole database',
+    Schedule.bookedFor('AF', '2026-11-02') === 5,
+    String(Schedule.bookedFor('AF', '2026-11-02')));
+  check('and what is left of their day',
+    Schedule.remainingFor('AF', '2026-11-02') === -0.5,
+    String(Schedule.remainingFor('AF', '2026-11-02')));
+  af.dayHours = 9;
+  Schedule.invalidate();
+  check('which moves when their shift does',
+    Schedule.remainingFor('AF', '2026-11-02') === 4,
+    String(Schedule.remainingFor('AF', '2026-11-02')));
+  check('a day they are not on is a whole day free',
+    Schedule.remainingFor('AF', '2026-11-06') === 9,
+    String(Schedule.remainingFor('AF', '2026-11-06')));
+  check('nobody is not a number',
+    Schedule.remainingFor('', '2026-11-02') === null,
+    String(Schedule.remainingFor('', '2026-11-02')));
+
+  // A SECOND BID IS THE POINT. One bid's card must count the other bid's hours,
+  // or it reports free time that does not exist.
+  const other = Bids.baseList().filter(x => x.id !== b.id)[0];
+  Assign.add(other.id);
+  const rOther = Assign.rows(other).slice(-1)[0];
+  Assign.set(other.id, rOther.id, 'engineer', 'AF');
+  Assign.set(other.id, rOther.id, 'startDate', '11-02-2026');
+  Assign.setDay(other.id, rOther.id, '2026-11-02', '3');
+  check('hours on another project come off the same day',
+    Schedule.bookedFor('AF', '2026-11-02') === 8,
+    String(Schedule.bookedFor('AF', '2026-11-02')));
+  check('so the hours left account for work you are not looking at',
+    Schedule.remainingFor('AF', '2026-11-02') === 1,
+    String(Schedule.remainingFor('AF', '2026-11-02')));
+  check('and the day is credited to both projects',
+    Schedule.projectsOn('AF', '2026-11-02') === 2,
+    String(Schedule.projectsOn('AF', '2026-11-02')));
+
+  // Put it back, so the view checks below read the bookings they were written for.
+  Assign.remove(other.id, rOther.id);
+  Store.db.company.dayHours = 9;
+  delete af.dayHours;
+  Schedule.invalidate();
 
   // Only what is booked in the window belongs in it.
   check('a bid booked in the window is in it', Schedule.hasWorkIn(b, 'week', wed));
@@ -3913,13 +3985,17 @@ console.log('\n--- the Employee view ---');
     keys.length > 4 && keys.indexOf('portal') >= 0, keys.join(','));
   check('with Engineer among them, because the calendar is a line per engineer',
     keys.indexOf('team') >= 0, keys.join(','));
-  check('and Engineer last of them, hard against the calendar',
-    keys[keys.length - 1] === 'team', keys.slice(-3).join(','));
-  check('so the header runs ... Status, Engineer, then the dates',
+  /* Engineer then Task, in that order, hard against the calendar: who, what
+     they are on, then their hours across the dates - left to right with
+     nothing in between. */
+  check('and Engineer then Task last of them, hard against the calendar',
+    keys.slice(-2).join(',') === 'team,task', keys.slice(-3).join(','));
+  check('so the header runs ... Engineer, Task, then the dates',
     (function () {
       const th = [...grid.querySelectorAll('thead th')];
       const first = th.findIndex(h => h.classList.contains('sched-col'));
-      return th[first - 1].classList.contains('sched-name');
+      return th[first - 1].classList.contains('sched-task') &&
+             th[first - 2].classList.contains('sched-team');
     })(), [...grid.querySelectorAll('thead th')].map(h => h.textContent.trim().slice(0, 6)).join('|'));
   check('the identity block stays put while the dates scroll under it',
     grid.querySelectorAll('thead th.col-sticky').length === 3,
@@ -3929,8 +4005,8 @@ console.log('\n--- the Employee view ---');
 
   // Rearranging the rest does not dislodge it - it is placed, not ordered.
   BidGrid.moveColumn('status', -1);
-  check('rearranging the other columns leaves Engineer at the edge',
-    BidGrid.activeColumns().slice(-1)[0].key === 'team',
+  check('rearranging the other columns leaves Engineer and Task at the edge',
+    BidGrid.activeColumns().slice(-2).map(c => c.key).join(',') === 'team,task',
     BidGrid.activeColumns().map(c => c.key).join(','));
   BidGrid.moveColumn('status', 1);
 
@@ -3951,7 +4027,7 @@ console.log('\n--- the Employee view ---');
 
   // A bid with two engineers renders two aligned lines in every cell.
   const row = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
-  const nameLines = row.querySelectorAll('td.sched-name .sched-line').length;
+  const nameLines = row.querySelectorAll('td.sched-team .sched-line').length;
   const cellLines = row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length;
   check('two engineers give two lines in the Engineer column',
     nameLines === 2, String(nameLines));
@@ -3960,7 +4036,63 @@ console.log('\n--- the Employee view ---');
   check('with a heavier rule between projects than between people',
     row.classList.contains('sched-row'), row.className);
 
-  check('there is a totals row', grid.querySelectorAll('tr.sched-totals').length === 1);
+  /* A LINE IS A TASK, NOT A PERSON.
+
+     One engineer holding two tasks used to be one line with their two
+     bookings summed into it - a figure that could say neither which task the
+     hours were against nor whether either was finished. Hours are stored per
+     assignment row, so the schedule draws one line per row and an engineer
+     with two tasks appears twice. */
+  Assign.add(b.id);
+  const rSecond = Assign.rows(b).slice(-1)[0];
+  Assign.set(b.id, rSecond.id, 'engineer', 'AF');     // AF again, second task
+  Assign.set(b.id, rSecond.id, 'taskType', 'Estimating');
+  Assign.set(b.id, r1.id, 'taskType', 'Drawing Take-off');
+  Assign.set(b.id, r1.id, 'status', 'done');
+  Assign.set(b.id, rSecond.id, 'startDate', '11-02-2026');
+  Assign.setDay(b.id, rSecond.id, '2026-11-02', '2');
+  Bids.filterTable();
+
+  const row2 = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  const chips2 = [...row2.querySelectorAll('td.sched-team .person-chip')];
+  check('one person with two tasks is two lines, not one',
+    chips2.length === 3 && chips2.filter(c => /AF/.test(c.textContent)).length === 2,
+    chips2.map(c => c.textContent.trim()).join(','));
+  check('and every calendar cell still has a line each, so they line up',
+    row2.querySelector('td.sched-cell').querySelectorAll('.sched-line').length === 3,
+    String(row2.querySelector('td.sched-cell').querySelectorAll('.sched-line').length));
+
+  /* THE HOURS SPLIT BY TASK, and are not repeated down the person's lines.
+     Read per engineer, AF's 5 and 2 would both show as 7 on both of his
+     lines; read per row they are 5 on one and 2 on the other. */
+  const mon = [...row2.querySelectorAll('td.sched-cell')][0];
+  const monFigures = [...mon.querySelectorAll('.sched-line')].map(s => s.textContent.trim());
+  check('each task carries its own hours, not the person\'s total',
+    monFigures.join(',') === '5,3,2', monFigures.join(','));
+
+  // The Task column, lining up with the names beside it.
+  const taskLines = [...row2.querySelectorAll('td.sched-task .sched-line')];
+  check('the Task column names what each line is for',
+    taskLines.length === 3 && /Drawing Take-off/.test(taskLines[0].textContent),
+    taskLines.map(s => s.textContent.trim()).join(' | '));
+  check('and says where it is up to',
+    /Done/.test(taskLines[0].textContent) && /Not started/.test(taskLines[2].textContent),
+    taskLines.map(s => s.textContent.trim()).join(' | '));
+  check('a finished task ticks its own chip, not the whole person',
+    chips2[0].querySelector('.fa-check') && !chips2[2].querySelector('.fa-check'),
+    chips2.map(c => (c.querySelector('.fa-check') ? 'done' : 'open')).join(','));
+
+  Assign.remove(b.id, rSecond.id);
+  Bids.filterTable();
+
+  /* Two pinned rows now: what the shop has booked, and what is left of it.
+     Booked alone said how hard everyone is working; Free is the one somebody
+     scheduling has actually come to read. */
+  check('there are two totals rows - booked, and free',
+    grid.querySelectorAll('tr.sched-totals').length === 2,
+    String(grid.querySelectorAll('tr.sched-totals').length));
+  check('and Free is the lower of the two, pinned to the bottom',
+    grid.querySelectorAll('tr.sched-totals')[1].classList.contains('sched-free'));
 
   /* THE DUE DATE, ON THE CALENDAR. A row of hours means nothing without the
      date it is working towards, and the schedule drew one and not the other. */
@@ -4033,7 +4165,7 @@ console.log('\n--- the Employee view ---');
     r3.engineer === '' && r3.asgnHrs === 5, r3.engineer + '/' + r3.asgnHrs);
 
   const row3 = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
-  const names = [...row3.querySelectorAll('td.sched-name .sched-line')].map(s => s.textContent);
+  const names = [...row3.querySelectorAll('td.sched-team .sched-line')].map(s => s.textContent);
   const monday = row3.querySelectorAll('td.sched-cell')[0];
   const figures = [...monday.querySelectorAll('.sched-line')].map(s => s.textContent);
   check('it gets a line of its own, after the named ones',
@@ -4152,10 +4284,10 @@ console.log('\n--- one colour per person ---');
   const row = [...U.$('bidsGridHost').querySelectorAll('tr.sched-row')]
     .find(tr => /AF/.test(tr.textContent) && /MGJ/.test(tr.textContent));
   check('the Engineer column labels each person with their colour',
-    row && row.querySelectorAll('td.sched-name .person-chip').length === 2,
-    row ? row.querySelector('td.sched-name').innerHTML.slice(0, 120) : 'no row');
+    row && row.querySelectorAll('td.sched-team .person-chip').length === 2,
+    row ? row.querySelector('td.sched-team').innerHTML.slice(0, 120) : 'no row');
 
-  const chipClass = i => [...row.querySelectorAll('td.sched-name .person-chip')][i]
+  const chipClass = i => [...row.querySelectorAll('td.sched-team .person-chip')][i]
     .className.match(/pal-\S+/)[0];
   const booked = [...row.querySelectorAll('td.sched-cell .sched-line.is-booked')];
   check('and the hours booked to them carry the same colour',
@@ -4170,9 +4302,9 @@ console.log('\n--- one colour per person ---');
   // The line height is what makes the frozen column and the calendar agree; a
   // label that added to it would put every figure in the month out of step.
   check('the label does not make the line taller than the figures beside it',
-    row.querySelectorAll('td.sched-name .sched-line').length ===
+    row.querySelectorAll('td.sched-team .sched-line').length ===
       row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length,
-    row.querySelectorAll('td.sched-name .sched-line').length + ' vs ' +
+    row.querySelectorAll('td.sched-team .sched-line').length + ' vs ' +
       row.querySelector('td.sched-cell').querySelectorAll('.sched-line').length);
 
   // The same colour wherever the person is named.

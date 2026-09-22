@@ -1534,6 +1534,22 @@
         '<input value="' + U.escAttr(e.name) + '" placeholder="Full name (optional)" ' +
           'onchange="Bids.updateEngineer(\'' + e.id + '\',\'name\',this.value)" ' +
           'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm outline-none focus:border-brand">' +
+        /* This person's working day, when it is not the shop's. Blank means
+           "whatever the shop is set to" rather than zero, and the placeholder
+           shows that figure so an empty box is readable as inheriting it
+           instead of as missing data. */
+        '<label class="flex items-center gap-1 text-3xs text-muted" ' +
+          'title="Hours this person works in a day. Leave blank to use the shop default.">' +
+          '<i class="fas fa-clock text-faint"></i>' +
+          '<input type="number" step="0.5" min="0" max="24" ' +
+            'value="' + U.escAttr(U.n(e.dayHours) > 0 ? e.dayHours : '') + '" ' +
+            'placeholder="' + U.escAttr(root.Schedule.shopDayHours()) + '" ' +
+            'aria-label="Working day for ' + U.escAttr(e.initials) + '" ' +
+            'onchange="Bids.updateEngineer(\'' + e.id + '\',\'dayHours\',this.value)" ' +
+            'class="w-14 px-1.5 py-1 bg-surface border border-line rounded text-sm font-mono ' +
+            'text-right outline-none focus:border-brand">' +
+          'hrs' +
+        '</label>' +
         // An entry that belongs to an account is not free-standing: renaming
         // the initials here moves the link with it, and deleting it would
         // orphan somebody who can still sign in.
@@ -2087,6 +2103,22 @@
       var e = engineers().filter(function (x) { return x.id === id; })[0];
       if (!e) return;
       var v = String(value || '').trim();
+
+      /* How long this person's day is. A number, not a string, and an empty box
+         DELETES the key rather than storing 0 - blank means "whatever the shop
+         works", and a stored zero would read as a person who is never available
+         and show every booking they have as an overbooking. */
+      if (field === 'dayHours') {
+        var n = U.n(v);
+        if (v === '') delete e.dayHours;
+        else if (n > 0 && n <= 24) e.dayHours = n;
+        else U.toast('A working day has to be between 0 and 24 hours.', 'warn');
+        root.Store.save();
+        renderEngineerList();
+        refresh();
+        return;
+      }
+
       if (field === 'initials') {
         if (!v) { renderEngineerList(); return; }
         var clash = findEngineer(v);
@@ -2097,9 +2129,18 @@
         }
         // Carry the rename onto every bid that referenced the old initials,
         // otherwise those bids quietly lose their engineer.
+        //
+        // BOTH PLACES INITIALS APPEAR, not just the intake field. The Team &
+        // Hours rows carry their own copy, and they were being left behind - so
+        // renaming somebody detached every task they were booked to, which cost
+        // them their colour on the schedule, their name on hover, and their
+        // hours in the "who is free" figure, all silently.
         var old = e.initials;
         db().bids.forEach(function (b) {
-          if ((b.engineer || '').toLowerCase() === old.toLowerCase()) b.engineer = v;
+          if (U.low(b.engineer) === U.low(old)) b.engineer = v;
+          root.Assign.rows(b).forEach(function (r) {
+            if (U.low(r.engineer) === U.low(old)) r.engineer = v;
+          });
         });
       }
       e[field] = v;
