@@ -115,9 +115,21 @@
     }
     if (bid.proposalNo) {
       return '<span class="px-2 py-0.5 rounded bg-chrome-soft text-faint text-2xs font-mono" ' +
-        'title="Proposal number - unique to this project">' + U.esc(bid.proposalNo) + '</span>';
+        'title="Proposal number - unique to this project">' + U.esc(bid.proposalNo) + '</span>' +
+        revisionChip(bid);
     }
-    return '';
+    return revisionChip(bid);
+  }
+
+  /* WHICH TIME ROUND THIS IS. The first entry carries nothing - it was just the
+     job - and every re-opening after it is numbered, so a bare header means a
+     job that has only been bid once. */
+  function revisionChip(bid) {
+    if (!bid || !bid.revision) return '';
+    return '<span class="px-1.5 py-0.5 rounded bg-warn/20 text-warn-ink text-2xs font-semibold" ' +
+      'title="' + U.escAttr('Revision ' + bid.revision + ' of ' +
+        (bid.revisionBase || 'this project') + ' - re-opened after the previous one finished') + '">' +
+      U.esc(root.Bids.revisionNoText(bid.revision)) + '</span>';
   }
 
   function renderHeader() {
@@ -159,11 +171,11 @@
       '</div>' +
       '<div class="flex items-center gap-2 flex-wrap justify-end">' +
         (mode() === 'all'
-          ? promoteAction(bid)
+          ? reopenAction(bid) + promoteAction(bid)
           : tab('project', 'Overview', 'fa-circle-info', section === 'project') +
             tab('takeoff', 'TakeOff', 'fa-calculator', section === 'takeoff') +
             tab('proposal', 'Proposal', 'fa-file-contract', section === 'proposal') +
-            decisionMenu(bid)) +
+            reopenAction(bid) + decisionMenu(bid)) +
         '<span id="saveIndicator" class="text-xs text-faint ml-1"></span>' +
       '</div>';
   }
@@ -191,6 +203,20 @@
   /* Award and Lost are the two ways a bid stops being worked. They sit behind
      one control because they are one decision, and each has its own
      confirmation because both are hard to walk back. */
+  /* THE JOB CAME BACK. Beside the Award menu rather than inside it: Award and
+     Lost decide a bid that is still being worked, and this one acts on a bid
+     that is already finished - the two are never offered at the same time, so
+     nesting it under a button labelled "Award" would hide it exactly when it
+     is the only thing available. */
+  function reopenAction(bid) {
+    if (!root.Bids.canReopen(bid)) return '';
+    return '<button onclick="Bids.decide(' + bid.id + ',\'ReOpen\')" ' +
+      'title="The client has brought this job back - open a new revision of it" ' +
+      'class="px-3 py-2 rounded-lg text-sm font-medium bg-warn hover:bg-warn-hover ' +
+      'text-white flex items-center gap-2">' +
+      '<i class="fas fa-rotate-right text-xs"></i>Re-open</button>';
+  }
+
   function decisionMenu(bid) {
     if (root.Bids.bucketOf(bid) !== 'open') return '';
     if (!root.Auth.can('bid.award')) return '';
@@ -467,6 +493,54 @@
       '<i class="fas fa-file-contract"></i>Open Proposal</button>');
   }
 
+  /* THE OTHER END OF THE CHAIN, AT THE TOP OF THE PAGE.
+   *
+   * A re-opened job is two records with the same project name, and which one
+   * you are looking at decides whether the price on screen is the one that was
+   * quoted or the one being worked out now. Getting that wrong is the whole
+   * risk the feature introduces, so it is said first, before the details card,
+   * with a way across.
+   *
+   * Both directions: the revision says what it came from, and the finished
+   * entry says what replaced it - otherwise somebody opening the old one from
+   * a search has nothing telling them the work moved on.
+   */
+  function revisionBanner(bid) {
+    var from = root.Bids.originalOf(bid);
+    var into = root.Bids.reopenedOf(bid);
+    if (!from && !into) return '';
+
+    function line(tone, icon, text, target) {
+      return '<div class="flex items-center gap-3 px-4 py-2.5 rounded-xl border ' + tone + '">' +
+        '<i class="fas ' + icon + ' shrink-0"></i>' +
+        '<span class="text-sm flex-1 min-w-0">' + text + '</span>' +
+        (target
+          ? '<button onclick="Project.open(' + target.id + ')" ' +
+            'class="shrink-0 px-2.5 py-1 rounded-lg bg-surface/70 hover:bg-surface ' +
+            'text-xs font-semibold">Open it</button>'
+          : '') +
+      '</div>';
+    }
+
+    return '<div class="space-y-2">' +
+      (from
+        ? line('bg-warn-soft border-warn/30 text-warn-ink', 'fa-rotate-right',
+            '<span class="font-semibold">' +
+              U.esc(root.Bids.revisionNoText(bid.revision)) + '</span> of ' +
+            '<span class="font-mono">' + U.esc(bid.revisionBase || from.proposalNo || '') + '</span>. ' +
+            'The previous entry is finished and left as it was &mdash; ' +
+            'its price and its takeoff are what was quoted then.', from)
+        : '') +
+      (into
+        ? line('bg-neutral-soft border-line text-muted', 'fa-circle-info',
+            'This job was re-opened as <span class="font-mono font-semibold">' +
+            U.esc(into.proposalNo || root.Bids.revisionNoText(into.revision)) +
+            '</span>. This entry is the record of what was bid the first time; ' +
+            'the work is on that one now.', into)
+        : '') +
+    '</div>';
+  }
+
   function render() {
     var host = U.$('section-project');
     if (!host || host.classList.contains('hidden')) return;
@@ -484,6 +558,7 @@
 
     host.innerHTML =
       '<div class="space-y-6">' +
+        revisionBanner(bid) +
         detailsCard(bid) +
         // Intake shows the record and nothing else: there is no estimate and no
         // proposal until somebody picks the bid up, and offering them here

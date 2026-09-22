@@ -28,6 +28,11 @@ body { font-family: 'Inter', sans-serif; background: rgb(var(--c-canvas)); color
                      border: 1px solid rgb(var(--c-ok)); }
 .status-lost       { background: rgb(var(--c-danger-soft));  color: rgb(var(--c-danger-ink)); }
 .status-noscope    { background: rgb(var(--c-info-soft));    color: rgb(var(--c-info-ink)); }
+/* Bordered like Awarded, and for the same reason: it is not just another shade
+   of "in progress" but a job that has been through the whole cycle once and
+   come back, which is worth catching the eye in a list. */
+.status-reopen     { background: rgb(var(--c-warn-soft));    color: rgb(var(--c-warn-ink));
+                     border: 1px solid rgb(var(--c-warn)); }
 
 /* THE PALETTE A SHOP-ADDED STATUS PICKS FROM. Settings > Bid Statuses offers
    these six as swatches; the seven above are the lifecycle's own and are not

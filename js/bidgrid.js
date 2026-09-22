@@ -15,6 +15,19 @@
   /* A bid nobody is going to work on any more, whichever way it went. */
   function decided(b) { return root.Bids.bucketOf(b) !== 'open'; }
 
+  /* A RE-OPENED JOB SAYS SO WHEREVER ITS NUMBER APPEARS.
+     Two entries on the table share a project name and differ by a suffix that
+     is four characters at the end of a mono string - easy to read past. The
+     tag is the thing that stops somebody working the finished one by mistake.
+     Blank on a first entry: it was not a revision of anything. */
+  function revisionTag(b) {
+    if (!b || !b.revision) return '';
+    return ' <span class="px-1 py-px rounded bg-warn-soft text-warn-ink text-3xs font-semibold ' +
+      'align-middle" title="' + U.escAttr('Revision ' + b.revision + ' of ' +
+        (b.revisionBase || 'this project')) + '">' +
+      U.esc(root.Bids.revisionNoText(b.revision)) + '</span>';
+  }
+
   /* Hours cells all look the same; zero prints as a dash so a column of real
      figures is not buried in noughts. */
   function hrs(v, cls) {
@@ -72,9 +85,22 @@
       value: function (b) { return U.low(b.proposalNo); },
       text: function (b) { return b.proposalNo || ''; },
       render: function (b) {
-        return b.proposalNo
+        return (b.proposalNo
           ? '<span class="font-mono text-xs font-semibold text-ink">' + U.esc(b.proposalNo) + '</span>'
-          : '<span class="text-faint">&mdash;</span>';
+          : '<span class="text-faint">&mdash;</span>') + revisionTag(b);
+      } },
+
+    /* WHICH TIME ROUND THIS IS. Off by default: most jobs are bid once and a
+       column of blanks is not worth the width. Switched on - or sorted on -
+       when the question is "what have we re-bid", which is the only question
+       it answers. The first entry of a job is deliberately blank rather than
+       Rev00: it was not a revision of anything. */
+    { key: 'revision', label: 'Rev', align: 'center', type: 'number',
+      width: 'w-16', offByDefault: true,
+      value: function (b) { return b.revision ? U.n(b.revision) : null; },
+      text: function (b) { return b.revision ? root.Bids.revisionNoText(b.revision) : ''; },
+      render: function (b) {
+        return b.revision ? revisionTag(b) : '<span class="text-faint">&mdash;</span>';
       } },
 
     /* THE JOB NO. COLUMN IS GONE. A project now carries one number for its whole

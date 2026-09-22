@@ -33,7 +33,12 @@
     intake:  { label: 'All Bids', icon: 'fa-inbox', tint: 'text-muted' },
     active:  { label: 'Active Bids', icon: 'fa-bolt', tint: 'text-brand' },
     awarded: { label: 'Awarded', icon: 'fa-trophy', tint: 'text-ok' },
-    lost:    { label: 'Lost', icon: 'fa-xmark', tint: 'text-danger' }
+    lost:    { label: 'Lost', icon: 'fa-xmark', tint: 'text-danger' },
+    /* NOT A PLACE A BID CAN BE - which is why stageOf never returns it. It is
+       a thing that happened TO a finished bid: the client brought the job back
+       and a fresh revision entry opened beside this one. The bid itself has not
+       moved, and it is not going to. */
+    reopened: { label: 'Re-opened', icon: 'fa-rotate-right', tint: 'text-warn-ink' }
   };
 
   function label(key) {
@@ -254,6 +259,14 @@
      beginning. Lost and Awarded both go back to Active: they are the two ways
      of leaving it. */
   function previousStage(bid) {
+    /* A JOB THAT HAS BEEN RE-OPENED CANNOT BE MOVED BACK.
+       There is a second entry pointing at this one as the thing it is a
+       revision of. Walking this one back a stage would leave that pointer
+       aimed at a bid in a state it never had, and the revision's number was
+       derived from this one's - so the pair would disagree about what the job
+       is called. Re-opening is not undone by moving the original; it is undone
+       by deleting the revision, which is its own decision. */
+    if (bid && bid.reopenedInto) return null;
     var now = stageOf(bid);
     if (now === 'awarded' || now === 'lost') return 'active';
     if (now === 'active') return 'intake';

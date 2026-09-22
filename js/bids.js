@@ -43,8 +43,21 @@
     { key: 'Completed',           badge: 'status-completed',  bucket: 'open',   settable: true,  onActive: true },
     { key: 'No Scope',            badge: 'status-noscope',    bucket: 'closed', settable: true,  onActive: false },
     { key: 'Awarded',             badge: 'status-awarded',    bucket: 'won',    settable: false, onActive: false },
-    { key: 'Lost',                badge: 'status-lost',       bucket: 'closed', settable: false, onActive: true }
+    { key: 'Lost',                badge: 'status-lost',       bucket: 'closed', settable: false, onActive: true },
+    /* A job the client has brought back. Not settable, for the same reason
+       Awarded and Lost are not: reaching it does bookkeeping - it opens a fresh
+       revision entry and numbers it - so it is the outcome of an action rather
+       than a word you type into a dropdown. Open and on Active Bids, because a
+       re-opened job is live work again. */
+    { key: 'ReOpen',              badge: 'status-reopen',     bucket: 'open',   settable: false, onActive: true }
   ];
+
+  /* WHICH JOBS CAN BE RE-OPENED.
+     Only the two that are finished without having been decided: work we
+     completed, and work we looked at and found nothing in scope for. An
+     Awarded job is not re-opened, it is a job; a Lost one was decided against
+     and re-bidding it is a new enquiry. */
+  var REOPENABLE = ['Completed', 'No Scope'];
 
   /* THE SEVEN ABOVE ARE THE LIFECYCLE. THE SHOP CAN ADD STAGES BESIDE THEM.
    *
@@ -329,6 +342,17 @@
       }
     }
 
+    /* Re-opening a job the client has brought back. Offered on both lists,
+       because a No Scope verdict is reached on All Bids and a Completed one on
+       Active, and either can be the thing that comes back. Only where it can
+       actually be done - see canReopen - so it is never a menu entry that
+       explains why it will not work. */
+    if (canReopen(bid)) {
+      out.push(G.menuSeparator());
+      out.push(G.menuItem({ icon: 'fa-rotate-right', label: 'Re-open job', tone: 'warn',
+        onclick: 'Bids.decide(' + bid.id + ',\'ReOpen\')' }));
+    }
+
     if (out.length) out.push(G.menuSeparator());
     if (root.Auth.can('bid.edit')) {
       out.push(G.menuItem({ icon: 'fa-pen', label: 'Edit bid',
@@ -435,6 +459,161 @@
     root.History.record(bid, was, 'lost', { fromStatus: wasStatus });
   }
 
+  /* ---- re-opening a finished job ---------------------------------------- */
+
+  /* A CLIENT BRINGS A JOB BACK, AND IT BECOMES A SECOND ENTRY.
+   *
+   * It used to be re-entered by hand, or - worse - the finished bid was edited
+   * in place, which overwrote the record of what was bid the first time. That
+   * record is the whole point: the question asked about a re-bid is always
+   * "what did we quote before, and what has changed".
+   *
+   * So re-opening leaves the original exactly as it is and opens a new entry
+   * beside it, dated today, carrying the same team and none of their hours.
+   */
+
+  /* The number without any revision suffix - the identity the whole chain
+     shares. Re-opening a Rev01 strips its own suffix rather than stacking a
+     second one, so the third entry is -R02 and never -R01-R02. */
+  function revisionBaseOf(bid) {
+    var explicit = String((bid && bid.revisionBase) || '').trim();
+    if (explicit) return explicit;
+    return String((bid && bid.proposalNo) || '').trim().replace(/-R\d+$/i, '');
+  }
+
+  /* Highest revision already issued against a base, + 1. Scanned off the
+     records rather than counted from the chain, and for the same reason
+     nextProjectNo scans: a number that has been on paper must never be handed
+     to a second entry, and deleting one must not free it up again. */
+  function nextRevisionNo(base) {
+    if (!base) return 1;
+    var re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-R(\\d+)$', 'i');
+    var max = bids().reduce(function (m, b) {
+      var hit = re.exec(String(b.proposalNo || '').trim());
+      return Math.max(m, hit ? Number(hit[1]) : 0, U.n(b.revisionBase === base ? b.revision : 0));
+    }, 0);
+    return max + 1;
+  }
+
+  function revisionNoText(n) {
+    return 'Rev' + String(n).padStart(2, '0');
+  }
+
+  function canReopen(bid) {
+    return !!bid && REOPENABLE.indexOf(bid.status) >= 0 &&
+           !bid.reopenedInto && root.Auth.can('bid.edit');
+  }
+
+  /* The team, carried over without any of the work.
+     WHO is doing WHAT comes across - that is the standing arrangement, and
+     re-typing four names and their task types is exactly the friction that
+     made people edit the old bid instead. WHEN is not: the schedule was for
+     a job that is finished, and carrying those dates forward would book the
+     new one into weeks that have already been and gone. So each row opens on
+     three fresh working days from today with nothing in them. */
+  function copyAssignments(from) {
+    var start = U.today();
+    if (root.Assign.isWeekend(start)) start = root.Assign.nextWorkingDay(start);
+    return root.Assign.rows(from).map(function (r) {
+      return root.Assign.syncRow({
+        id: root.Store.uid('asg'),
+        engineer: r.engineer || '',
+        taskType: r.taskType || '',
+        // The estimate of how long the task takes is a property of the task,
+        // not of the run that finished - so it comes across as a starting
+        // point. What was booked against it does not.
+        estHrs: U.n(r.estHrs),
+        asgnHrs: 0,
+        status: 'todo',
+        completedAt: '',
+        startDate: start,
+        days: root.Assign.workingRun(start, 3).map(function (d) {
+          return { date: d, hrs: null };
+        })
+      });
+    });
+  }
+
+  function reopen(bidId) {
+    var original = bids().filter(function (b) { return b.id === bidId; })[0];
+    if (!canReopen(original)) return null;
+
+    var base = revisionBaseOf(original);
+    var n = nextRevisionNo(base);
+    var nextNo = base ? base + '-R' + String(n).padStart(2, '0') : '';
+    var today = U.today();
+
+    var next = {
+      id: bids().reduce(function (m, b) { return Math.max(m, b.id || 0); }, 0) + 1,
+      /* WHAT THE NEW ENTRY IS. The job, as described - not what happened to
+         it last time. */
+      project: original.project,
+      products: (original.products || []).slice(),
+      productLines: JSON.parse(JSON.stringify(original.productLines || [])),
+      material: original.material || '',
+      region: original.region || '',
+      location: original.location || '',
+      portal: original.portal || '',
+      link: original.link || '',
+      comments: original.comments || '',
+      engineer: original.engineer || '',
+      inRegion: original.inRegion,
+      dueDate: '',
+      revisedDueDate: '',
+
+      /* NOTHING PRICED AND NOTHING MEASURED. A re-bid is re-bid: carrying the
+         old price over would put a number on the new entry that nobody has
+         worked out, and it is the number most likely to be read without
+         checking. The takeoff and the proposal are not copied either - they
+         are the documents that produced that price. */
+      price: null,
+      priceLocked: false,
+      lf: null,
+      estHrs: 0,
+      assignedHrs: 0,
+      takeoffId: null,
+      proposalId: null,
+
+      proposalNo: nextNo,
+      awardNo: null,
+      awardedAt: null,
+      decidedAt: null,
+
+      status: 'ReOpen',
+      active: true,
+      activatedAt: today,
+      createdAt: new Date().toISOString(),
+
+      assignments: copyAssignments(original),
+      history: [],
+
+      /* The chain, walkable both ways. */
+      revision: n,
+      revisionOf: original.id,
+      revisionBase: base,
+      reopenedInto: null
+    };
+
+    bids().push(next);
+    original.reopenedInto = next.id;
+
+    /* The original's STATUS IS LEFT ALONE. It was Completed, and it still is -
+       that is what happened. What came afterwards is a separate entry, and
+       reopenedInto is what marks this one as having been superseded. */
+    root.History.record(original, root.History.stageOf(original), 'reopened', {
+      fromStatus: original.status,
+      toStatus: original.status,
+      comment: 'Re-opened as ' + (nextNo || 'a new entry') + ' (' + revisionNoText(n) + ').'
+    });
+    root.History.recordCreated(next);
+    root.History.entries(next).slice(-1)[0].comment =
+      revisionNoText(n) + ' of ' + (base || 'this project') +
+      '. Re-opened from the entry completed ' +
+      (original.decidedAt || original.activatedAt || '' ? U.date(original.decidedAt || original.activatedAt) : 'earlier') + '.';
+
+    return next;
+  }
+
   /* ---- dates ------------------------------------------------------------- */
 
   /* The date the project is actually working to.
@@ -477,6 +656,23 @@
       note: 'It moves off Active Bids and stays in All Bids. No job number is issued — ' +
             'those identify work we are doing.',
       apply: applyLost
+    },
+    /* Re-opening is the same shape of thing - confirm something that changes
+       the record and cannot be casually undone - so it goes through the same
+       modal rather than a second near-identical one. It differs in that it
+       CREATES a record instead of moving one, which is what `opens` marks: the
+       confirm step follows the new entry rather than repainting the old. */
+    ReOpen: {
+      verb: 'Re-open', icon: 'fa-rotate-right',
+      wrapClass: 'w-16 h-16 bg-warn-soft rounded-full flex items-center justify-center mx-auto mb-4',
+      iconClass: 'fas fa-rotate-right text-warn text-2xl',
+      buttonClass: 'px-5 py-2.5 bg-warn hover:bg-warn-hover text-white rounded-lg text-sm font-medium transition',
+      title: 'Re-open this job?',
+      note: 'This entry is left exactly as it is — it is the record of what was bid ' +
+            'the first time. A new entry opens on Active Bids dated today, with the ' +
+            'same people and task types, no hours booked, and no takeoff or proposal.',
+      opens: true,
+      apply: reopen
     }
   };
 
@@ -487,7 +683,14 @@
     var b = bids().filter(function (x) { return x.id === id; })[0];
     var d = DECISIONS[outcome];
     if (!b || !d) return;
-    if (b.status === outcome) {
+    if (outcome === 'ReOpen') {
+      if (!canReopen(b)) {
+        U.toast(b.reopenedInto
+          ? 'That job has already been re-opened.'
+          : 'Only a Completed or No Scope job can be re-opened.', 'warn');
+        return;
+      }
+    } else if (b.status === outcome) {
       U.toast('That bid is already ' + outcome.toLowerCase() + '.', 'warn');
       return;
     }
@@ -513,6 +716,17 @@
       U.$('decisionNumber').textContent = existing || nextProjectNo(U.today());
       U.$('decisionNumberLabel').textContent = existing
         ? 'will be awarded as' : 'will be given project number';
+    } else if (outcome === 'ReOpen') {
+      // The number the new entry will carry, shown BEFORE it is issued. It is
+      // the thing that distinguishes the two entries from here on, so it is
+      // what the confirmation is really asking about.
+      numberRow.classList.remove('hidden');
+      var base = revisionBaseOf(b);
+      var rev = nextRevisionNo(base);
+      U.$('decisionNumber').textContent = base
+        ? base + '-R' + String(rev).padStart(2, '0')
+        : revisionNoText(rev);
+      U.$('decisionNumberLabel').textContent = 'will re-open as';
     } else {
       numberRow.classList.add('hidden');
       // The label sits outside the hidden row, beside the project name, so it
@@ -528,6 +742,22 @@
     var d = DECISIONS[decisionOutcome];
     U.$('decisionModal').classList.add('hidden');
     if (!b || !d) return;
+
+    /* Re-opening makes a record rather than moving one, so it takes the id and
+       lands on what it built. Everything else acts on the bid in place. */
+    if (d.opens) {
+      var next = d.apply(b.id);
+      root.Store.save();
+      refresh();
+      if (!next) { U.toast('That job could not be re-opened.', 'warn'); return; }
+      U.toast('Re-opened as ' + (next.proposalNo || revisionNoText(next.revision)) +
+        '. The finished entry is untouched.', 'ok');
+      // Land in the new entry: it is where the work is now, and leaving the
+      // user on the finished one would look as though nothing had happened.
+      root.Project.openFrom(next.id, 'active');
+      return;
+    }
+
     d.apply(b);
     root.Store.save();
     refresh();
@@ -1991,6 +2221,25 @@
        off it to colour the charts, so the pie and the pills cannot disagree. */
     statusOf: statusOf,
     settableStatuses: settableStatuses,
+
+    /* Re-opening a finished job: the original is left alone and a fresh
+       revision entry opens beside it. */
+    REOPENABLE: REOPENABLE,
+    canReopen: canReopen,
+    reopen: reopen,
+    revisionBaseOf: revisionBaseOf,
+    nextRevisionNo: nextRevisionNo,
+    revisionNoText: revisionNoText,
+    /* The entry this one came from, and the one it was re-opened into - so a
+       page showing either end of the chain can offer the other. */
+    originalOf: function (bid) {
+      if (!bid || bid.revisionOf == null) return null;
+      return bids().filter(function (b) { return b.id === bid.revisionOf; })[0] || null;
+    },
+    reopenedOf: function (bid) {
+      if (!bid || bid.reopenedInto == null) return null;
+      return bids().filter(function (b) { return b.id === bid.reopenedInto; })[0] || null;
+    },
 
     /* The project number: allocated once, when a bid is picked up. */
     nextProjectNo: nextProjectNo,

@@ -2280,6 +2280,164 @@ console.log('\n--- project numbers and the awarded job number ---');
     BidGrid.COLUMNS.map(c => c.key).join(','));
 }
 
+console.log('\n--- a job the client brings back ---');
+{
+  Bids.setView('active');
+  const job = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open' && x.proposalNo)[0];
+
+  /* ONLY A FINISHED JOB. Re-opening is for work that ran its course - we
+     completed it, or we looked and found nothing in scope. A bid still being
+     worked has nothing to re-open, and a decided one is not re-opened either:
+     an Awarded job is a job, and a Lost one is a new enquiry. */
+  job.status = 'In Progress';
+  check('work in progress cannot be re-opened', !Bids.canReopen(job));
+  job.status = 'Awarded';
+  check('nor can a job we won', !Bids.canReopen(job));
+  job.status = 'Lost';
+  check('nor one we lost', !Bids.canReopen(job));
+  job.status = 'Completed';
+  check('a completed job can', Bids.canReopen(job));
+  job.status = 'No Scope';
+  check('and so can one we found no scope in', Bids.canReopen(job));
+  job.status = 'Completed';
+
+  // Two people on it, one of them finished, with hours booked and a takeoff.
+  Assign.rows(job).slice().forEach(r => Assign.remove(job.id, r.id));
+  Assign.add(job.id);
+  const jr1 = Assign.rows(job).slice(-1)[0];
+  Assign.set(job.id, jr1.id, 'engineer', 'AJP');
+  Assign.set(job.id, jr1.id, 'taskType', 'Drawing Take-off');
+  Assign.set(job.id, jr1.id, 'estHrs', '6');
+  Assign.set(job.id, jr1.id, 'status', 'done');
+  Assign.setDay(job.id, jr1.id, Assign.dayRows(jr1)[0].date, '9');
+  Assign.add(job.id);
+  const jr2 = Assign.rows(job).slice(-1)[0];
+  Assign.set(job.id, jr2.id, 'engineer', 'SSJ');
+  Assign.set(job.id, jr2.id, 'taskType', 'Estimating');
+
+  const base = job.proposalNo;
+  const wasPrice = job.price;
+  const wasHistory = History.entries(job).length;
+  job.takeoffId = job.takeoffId || 'some-takeoff';
+
+  // The confirmation names the number before it issues it.
+  Bids.promptDecision(job.id, 'ReOpen');
+  check('the confirmation names the number the revision will carry',
+    U.$('decisionNumber').textContent === base + '-R01',
+    U.$('decisionNumber').textContent);
+  Bids.closeDecisionModal();
+  check('cancelling opens nothing', !job.reopenedInto &&
+    !Store.db.bids.some(x => x.proposalNo === base + '-R01'));
+
+  Bids.promptDecision(job.id, 'ReOpen');
+  Bids.confirmDecision();
+  const rev = Store.db.bids.filter(x => x.proposalNo === base + '-R01')[0];
+
+  check('re-opening makes a second entry', !!rev && rev.id !== job.id);
+  check('numbered off the original, not from the top of the sequence',
+    rev.proposalNo === base + '-R01' && rev.revision === 1 && rev.revisionBase === base,
+    rev.proposalNo + '/' + rev.revision);
+  check('the first entry carries no revision number - it was just the job',
+    !job.revision, String(job.revision));
+
+  /* THE ORIGINAL IS THE RECORD OF WHAT WAS BID, AND IS LEFT ALONE. This is
+     the whole reason for a second entry rather than an edit in place. */
+  check('the finished entry keeps its status', job.status === 'Completed', job.status);
+  check('and its price', job.price === wasPrice, String(job.price));
+  check('and its takeoff', job.takeoffId === 'some-takeoff', String(job.takeoffId));
+  check('and every task on it stays done',
+    Assign.rows(job).some(r => Assign.isDone(r)));
+  check('but it is marked as having been superseded',
+    job.reopenedInto === rev.id, String(job.reopenedInto));
+
+  /* THE NEW ENTRY: the same job and the same people, none of the work. */
+  check('the revision opens today, on Active Bids',
+    rev.activatedAt === U.today() && rev.active && rev.status === 'ReOpen',
+    rev.activatedAt + '/' + rev.status);
+  check('carrying the same project and products',
+    rev.project === job.project &&
+    JSON.stringify(rev.products) === JSON.stringify(job.products));
+  check('and the same people on the same tasks',
+    Assign.rows(rev).map(r => r.engineer + ':' + r.taskType).join(',') ===
+      'AJP:Drawing Take-off,SSJ:Estimating',
+    Assign.rows(rev).map(r => r.engineer + ':' + r.taskType).join(','));
+  check('with the estimate of how long each takes',
+    U.n(Assign.rows(rev)[0].estHrs) === 6, String(Assign.rows(rev)[0].estHrs));
+
+  // WITHOUT ANY OF THE SCHEDULE. The old dates are weeks that have been and
+  // gone; carrying them would book the new job into the past.
+  check('nobody is booked any hours yet',
+    Assign.rows(rev).every(r => U.n(r.asgnHrs) === 0),
+    Assign.rows(rev).map(r => r.asgnHrs).join(','));
+  check('and every task starts over, however finished it was last time',
+    Assign.rows(rev).every(r => Assign.statusOf(r) === 'todo' && !r.completedAt),
+    Assign.rows(rev).map(r => Assign.statusOf(r)).join(','));
+  check('the days are fresh ones, not the ones already worked',
+    Assign.rows(rev).every(r => Assign.dayRows(r).length === 3 &&
+      Assign.dayRows(r).every(d => d.hrs == null && d.date >= U.today())),
+    JSON.stringify(Assign.dayRows(Assign.rows(rev)[0])));
+
+  // NOTHING PRICED AND NOTHING MEASURED - it is a re-bid.
+  check('it starts unpriced rather than inheriting a figure nobody worked out',
+    rev.price == null && !rev.priceLocked, String(rev.price));
+  check('with no takeoff and no proposal of its own',
+    !rev.takeoffId && !rev.proposalId);
+  check('and no award carried across',
+    !rev.awardNo && !rev.awardedAt && !rev.decidedAt);
+
+  // BOTH ENDS OF THE CHAIN ARE WALKABLE.
+  check('the revision knows what it came from',
+    Bids.originalOf(rev) === job, String(rev.revisionOf));
+  check('and the original knows what replaced it',
+    Bids.reopenedOf(job) === rev, String(job.reopenedInto));
+
+  // IT IS IN THE HISTORY, on both records.
+  check('the original records that it was re-opened',
+    History.entries(job).length === wasHistory + 1 &&
+    History.entries(job).slice(-1)[0].to === 'reopened',
+    History.entries(job).slice(-1)[0].to);
+  check('naming the number it was re-opened as',
+    /R01/.test(History.entries(job).slice(-1)[0].comment),
+    History.entries(job).slice(-1)[0].comment);
+  check('and the revision starts its own history rather than inheriting one',
+    History.entries(rev).length === 1 && History.entries(rev)[0].kind === 'created',
+    String(History.entries(rev).length));
+
+  /* A RE-OPENED JOB CANNOT BE WALKED BACK A STAGE. There is a second record
+     pointing at this one; moving it would leave that pointer aimed at a state
+     the job never had. */
+  check('the finished entry can no longer be reversed', !History.canReverse(job));
+
+  // AND IT CANNOT BE RE-OPENED TWICE into two parallel Rev01s.
+  check('nor re-opened a second time', !Bids.canReopen(job));
+  Bids.promptDecision(job.id, 'ReOpen');
+  check('asking again says so rather than opening another',
+    U.$('decisionModal').classList.contains('hidden') &&
+    Store.db.bids.filter(x => x.revisionBase === base).length === 1,
+    String(Store.db.bids.filter(x => x.revisionBase === base).length));
+
+  /* THE SECOND REVISION. Finish the Rev01 entry, re-open it, and it must
+     become R02 - stripping its own suffix rather than stacking a second one. */
+  rev.status = 'Completed';
+  check('a finished revision can itself be re-opened', Bids.canReopen(rev));
+  Bids.promptDecision(rev.id, 'ReOpen');
+  Bids.confirmDecision();
+  const rev2 = Store.db.bids.filter(x => x.proposalNo === base + '-R02')[0];
+  check('the next time round is Rev02, not Rev01 again',
+    !!rev2 && rev2.revision === 2, rev2 ? String(rev2.revision) : 'missing');
+  check('numbered off the base rather than stacking suffixes',
+    rev2.proposalNo === base + '-R02' && rev2.revisionBase === base,
+    rev2.proposalNo);
+  check('and the chain walks back one link at a time',
+    Bids.originalOf(rev2) === rev && Bids.originalOf(rev) === job);
+
+  // The number is the thing that tells the entries apart, so it is on the row.
+  Bids.setView('active');
+  Bids.filterTable();
+  check('the table marks a revision so the two entries cannot be confused',
+    /Rev02/.test(gridHTML()), 'no Rev02 in the grid');
+}
+
 console.log('\n--- Sr. No. is a row counter; Proposal No. is the identity ---');
 {
   Bids.setView('active');
