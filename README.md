@@ -58,15 +58,18 @@ see that notice. It goes away on Node 24, where `node:sqlite` is stable.
 
 ### Backing it up
 
-`diverse.db` is the whole thing. Stop the server, copy the file, done. The **Save** button
-still downloads a `.json` of everything, which is a second belt-and-braces copy.
+`diverse.db` is the whole thing. Stop the server, copy the file, done. That *is* the backup —
+there is no Save button any more, because a `.json` pulled through a browser was a copy that
+went stale the moment a colleague typed.
 
 ### Moving your existing data onto the server
 
 If you have been using the app on one machine, its data is in that browser, not in the
 database. Move it across once:
 
-1. Open the app on that machine as you always have, and press **Save** to download the `.json`.
+1. On that machine, open the browser console and run
+   `copy(JSON.stringify(Store.db))`, or use an older build's **Save** button if you still
+   have one, to get the `.json` out.
 2. `npm run import -- that-file.json`
 
 The importer runs the file through the app's own migration chain, so a backup from any older
@@ -127,7 +130,7 @@ A few things worth knowing:
 | `js/auth.js` | the sign-in screen, `Auth.can()`, the menu under your name |
 
 Two roles exist from the start. **Admin** may do everything. **Employee** gets the whole of Bid
-Management — add, edit, take-off, proposal, award, XLSX, download a backup — and nothing that
+Management — add, edit, take-off, proposal, award, XLSX — and nothing that
 administers the shop or the people in it. Both are editable, and you can add more roles:
 **Settings › Roles & Access** is a tick-box per permission per role.
 
@@ -138,15 +141,18 @@ administers the shop or the people in it. Both are editable, and you can add mor
 | Add, edit, take-off, proposal, award, XLSX | ✓ | ✓ |
 | **Delete a bid** | | ✓ |
 | Settings | | ✓ |
-| Save (download a backup) | ✓ | ✓ |
-| **Load (restore over everything)** | | ✓ |
+| **Reset the database to seed data** | | ✓ |
 | People, Roles | | ✓ |
 
-**Load is Admin-only, deliberately.** It was drawn as available to everyone back when the app
-was single-user and it replaced your own data. On a shared server it replaces *everyone's* —
-including work a colleague did five minutes ago. It now asks for confirmation that says so.
-Move it back by ticking `project.load` for Employee if you disagree. **Save** is unchanged and
-open to all.
+**Save and Load are gone.** They were a whole-database round trip through a `.json` file,
+from when the app ran off one browser's storage. On a shared server Save handed you a copy
+that was stale the moment a colleague typed, and Load wrote that copy over everyone's
+afternoon. Backups are copies of `diverse.db`.
+
+The two permission keys stay on the roles screen — dropping one would silently revoke it from
+every saved role, which is a migration rather than a deletion. `project.load` kept the narrower
+job it was already doing: it gates **Reset**, which wipes the database back to seed data and
+has the same blast radius restoring a backup did. `project.save` now gates nothing.
 
 Things worth knowing:
 
@@ -289,7 +295,7 @@ them by doing something rather than by picking a module:
 | Page | How you get there |
 |---|---|
 | **Project** | Click any row in a bid list |
-| **Settings** | The gear button in the header, beside Save and Load |
+| **Settings** | The gear button in the header |
 
 The three lists are one table over three sets of bids, so sorting, per-column filters and the
 column selector work on all three. Each keeps **its own** column layout — hiding a column on
@@ -529,6 +535,18 @@ Comfortable and Compact is left exactly where you put it.
   so correcting a price twice does not bury the change that mattered — and an edit undone
   inside that window leaves no entry at all, because nothing happened. Deleting an entry needs
   **bid.history.delete** and is itself recorded.
+
+  **The takeoff and the proposal are in it too.** They are where the work is and where all of
+  the money is, and until recently neither left a trace — a price that moved by forty thousand
+  between Tuesday and Thursday was unattributable. What is recorded is a *digest*, not a diff
+  of the document: a takeoff is thousands of cells, so the log keeps what somebody reading back
+  actually asks — how many products, the base, the tax and misc rates, the freight, and the
+  total. For a proposal, the number, the dates, the scope lines and what they come to. Sending
+  one is recorded too: an export is what the client actually saw, even though nothing on the
+  record moved.
+
+  Filter chips on the card narrow it to **Bid**, **TakeOff** or **Proposal**, because on a
+  worked job the document entries outnumber everything else.
 - **Products with their materials.** A project is usually several products, each in its own
   material — handrail in one, bollards in another. They are rows on the **Products &
   Materials** card now, one product per row carrying its own materials, instead of a list of
@@ -538,6 +556,41 @@ Comfortable and Compact is left exactly where you put it.
 Deleting a history entry needs the new **bid.history.delete** permission (Admin only by
 default), and the deletion is itself recorded — the trail can be pruned, visibly, but not
 quietly emptied.
+
+#### How the log stays small enough to keep
+
+`bid.history` lives inside the bid record, and that record has a ceiling that is not disk:
+past **32KB** the server stops sending it in the change log and every open browser has to
+re-fetch it instead. A takeoff under active editing writes constantly, so a naive log would
+cross that line and quietly turn live sync into polling. (This has bitten the app once
+already — a change log that reached 98MB of a 107MB database. See schema step 4.)
+
+Four rules keep it inside a 16KB budget — half the ceiling, deliberately:
+
+1. **Compact entries.** Field key, from, to. The label is looked up when it is drawn rather
+   than stored on every entry.
+2. **Values capped** at 80 characters. *Which* forty products is a question for the takeoff.
+3. **A sitting is one entry.** Edits by the same person to the same document inside fifteen
+   minutes merge, keeping the **earliest** from and the **latest** to — so an afternoon reads
+   "the total moved from X to Y", which is the only thing anybody asks it afterwards. A figure
+   typed and then put back leaves nothing at all.
+4. **Yesterday is rolled up by day**, then the oldest fold into a running summary if the
+   budget is still exceeded. Today keeps full detail: the log is most precise exactly when
+   somebody is looking at it.
+
+**Nothing is ever silently dropped.** The rollup changes the *resolution* of old entries, not
+their existence, and a fold leaves a visible line saying what it stands for:
+
+> **TakeOff** · 43 edits, 08-12-2026 – 09-30-2026, by AJP and SSJ
+> Takeoff total *empty* → **$412,300** · Products **0** → **6**
+
+Stage moves and bid edits are never folded — they are the record the office is answerable to;
+only the document chatter is compressible. In practice 400 document entries compact to about
+7KB, leaving the whole bid around 9KB.
+
+For review outside the app, the XLSX export carries a **History** sheet: one row per change
+per bid, with who, when, which document, and what moved from what to what — sortable and
+pivotable across every bid at once, and written from whatever is on the record at export time.
 
 ### Editing
 
@@ -699,6 +752,40 @@ The Awarded tab is awarded jobs only, so a lost bid is never hidden there — it
 Active Bids. Adding a No Scope or Awarded bid back to Active Bids reopens it at Not Started;
 adding a Lost one back leaves its status alone, because Lost is a state Active Bids can hold.
 
+## Re-opening a job the client brings back
+
+A job marked **Completed** or **No Scope** that comes back gets a **Re-open** button, on the
+project page and in the row menu. It does *not* edit the finished bid — that record is what
+was quoted the first time, and the question asked about every re-bid is "what did we quote
+before, and what has changed".
+
+So it opens **a second entry** beside it, dated today:
+
+| | First entry | Re-opened |
+|---|---|---|
+| Number | `DIS-26-0042` | `DIS-26-0042-R01` |
+| Revision | *(none — it was just the job)* | `Rev01` |
+| Status | stays **Completed** | **ReOpen**, on Active Bids |
+| Team & task types | | carried across |
+| Task statuses, booked hours | | cleared |
+| Price, takeoff, proposal | untouched | none — it is a re-bid |
+
+Finish the `-R01` entry and re-open *it* and you get `-R02`, not `-R01-R01`: the suffix is
+stripped before the next one is worked out. Revision numbers are scanned off the records
+rather than counted from a stored sequence, so deleting an entry never frees a number up
+again — the same rule the project number follows.
+
+Both records link to each other at the top of the project page, because which one you are
+looking at decides whether the price on screen is what was quoted or what is being worked
+out now.
+
+Two things it will not do. A job can only be re-opened **once** — twice would make two
+parallel `Rev01`s with equal claim to the number. And a re-opened job can no longer be moved
+back a stage, because its revision points at it and was numbered from it.
+
+`ReOpen` is not on the status dropdown for the same reason Awarded and Lost are not: reaching
+it does bookkeeping, so it is the outcome of an action rather than a word you type.
+
 ## Hours: two stages, and a team sheet
 
 Hours are recorded **twice, for different things**, and the two never mix:
@@ -733,6 +820,51 @@ onto every row using it; deleting one warns if it is in use and leaves the value
 
 The XLSX export carries both stages, plus a **Team Hours** sheet with one row per engineer per
 task so the hours can be pivoted by person or by task type.
+
+### Who is free, and for how long
+
+Each day box on the Team & Hours card says how much of that person's day is **left**:
+
+```
+        FRI
+        25
+      ┌──────┐
+      │  9   │   hours booked on THIS bid
+      └──────┘
+       0 left    9 hr day, minus everything they have that day, everywhere
+```
+
+The figure counts **every bid in the database**, not the one on screen — the hours that fill
+somebody's Friday are usually on a project you are not looking at, and a figure that counted
+only this bid would be confidently wrong. Hover it for the arithmetic: *"AJP on 09-25-2026:
+9 hr day, 9 booked across 2 projects, 0 left."* Past the end of the day it goes red and reads
+`+2 over`.
+
+A working day is **9 hours**, under **Settings → Engineers**. One person working something
+else — a part-timer on 4.5 — gets their own figure in the same list; blank means "whatever the
+shop is set to". Every capacity reading on the schedule uses these, so a shop of four on nine
+hours and one on four and a half has a capacity of 40.5, not 45.
+
+The Employee view carries the same idea across the bottom: **Booked** says how hard the shop
+is working that day, **Free** says whether it can take any more.
+
+### What each person is actually doing
+
+The **Task** column sits beside Engineer on Active Bids and Awarded, and on the Employee view
+it sits hard against the calendar so the row reads *who → what they're on → their hours*:
+
+```
+ENGINEER   TASK                     MON  TUE  WED
+AJP        Drawing Take-off  Done    ·    ·    ·
+AJP        Estimating   In progress  4.5  ·    ·
+SSJ        Estimating   In progress  ·    4.5  ·
+```
+
+**A line is a task, not a person.** An engineer holding both the take-off and the estimating
+appears twice, because their hours are booked per task — summing them into one line could say
+neither which task the hours were against nor whether either was finished. Capacity still
+counts people rather than lines, so a two-task engineer does not double the bid's apparent
+room.
 
 ## Exporting a takeoff to Excel
 
@@ -968,9 +1100,13 @@ Stored values stay ISO `YYYY-MM-DD`, so sorting and existing `.json` backups are
 
 ## Your data
 
-Auto-saved to browser localStorage on every change. **Save** in the header downloads a
-`.json` of everything (bids, takeoffs, proposals, rate library); **Load** restores it.
-Clearing browser data without a backup loses the lot.
+Written to the shared `diverse.db` as you type, and on every other open browser a moment
+later. Nothing is saved by hand — the footer says when it last went out, and Ctrl+S flushes
+anything still queued rather than opening the browser's own Save-page dialog.
+
+Backing the office up is copying `diverse.db`; restoring one is putting that file back.
+Without a server the app falls back to that one browser's storage, and clearing it loses
+the lot.
 
 `Save .json` on the Proposal tab writes the v3-compatible template format, so a proposal
 still opens in `Bid Proposal v3 1.html` via its Load Template button, and templates saved
@@ -1039,13 +1175,15 @@ spot.
 | `tools/import-json.js` | moves an exported .json onto the server |
 | `js/auth.js` | the sign-in screen, `Auth.can()`, the menu under your name |
 | `js/remote.js` | the browser end of the shared database |
-| `js/store.js` | state, the server/IndexedDB backends, project save/load, schema migrations |
+| `js/store.js` | state, the server/IndexedDB backends, schema migrations |
 | `js/ratespanel.js` | the Labour/Equipment/Markup grid, shared by Rate Library and each project |
 | `js/rates.js` | rate defaults, hour formulas, product templates |
 | `js/catalog.js` | rate library: fuzzy suggest, auto-learning, price history |
 | `js/catalog.seed.js` | 60 parts extracted from the workbook |
 | `js/takeoff.model.js` | cost maths and the `fx` quantity evaluator (no `eval`) |
 | `js/takeoff.js` | Takeoff tab UI |
+| `js/history.js` | the audit trail: bid fields, takeoff and proposal digests, and the compaction that keeps them inside the record's size budget |
+| `js/schedule.js` | the calendar behind the Employee view; working-day lengths and the cross-bid "hours left" index |
 | `js/proposal.js` | proposal document, editor, print |
 | `js/proposal.paginate.js` | measures the document and deals it into numbered pages |
 | `js/proposal.styles.js` | the 9 styles, lifted verbatim from v3 |

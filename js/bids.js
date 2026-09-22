@@ -2100,6 +2100,61 @@
       root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(team), 'Team Hours');
     }
 
+    /* THE LOG, IN A FORM THE OFFICE KEEPS.
+     *
+     * One row per change per bid - who, when, what moved, and from what to
+     * what. This is what makes the history genuinely reviewable later: inside
+     * the app it is a card on one project at a time, and the old entries are
+     * rolled up by day to keep the record inside its size budget. Here it is a
+     * sheet that can be sorted, filtered and pivoted across every bid at once,
+     * and it carries whatever is on the record at the moment of export.
+     *
+     * A field per row rather than a change list per row, because a row holding
+     * "Bid Price 12,000 -> 14,500; Tax 6 -> 7" cannot be filtered on. */
+    var log = [];
+    d.bids.forEach(function (b) {
+      root.History.entries(b).forEach(function (e) {
+        var base = {
+          'Proposal No': b.proposalNo || '', 'Project': b.project,
+          'When': e.at || '', 'Who': e.by || '',
+          'Kind': e.kind || 'stage',
+          'Document': e.doc || '',
+          'Entries Rolled Up': e.rolled ? e.rolled.n : '',
+          'Comment': e.comment || ''
+        };
+
+        // A stage move, a creation, or an export: one row, nothing to diff.
+        if (e.kind === 'doc' && e.event) {
+          log.push(Object.assign({}, base, { 'What': e.event }));
+          return;
+        }
+        if (e.kind === 'doc') {
+          (e.c || []).forEach(function (c) {
+            log.push(Object.assign({}, base, {
+              'What': root.History.docLabel(e.doc, c.f), 'From': c.a, 'To': c.b
+            }));
+          });
+          return;
+        }
+        if (e.kind === 'edit') {
+          (e.changes || []).forEach(function (c) {
+            log.push(Object.assign({}, base, {
+              'What': c.label || c.field, 'From': c.from, 'To': c.to
+            }));
+          });
+          return;
+        }
+        log.push(Object.assign({}, base, {
+          'What': e.kind === 'created' ? 'Bid created'
+            : 'Moved to ' + root.History.label(e.to),
+          'From': e.fromStatus || '', 'To': e.toStatus || ''
+        }));
+      });
+    });
+    if (log.length) {
+      root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(log), 'History');
+    }
+
     // One summary sheet per takeoff, mirroring Project Cost Summary.
     Object.keys(d.takeoffs).forEach(function (k) {
       var t = d.takeoffs[k];

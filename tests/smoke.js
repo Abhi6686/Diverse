@@ -5174,6 +5174,201 @@ console.log('\n--- the theme is a setting, not a stylesheet ---');
       }));
 }
 
+console.log('\n--- a database from the last build comes forward ---');
+{
+  /* The three office-review changes that need a migration, driven through it
+     rather than inferred from a fresh seed - which would pass on the defaults
+     whether or not the step ran. */
+  const old = {
+    schemaVersion: 16,
+    bids: [{ id: 1, project: 'Old one', status: 'Completed', assignments: [] }],
+    takeoffs: {}, proposals: {}, catalog: [], engineers: [], regions: [],
+    company: { name: 'DiVerse' },
+    ui: { grids: { active: { order: ['sr', 'team', 'status'], visible: ['sr', 'team', 'status'] },
+                   all:    { order: ['sr', 'team', 'status'], visible: ['sr', 'team', 'status'] } } }
+  };
+  const up = Store.migrate(JSON.parse(JSON.stringify(old)));
+
+  check('it reaches the current schema', up.schemaVersion === Store.SCHEMA_VERSION,
+    up.schemaVersion + ' vs ' + Store.SCHEMA_VERSION);
+  check('the working day is written rather than left to a default',
+    up.company.dayHours === 9, String(up.company.dayHours));
+  check('and the company details it already had are untouched',
+    up.company.name === 'DiVerse', up.company.name);
+
+  check('the Task column lands directly after Engineer',
+    up.ui.grids.active.order.join(',') === 'sr,team,task,status',
+    up.ui.grids.active.order.join(','));
+  check('switched on where there is a team to describe',
+    up.ui.grids.active.visible.indexOf('task') >= 0,
+    up.ui.grids.active.visible.join(','));
+  check('and off on the intake register, where nobody is booked yet',
+    up.ui.grids.all.visible.indexOf('task') < 0,
+    up.ui.grids.all.visible.join(','));
+
+  /* Nothing is invented for a bid that was only ever bid once. */
+  check('an existing bid is not retrospectively made a revision',
+    up.bids[0].revision === null && up.bids[0].revisionOf === null &&
+    up.bids[0].reopenedInto === null,
+    JSON.stringify([up.bids[0].revision, up.bids[0].revisionOf, up.bids[0].reopenedInto]));
+  check('and it keeps the status it had', up.bids[0].status === 'Completed');
+}
+
+console.log('\n--- the takeoff and the proposal reach the history ---');
+{
+  const b = Store.db.bids.filter(x => x.takeoffId && Store.db.takeoffs[x.takeoffId])[0];
+  const t = Store.db.takeoffs[b.takeoffId];
+  b.history = [];
+
+  /* A DIGEST, NOT A DIFF OF THE DOCUMENT. A takeoff is thousands of cells;
+     what the log keeps is what somebody reading back asks - how big it got and
+     what it came to. */
+  const snap = History.snapshotDoc(t, 'takeoff');
+  check('a takeoff snapshot is a handful of figures, not the document',
+    Object.keys(snap).length < 15 && 'total' in snap && 'base' in snap,
+    Object.keys(snap).join(','));
+
+  t.rollup.taxPct = U.n(t.rollup.taxPct) + 1;
+  const changes = History.diffDoc(snap, t, 'takeoff');
+  check('changing the tax rate moves the tax and the total together',
+    changes.some(c => c.f === 'taxPct') && changes.some(c => c.f === 'total'),
+    changes.map(c => c.f).join(','));
+  check('and each change is stored compactly, with the label left out',
+    changes.every(c => 'f' in c && 'a' in c && 'b' in c && !('label' in c)),
+    JSON.stringify(changes[0]));
+  check('the label is looked up when it is drawn, not stored on every entry',
+    History.docLabel('takeoff', 'total') === 'Takeoff total',
+    History.docLabel('takeoff', 'total'));
+
+  History.recordDoc(b, 'takeoff', changes);
+  check('which lands in the bid\'s own history, beside everything else',
+    History.entries(b).length === 1 && History.entries(b)[0].doc === 'takeoff',
+    JSON.stringify(History.entries(b)[0]));
+
+  /* SESSION COALESCING. Ten minutes of estimating is one entry saying where
+     the total started and where it ended - not two hundred saying nothing. */
+  for (let i = 0; i < 40; i++) {
+    const before = History.snapshotDoc(t, 'takeoff');
+    t.rollup.freight = U.n(t.rollup.freight) + 25;
+    History.recordDoc(b, 'takeoff', History.diffDoc(before, t, 'takeoff'));
+  }
+  check('forty edits in a sitting stay one entry', History.entries(b).length === 1,
+    String(History.entries(b).length));
+  const merged = History.entries(b)[0].c.filter(c => c.f === 'freight')[0];
+  /* The EARLIEST from and the LATEST to. Freight started at nothing, so the
+     entry reads "empty -> $1,000" rather than "$975 -> $1,000" - which would
+     be the last keystroke of the session rather than the session itself. */
+  check('keeping where the figure started and where it got to',
+    merged && merged.a === '' && merged.b === U.currency(U.n(t.rollup.freight)),
+    JSON.stringify(merged) + ' vs ' + U.currency(U.n(t.rollup.freight)));
+
+  // A value typed and then put back is not a change and does not survive.
+  b.history = [];
+  const t0 = History.snapshotDoc(t, 'takeoff');
+  t.rollup.miscPct = 99;
+  History.recordDoc(b, 'takeoff', History.diffDoc(t0, t, 'takeoff'));
+  const t1 = History.snapshotDoc(t, 'takeoff');
+  t.rollup.miscPct = U.n(t0.miscPct);
+  History.recordDoc(b, 'takeoff', History.diffDoc(t1, t, 'takeoff'));
+  check('a figure typed and then put back leaves nothing behind',
+    History.entries(b).length === 0, JSON.stringify(History.entries(b)));
+
+  /* AN EXPORT IS A FACT even though nothing on the record moved. */
+  History.recordDocEvent(b, 'proposal', 'exported-pdf');
+  check('sending a PDF is recorded', History.entries(b).length === 1 &&
+    History.entries(b)[0].event === 'exported-pdf');
+  check('and is not merged into an edit', !History.entries(b)[0].c);
+
+  /* THE SIZE BUDGET - the one that matters. bid.history rides inside the bid's
+     JSON blob, and past LOG_BODY_MAX (32KB) the server stops sending that blob
+     in the change log and every browser has to refetch it instead. */
+  b.history = [];
+  const day = 86400000;
+  for (let i = 0; i < 400; i++) {
+    History.entries(b).push({
+      id: 'h' + i,
+      at: new Date(Date.now() - (30 - (i % 30)) * day).toISOString(),
+      /* Author on a modulus COPRIME WITH 30, which is what the day spreads on.
+         A group is one document on one day - so it holds i, i+30, i+60 ... and
+         30 is divisible by both 2 and 3. Picking the author on either of those
+         would hand every group a single person by accident, and the "names
+         everyone" check below would pass without testing anything. */
+      by: ['AJP', 'SSJ'][i % 7 < 3 ? 0 : 1],
+      kind: 'doc', doc: i % 2 ? 'takeoff' : 'proposal',
+      c: [{ f: 'total', a: '$' + (100000 + i), b: '$' + (100001 + i) },
+          { f: 'base', a: '$' + (90000 + i), b: '$' + (90001 + i) }]
+    });
+  }
+  const raw = History.size(b);
+  History.compact(b);
+  const after = History.size(b);
+
+  console.log('   [size] 400 doc entries: ' + raw + ' -> ' + after + ' bytes; bid total ' + JSON.stringify(b).length);
+  check('four hundred entries compact down',
+    after < raw / 4, raw + ' -> ' + after);
+  check('and inside the budget, so the record keeps travelling in the change log',
+    after <= History.HISTORY_BUDGET, after + ' vs ' + History.HISTORY_BUDGET);
+  check('which keeps the whole bid clear of the 32KB ceiling',
+    JSON.stringify(b).length < 32768, String(JSON.stringify(b).length));
+
+  /* NOTHING IS SILENTLY DROPPED. The rollup changes the RESOLUTION of old
+     entries, never their existence - so what they stood for is still readable. */
+  const rolled = History.entries(b).filter(e => e.rolled && e.rolled.n > 1);
+  check('the entries that went are accounted for, not discarded',
+    rolled.length > 0 &&
+    History.entries(b).reduce((s, e) => s + (e.rolled ? e.rolled.n : 1), 0) === 400,
+    History.entries(b).reduce((s, e) => s + (e.rolled ? e.rolled.n : 1), 0) + ' of 400');
+  check('each summary says what it stands for, and over what dates',
+    rolled.every(e => e.rolled.from && e.rolled.to && e.rolled.from <= e.rolled.to),
+    JSON.stringify(rolled[0].rolled));
+  check('and names everyone whose edits it covers',
+    rolled.some(e => e.rolled.by.length === 2), JSON.stringify(rolled[0].rolled.by));
+  check('the net movement survives the fold',
+    rolled.every(e => (e.c || []).every(c => c.a !== c.b)));
+
+  // Today's entries keep full detail - the log is most precise when somebody
+  // is actually looking at it.
+  b.history = [];
+  History.recordDoc(b, 'takeoff', [{ f: 'total', a: '$1', b: '$2' }]);
+  History.compact(b);
+  check('today\'s entries are not rolled up', !History.entries(b)[0].rolled);
+
+  /* STAGE MOVES AND BID EDITS ARE NEVER FOLDED. They are the record the office
+     is answerable to; only the document chatter is compressible. */
+  b.history = [];
+  History.record(b, 'intake', 'active', { fromStatus: 'Not Started' });
+  for (let i = 0; i < 400; i++) {
+    History.entries(b).push({
+      id: 'x' + i, at: new Date(Date.now() - 5 * day).toISOString(),
+      by: 'AJP', kind: 'doc', doc: 'takeoff',
+      c: [{ f: 'total', a: '$' + i, b: '$' + (i + 1) }]
+    });
+  }
+  History.compact(b);
+  check('a stage move is never folded away, however long the log gets',
+    History.entries(b).some(e => (e.kind || 'stage') === 'stage'),
+    History.entries(b).map(e => e.kind || 'stage').join(',').slice(0, 60));
+
+  /* THE CARD. Document entries outnumber everything else on a worked job, so
+     they can be narrowed to rather than burying the stage moves. */
+  b.history = [];
+  History.recordCreated(b);
+  History.recordDoc(b, 'takeoff', [{ f: 'total', a: '$1', b: '$2' }]);
+  History.recordDocEvent(b, 'proposal', 'exported-pdf');
+  const card = () => History.card(b);
+  check('the card offers a filter once there are documents in the log',
+    /History.setFilter/.test(card()), 'no filter chips');
+  check('and says which document each entry is about',
+    /TakeOff/.test(card()) && /Proposal/.test(card()));
+  check('an export reads as what it is',
+    /exported to PDF/.test(card()), 'no export line');
+  History.setFilter(b.id, 'bid');
+  check('narrowing to the bid leaves the document entries out',
+    !/exported to PDF/.test(History.card(b)));
+  History.setFilter(b.id, 'all');
+  check('and All puts them back', /exported to PDF/.test(History.card(b)));
+}
+
 console.log('\n' + (failures === 0
   ? 'All smoke checks passed.'
   : failures + ' CHECK(S) FAILED: ' + errors.join(', ')));

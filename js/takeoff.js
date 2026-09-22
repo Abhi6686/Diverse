@@ -18,10 +18,43 @@
     return p || t.products[0] || null;
   }
   /* Stamping the takeoff on every edit is what lets a generated proposal know
-     it has fallen behind - see Proposal.isStale. */
+     it has fallen behind - see Proposal.isStale.
+   *
+   * IT IS ALSO WHERE THE TAKEOFF GETS INTO THE BID'S HISTORY. Every edit to a
+   * takeoff comes through here, so this is the one place that can record them.
+   * It reads a digest rather than the document - see History.DOC_FIELDS - so
+   * what lands in the log is "the total moved from X to Y", not a copy of a
+   * thousand cells.
+   *
+   * THE SNAPSHOT IS A CACHE, NOT A begin()/end() PAIR. Well over a hundred
+   * mutators call save(), and every one of them has already written by the time
+   * it gets here - so there is nowhere to take a "before" except the digest
+   * left over from the previous save. That is what `known` holds, refreshed on
+   * every save and whenever a takeoff is opened. Keyed by takeoff id, or
+   * switching documents would diff one against the other.
+   */
+  var known = { id: null, digest: null };
+
+  function remember(t) {
+    known = t
+      ? { id: t.id, digest: root.History.snapshotDoc(t, 'takeoff') }
+      : { id: null, digest: null };
+  }
+
+  function recordChange(t) {
+    var bid = t && bidFor(t);
+    if (!t || !bid) return;
+    if (known.id === t.id && known.digest) {
+      root.History.recordDoc(bid, 'takeoff',
+        root.History.diffDoc(known.digest, t, 'takeoff'));
+    }
+    remember(t);
+  }
+
   function save() {
     var t = takeoff();
     if (t) t.updatedAt = new Date().toISOString();
+    recordChange(t);
     root.Store.save();
     render();
   }
@@ -36,10 +69,16 @@
       var t = M.newTakeoff(bid);
       d.takeoffs[t.id] = t;
       bid.takeoffId = t.id;
+      // A takeoff starting is the beginning of the estimating, and it is the
+      // entry that dates everything under it.
+      root.History.recordDocEvent(bid, 'takeoff', 'created');
     }
     state.takeoffId = bid.takeoffId;
     state.productId = null;
     d.ui.lastTakeoffId = state.takeoffId;
+    // The baseline the next save diffs against. Without it the first edit of a
+    // session reports every field as having moved from empty.
+    remember(d.takeoffs[state.takeoffId]);
     root.Store.save();
     root.App.switchTab('takeoff');
   }
@@ -48,6 +87,7 @@
     state.takeoffId = id;
     state.productId = null;
     db().ui.lastTakeoffId = id;
+    remember(takeoff());
     save();
   }
 
@@ -1826,6 +1866,11 @@
     if (!t.products.length) { U.toast('Nothing to export yet - add a product first.', 'warn'); return; }
 
     if (root.Estimate.download(t, null, filename(t) + ' - Takeoff.xlsx')) {
+      /* AN EXPORT IS A FACT ABOUT THE JOB even though nothing on the record
+         moved: a workbook left the building, and "which version did they get"
+         is answered by what the log says the total was at that moment. */
+      var bid = bidFor(t);
+      if (bid) { root.History.recordDocEvent(bid, 'takeoff', 'exported-xlsx'); root.Store.save(); }
       U.toast('Exported ' + t.products.length + ' product sheet' +
         (t.products.length === 1 ? '' : 's') + '.', 'ok');
     }

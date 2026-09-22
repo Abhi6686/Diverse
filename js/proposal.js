@@ -13,7 +13,50 @@
 
   function db() { return root.Store.db; }
   function current() { return state.id ? db().proposals[state.id] : null; }
-  function save() { root.Store.save(); render(); }
+
+  /* ---- writing, and getting it into the bid's history --------------------- */
+
+  /* A proposal is where the number the client actually sees is decided, and
+     until now none of it reached the log - the bid recorded that its price
+     moved, and nothing recorded that the document quoting it had been rewritten
+     the same afternoon.
+   *
+   * SAME CACHED-DIGEST ARRANGEMENT THE TAKEOFF USES: the mutators have already
+   * written by the time they reach here, so the "before" is the digest left
+   * over from the last write. Keyed by proposal id, or switching documents
+   * would diff one against another.
+   *
+   * commit() rather than save() is what the callers below reach for, because
+   * three of them deliberately do NOT re-render: they are contenteditable
+   * handlers, and rebuilding the DOM under a cursor loses the cursor. They
+   * repaint the preview instead. The logging has to happen on all of them
+   * either way, which is what this separates out.
+   */
+  var known = { id: null, digest: null };
+
+  function remember(p) {
+    known = p
+      ? { id: p.id, digest: root.History.snapshotDoc(p, 'proposal') }
+      : { id: null, digest: null };
+  }
+
+  function bidOf(p) {
+    if (!p || p.bidId == null) return null;
+    return db().bids.filter(function (b) { return b.id === p.bidId; })[0] || null;
+  }
+
+  function commit() {
+    var p = current();
+    var bid = bidOf(p);
+    if (p && bid && known.id === p.id && known.digest) {
+      root.History.recordDoc(bid, 'proposal',
+        root.History.diffDoc(known.digest, p, 'proposal'));
+    }
+    if (p) remember(p);
+    root.Store.save();
+  }
+
+  function save() { commit(); render(); }
 
   /* ---- what the logo sits on -------------------------------------------- */
 
@@ -268,6 +311,13 @@
     if (bid) bid.proposalId = p.id;
     state.id = p.id;
     d.ui.lastProposalId = p.id;
+    /* Generating is not an edit to diff - the document either did not exist or
+       has just been rebuilt wholesale from the takeoff - so it is recorded as
+       the event it is. The digest is reset to what was generated, so the first
+       hand edit afterwards reads as one change rather than as the whole
+       document appearing from nothing. */
+    if (bid) root.History.recordDocEvent(bid, 'proposal', isRegen ? 'regenerated' : 'created');
+    remember(p);
     root.Store.save();
     root.App.switchTab('proposal');
     U.toast(isRegen ? 'Proposal refreshed from the takeoff.' : 'Proposal generated.', 'ok');
@@ -886,6 +936,7 @@
         });
         db().proposals[p.id] = p;
         state.id = p.id;
+        remember(p);
         save();
         U.toast('Proposal template loaded.', 'ok');
       } catch (err) {
@@ -903,6 +954,9 @@
     open: function (id) {
       state.id = id;
       db().ui.lastProposalId = id;
+      // The baseline the next write diffs against. Without it the first edit
+      // of a session reports every field as having moved from empty.
+      remember(current());
       // Called both from the Bids row (needs the navigation) and from boot,
       // where App.switchTab runs again straight afterwards anyway.
       if (root.App) root.App.switchTab('proposal');
@@ -913,6 +967,7 @@
       var p = blank(null);
       db().proposals[p.id] = p;
       state.id = p.id;
+      remember(p);
       save();
     },
     setEditing: function (t) { state.editing = t; render(); },
@@ -956,13 +1011,13 @@
       var last = keys.pop();
       var target = keys.reduce(function (o, k) { return o[k]; }, current());
       target[last] = U.sanitizeHTML(el.innerHTML);
-      root.Store.save();
+      commit();
       paintDoc();
     },
     scopeRichInput: function (el) {
       var i = Number(el.getAttribute('data-scope'));
       current().scopeItems[i].details = U.sanitizeHTML(el.innerHTML);
-      root.Store.save();
+      commit();
       paintDoc();
     },
     exec: function (targetId, cmd, arg) {
@@ -976,8 +1031,8 @@
     setScope: function (i, field, value) {
       var s = current().scopeItems[i];
       s[field] = field === 'cost' ? (value === '' ? 0 : Number(value)) : value;
-      if (field === 'cost') { root.Store.save(); paintDoc(); }
-      else { root.Store.save(); paintDoc(); }
+      commit();
+      paintDoc();
     },
     addScope: function () {
       current().scopeItems.push({
@@ -1044,6 +1099,14 @@
     pickTemplateFile: function () { U.$('proposalTemplateInput').click(); },
 
     print: function () {
+      /* WHAT THE CLIENT ACTUALLY SAW. Nothing on the record moves when a PDF
+         is exported, but "which version did they get" is answered by what the
+         log says the total was at this moment - so the moment is recorded. */
+      var bid = bidOf(current());
+      if (bid) {
+        root.History.recordDocEvent(bid, 'proposal', 'exported-pdf');
+        root.Store.save();
+      }
       document.body.classList.add('printing-proposal');
       root.print();
       setTimeout(function () { document.body.classList.remove('printing-proposal'); }, 500);
