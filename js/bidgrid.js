@@ -1673,10 +1673,14 @@
     lineFilterInitials: lineFilterInitials,
 
     /* What the XLSX export reads, so the workbook is the table you are looking
-       at rather than a second opinion about it. cfg is already exported above. */
+       at rather than a second opinion about it. cfg is already exported above.
+       isSchedule and anchor let it tell whether the Employee calendar is on
+       screen and, if so, which window it is showing - the export mirrors that
+       window rather than picking one of its own. */
     visibleRows: visibleRows,
     cellText: textOf,
     column: col,
+    isSchedule: isSchedule,
 
     menuItem: menuItem,
     menuLink: menuLink,

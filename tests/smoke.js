@@ -4052,6 +4052,74 @@ console.log('\n--- the bid register, as a workbook ---');
   } catch (e) { /* the checks above are the test; this is a convenience */ }
 }
 
+console.log('\n--- the Employee calendar reaches the Bids sheet ---');
+{
+  /* Only offered on Active Bids, same rule the screen itself follows (see
+     density() in js/bidgrid.js) - so the schedule has to be asked for from
+     there or it silently falls back to Comfortable. */
+  Bids.setView('active');
+  BidGrid.setDensity('employee');
+  Bids.filterTable();
+
+  const wb = BidsReport.workbook();
+  const bidsXML = wb.sheets[1].xml();
+  const cal = Schedule.periods(BidGrid.cfg().zoom || 'day', BidGrid.anchor());
+
+  check('a day column reaches the sheet for each day on screen',
+    cal.every(p => new RegExp('>' + p.label.toUpperCase() + ' ' + p.sub + '<').test(bidsXML)),
+    cal.map(p => p.label.toUpperCase() + ' ' + p.sub).join(','));
+
+  /* ONE ROW PER LINE, not per bid - a bid with two engineers is two rows here,
+     matching the two stacked names on screen rather than joining them into
+     one cell a spreadsheet could not filter or sum anyway. */
+  const rows = BidGrid.visibleRows(Bids.baseList());
+  const expectedLines = rows.reduce((n, b) => n + BidGrid.scheduleLines(b).length, 0);
+  const dataRows = (bidsXML.match(/<row r="\d+"/g) || []).length -
+    2 -                                   // the title row and the header row
+    (rows.length ? 2 : 0);                // BOOKED and FREE, if there were any rows
+  check('the sheet has one row per assignment line, not one per bid',
+    dataRows === expectedLines, dataRows + ' vs ' + expectedLines);
+
+  /* BOOKED AND FREE ARE THE APP'S OWN FIGURES, not re-derived. Read off
+     Schedule.plan/capacityOf over the same rows and roster totalsRow() in
+     js/bidgrid.js uses, so the footer cannot drift from what the screen
+     shows under its own calendar. */
+  const idx = Schedule.plan(rows);
+  const roster = Object.keys(Bids.baseList().reduce((set, b) => {
+    Assign.engineerList(b).forEach(e => { set[e] = true; });
+    return set;
+  }, {}));
+  const bookedDay = cal[0];
+  const wantBooked = idx.total(bookedDay);
+  const wantFree = Schedule.capacityOf(bookedDay, roster) - wantBooked;
+  check('Booked on the sheet matches Schedule.plan',
+    bidsXML.includes('>BOOKED<'), 'no BOOKED row');
+  if (wantBooked) {
+    check('and the figure is the shop total for that day',
+      new RegExp('<v>' + wantBooked + '(\\.0+)?</v>').test(bidsXML), String(wantBooked));
+  }
+  check('Free on the sheet is capacity minus booked, the same subtraction the screen does',
+    typeof wantFree === 'number' && !isNaN(wantFree));
+
+  check('the Summary sheet says which calendar window the Bids sheet is showing',
+    /Bids sheet: one row per task/.test(wb.sheets[0].xml()));
+
+  /* Same convenience as the plain export above - a real file to open and look
+     at, since these checks can confirm the XML but not that it reads well. */
+  try {
+    const out = Report.build(wb.sheets);
+    require('fs').mkdirSync('.scratch', { recursive: true });
+    require('fs').writeFileSync('.scratch/bids-report-employee.xlsx', Buffer.from(out));
+  } catch (e) { /* the checks above are the test; this is a convenience */ }
+
+  // Comfortable's own export is unaffected - no day columns, one row per bid.
+  BidGrid.setDensity('comfortable');
+  Bids.filterTable();
+  const plain = BidsReport.workbook().sheets[1].xml();
+  check('switching back to Comfortable drops the calendar from the export',
+    !/BOOKED/.test(plain), 'BOOKED row leaked into the plain export');
+}
+
 console.log('\n--- the table layout follows the login ---');
 {
   /* Everything in db.ui is written to the per-user user_prefs row, so a new

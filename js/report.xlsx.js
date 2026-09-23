@@ -58,16 +58,22 @@
     hours:    165,
     date:     166,
     datetime: 167,
-    int:      168
+    int:      168,
+    // A day cell can go negative - a shop overbooked past what it can staff -
+    // and a bare minus sign is easy to read past in a column of small
+    // numbers. Red carries the same warning the app's over-capacity wash does;
+    // an empty day (nobody rostered) reads as a dot rather than a bare 0.0.
+    signedHours: 169
   };
 
   var NUM_FMTS =
-    '<numFmts count="5">' +
+    '<numFmts count="6">' +
       '<numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00"/>' +
       '<numFmt numFmtId="165" formatCode="0.0"/>' +
       '<numFmt numFmtId="166" formatCode="mm\\-dd\\-yyyy"/>' +
       '<numFmt numFmtId="167" formatCode="mm\\-dd\\-yyyy\\ hh:mm"/>' +
       '<numFmt numFmtId="168" formatCode="#,##0"/>' +
+      '<numFmt numFmtId="169" formatCode="0.0;[Red]\\-0.0;&quot;&#183;&quot;"/>' +
     '</numFmts>';
 
   // font index -> definition. 0 must be the body font; Excel assumes it.
@@ -156,7 +162,14 @@
     ['totLabel',    { font: F.bold, border: B.over }],
     ['totMoney',    { font: F.bold, border: B.over, fmt: FMT.money, align: 'right' }],
     ['totHours',    { font: F.bold, border: B.over, fmt: FMT.hours, align: 'right' }],
-    ['totInt',      { font: F.bold, border: B.over, fmt: FMT.int, align: 'right' }]
+    ['totInt',      { font: F.bold, border: B.over, fmt: FMT.int, align: 'right' }],
+    ['totFree',     { font: F.bold, border: B.over, fmt: FMT.signedHours, align: 'right' }],
+
+    /* The Employee view's calendar, one column per day. Centered rather than
+       right-aligned - a column six characters wide reads as a grid of figures
+       either way, and centered is what the on-screen cell does. */
+    ['day',         { border: B.under, fmt: FMT.hours, align: 'center' }],
+    ['dayB',        { border: B.under, fmt: FMT.hours, align: 'center', fill: FL.band }]
   ];
 
   var S = {};

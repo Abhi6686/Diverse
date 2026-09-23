@@ -955,6 +955,19 @@ in a totals row of **live `SUM` formulas** — so it still adds up after the rec
 the rows they do not care about. Statuses are in the app's own colours and an overdue due
 date is red.
 
+**Export from the Employee view and the calendar comes with it.** The Bids sheet gains one
+column per visible day — the same window that is on screen, at whatever zoom (Day, Week,
+Month) it is set to — and a row per **assignment line** rather than per bid, so a bid with
+two engineers is two rows, each with its own Engineer, Task and hour figures, the way the
+stacked names on screen read. Under the last row, **BOOKED** and **FREE** repeat the figures
+under the on-screen calendar: BOOKED is the shop's total for that day across the exported
+bids, FREE is what capacity is left once the roster's working hours are accounted for — the
+same numbers `Schedule.plan` and `Schedule.capacityOf` produce for the screen, not a second
+opinion about them. Because a bid's price and hours would otherwise be summed once per line
+it has, the totals-row formulas are left off this variant; the Summary sheet's totals still
+count each bid once. Switch back to Comfortable or Compact and the export goes back to one
+row per bid with no calendar, same as always.
+
 **Cells are typed, not formatted text.** A price is a number and a due date is a real date,
 so the recipient can sort, filter, subtract and chart them. A workbook full of `"$7,520"` and
 `"09-16-2026"` looks the same and can do none of that.

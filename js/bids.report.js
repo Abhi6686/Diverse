@@ -33,10 +33,12 @@
 
   /* ---- reading one cell off the grid's own column definitions ------------ */
 
-  /* Columns the workbook has no use for. `actions` is a column of buttons; the
-     calendar day-columns on the Employee view are generated per render and are
-     not part of the saved layout - the Bookings sheet carries those hours in a
-     shape a spreadsheet can actually pivot. */
+  /* Columns the workbook has no use for. `actions` is a column of buttons -
+     the only column on screen with nothing to export. The Employee view's own
+     calendar day-columns are not in this list at all; they are generated per
+     render rather than saved, and bidsSheet appends them itself when the
+     schedule is on screen (see scheduleInfo below). The Bookings sheet still
+     carries the same hours in a long, pivotable shape either way. */
   function exportable(c) {
     return c && c.key !== 'actions';
   }
@@ -177,7 +179,7 @@
     return out;
   }
 
-  function summarySheet(rows, view, total) {
+  function summarySheet(rows, view, total, sched) {
     var s = S();
     var sh = new (R().Sheet)('Summary');
     sh.setWidths([26, 18, 4, 24, 16]);
@@ -194,6 +196,16 @@
     if (filters.length) {
       sh.row([['This is a filtered view: ' + rows.length + ' of ' + total +
         ' bids on the list.', s.sub]]);
+    }
+    /* The Bids sheet's day columns are a picture of the calendar as it stood
+       at export - which window that was is easy to forget once the file has
+       been opened a dozen times since, so it is said here in words rather
+       than left to be read off the column headings. */
+    if (sched) {
+      sh.row([['Bids sheet: one row per task, ' +
+        root.Schedule.windowLabel(sched.zoom, root.BidGrid.anchor()) +
+        ' (' + sched.cal.length + (sched.cal.length === 1 ? ' day' : ' days') +
+        ') on the calendar.', s.sub]]);
     }
     sh.blank();
 
@@ -249,29 +261,117 @@
     return u.initials || u.name || u.username || '';
   }
 
+  /* WHAT THE EMPLOYEE CALENDAR IS SHOWING, if it is on screen. Read once and
+     passed down, so the Bids sheet and the Summary sheet agree on the same
+     window rather than each asking Schedule/BidGrid separately.
+
+     `idx` is built over the EXPORTED rows, matching the app: the Booked figure
+     under the on-screen calendar is a sum over the visible bids, not the whole
+     database. `roster` is not - it is every engineer on Active Bids regardless
+     of filters, because a filtered-out person's day is still spoken for, and
+     Free would overstate the shop's capacity by however much was filtered
+     away. See totalsRow in js/bidgrid.js, which this mirrors. */
+  function scheduleInfo(rows) {
+    if (!root.BidGrid.isSchedule()) return null;
+    var zoom = root.BidGrid.cfg().zoom || 'day';
+    var roster = Object.keys(root.Bids.baseList().reduce(function (set, b) {
+      root.Assign.engineerList(b).forEach(function (e) { set[e] = true; });
+      return set;
+    }, {}));
+    return {
+      zoom: zoom,
+      cal: root.Schedule.periods(zoom, root.BidGrid.anchor()),
+      idx: root.Schedule.plan(rows),
+      roster: roster
+    };
+  }
+
+  /* One line's Engineer/Task cells, in place of the joined "AJP, MGJ" /
+     "Estimating (done), Take-off (todo)" strings the plain sheet shows - the
+     whole reason for a row per line is to give each task its own cell. */
+  function lineLabelCell(l, band) {
+    var s = S(), B = band ? 'B' : '';
+    if (!l) return [null, s['text' + B]];
+    if (l.unmatched) return ['(no matching task)', s['muted' + B]];
+    return [l.label || 'unassigned', s[(l.named ? 'text' : 'muted') + B]];
+  }
+
+  function lineTaskCell(l, band) {
+    var s = S(), B = band ? 'B' : '';
+    if (!l || l.unmatched || !l.taskType) return [null, s['muted' + B]];
+    var st = root.Assign.STATUS[l.status] || root.Assign.STATUS.todo;
+    return [l.taskType + ' (' + st.label + ')', s['text' + B]];
+  }
+
   /* The register. The columns are whatever the table is showing, in its order,
-     so this sheet IS the screen. */
-  function bidsSheet(rows, cols, view) {
+     so this sheet IS the screen - and on the Employee view, so is the
+     calendar: one column per visible day, one row per assignment line rather
+     than per bid, because that is the shape the on-screen stack is in. A bid
+     with two engineers reads as two rows here instead of two names sharing
+     one cell, which a spreadsheet cannot filter or sum either way, so this is
+     the closer mirror, not a lesser one. */
+  function bidsSheet(rows, cols, view, sched) {
     var s = S();
     var sh = new (R().Sheet)('Bids');
-    sh.setWidths(cols.map(widthOf));
+    var cal = sched ? sched.cal : [];
+    sh.setWidths(cols.map(widthOf).concat(cal.map(function () { return 6; })));
 
     sh.row([[VIEW_TITLE[view] || 'Bids', s.title]], { ht: 22 });
     sh.merge(1, 0, Math.min(cols.length - 1, 4));
-    var headerRow = sh.row(headings(cols).map(function (h) {
-      return [h, s.header];
-    }), { ht: 28 });
+    var head = headings(cols).map(function (h) { return [h, s.header]; })
+      .concat(cal.map(function (p) {
+        return [p.label.toUpperCase() + ' ' + p.sub, s.header];
+      }));
+    var headerRow = sh.row(head, { ht: 28 });
 
     var first = headerRow + 1;
+    var n = 0;
     rows.forEach(function (b, i) {
-      sh.row(cols.map(function (c) { return cell(c, b, i, i % 2 === 1); }));
+      var band = i % 2 === 1;
+      var lines = sched ? root.BidGrid.scheduleLines(b) : [null];
+      lines.forEach(function (l) {
+        var rowCells = cols.map(function (c) {
+          if (sched && c.key === 'team') return lineLabelCell(l, band);
+          if (sched && c.key === 'task') return lineTaskCell(l, band);
+          return cell(c, b, i, band);
+        });
+        if (sched) {
+          cal.forEach(function (p) {
+            var hrs = l && l.key ? sched.idx.rowHours(b, l.key, p) : 0;
+            rowCells.push([hrs || null, s[band ? 'dayB' : 'day']]);
+          });
+        }
+        sh.row(rowCells);
+        n++;
+      });
     });
-    var last = headerRow + rows.length;
+    var last = headerRow + n;
 
-    /* A TOTALS ROW OF FORMULAS, not baked figures. The recipient will sort it,
-       hide rows and delete the ones they do not care about; a frozen number
-       would quietly stop matching the column above it. */
-    if (rows.length) {
+    if (sched && cal.length) {
+      /* BOOKED AND FREE, under the calendar - the one figure a plain register
+         cannot show and the reason the columns are here at all. Not formulas:
+         Booked and Free are read off Schedule.plan/capacityOf, which already
+         handle part-time rosters and weekends, and re-deriving that in a SUM
+         would either duplicate the logic or get it wrong. */
+      function totalsRow(label) {
+        return cols.map(function (c, i) {
+          return i === cols.length - 1 ? [label, s.totLabel] : [null, s.totLabel];
+        });
+      }
+      if (n) {
+        sh.row(totalsRow('BOOKED').concat(cal.map(function (p) {
+          return [sched.idx.total(p) || null, s.totHours];
+        })));
+        sh.row(totalsRow('FREE').concat(cal.map(function (p) {
+          var cap = root.Schedule.capacityOf(p, sched.roster);
+          return [cap ? cap - sched.idx.total(p) : null, s.totFree];
+        })));
+      }
+    } else if (rows.length) {
+      /* A TOTALS ROW OF FORMULAS, not baked figures - only meaningful here
+         because every row IS a bid. Once a bid can span several rows (the
+         schedule above), a SUM over price or hours would count it once per
+         line it has, so this stays the plain sheet's own footer. */
       sh.row(cols.map(function (c, i) {
         var letter = root.Zip.colName(i);
         if (MONEY_COLS[c.key]) {
@@ -295,9 +395,9 @@
       }
     });
     sh.freeze = { x: Math.min(idCols, 3), y: headerRow };
-    if (rows.length) {
+    if (n) {
       sh.filter = 'A' + headerRow + ':' +
-        root.Zip.colName(cols.length - 1) + last;
+        root.Zip.colName(cols.length + cal.length - 1) + last;
     }
     return sh;
   }
@@ -461,10 +561,11 @@
     var base = root.Bids.baseList();
     var rows = root.BidGrid.visibleRows(base);
     var cols = root.BidGrid.activeColumns().filter(exportable);
+    var sched = scheduleInfo(rows);
 
     var sheets = [
-      summarySheet(rows, view, base.length),
-      bidsSheet(rows, cols, view),
+      summarySheet(rows, view, base.length, sched),
+      bidsSheet(rows, cols, view, sched),
       teamSheet(rows),
       bookingsSheet(rows),
       estimateSheet(rows),
