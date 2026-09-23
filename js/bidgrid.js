@@ -230,7 +230,10 @@
       align: 'center', type: 'multi',
       value: function (b) { return root.Assign.engineerList(b).join(', '); },
       values: function (b) { return root.Assign.engineerList(b); },
-      render: function (b) { return root.Bids.teamCell(b); } },
+      // Narrowed to whoever the Engineer filter names, so this column agrees
+      // with the Task column beside it. The Employee view draws its own stack
+      // from scheduleLines and never reaches here - see render().
+      render: function (b) { return root.Bids.teamCell(b, lineFilterInitials()); } },
 
     /* WHAT THAT PERSON IS DOING, beside the name doing it.
        The Engineer column said who was on a bid and nothing else, so "is the
@@ -340,6 +343,39 @@
         if (!decided(b)) return '<span class="text-faint">&mdash;</span>';
         return root.Bids.statusBadge(b.status);
       } },
+
+    /* WHEN THIS BID LAST MOVED, AND WHO MOVED IT.
+     *
+     * Written by History.touch on every recorded change - so this column and
+     * the top line of the History card are the same fact, and sorting on it
+     * puts whatever the office worked on this morning at the top.
+     *
+     * SHOWN AS HOW LONG AGO, with the exact stamp on the hover. An absolute
+     * timestamp is the right thing when reconciling one record and the wrong
+     * thing in a column of forty: "09-22-2026 17:57 IST" has to be subtracted
+     * from today before it means anything. Sorting is on the raw ISO, which
+     * orders correctly as a plain string - see U.ago for why the days in it
+     * are counted on the IST calendar rather than by dividing elapsed hours.
+     *
+     * Falls back to createdAt, so a bid nobody has touched since it was
+     * entered reads as its own arrival rather than as a blank. */
+    { key: 'lastModified', label: 'Last Modified', align: 'center', type: 'date',
+      width: 'w-32',
+      value: function (b) { return root.History.lastMovedAt(b); },
+      text: function (b) { return U.stamp(root.History.lastMovedAt(b)); },
+      render: function (b) {
+        var at = root.History.lastMovedAt(b);
+        if (!at) return '<span class="text-faint">&mdash;</span>';
+        var who = b.updatedBy || '';
+        return '<span class="text-xs text-muted whitespace-nowrap" title="' +
+            U.escAttr(U.stamp(at) + (who ? ' · ' + who : '') +
+              (b.updatedAt ? '' : ' (never edited - this is when it arrived)')) + '">' +
+            U.esc(U.ago(at)) + '</span>' +
+          (who
+            ? '<span class="block text-3xs text-faint whitespace-nowrap">' +
+              U.esc(who) + '</span>'
+            : '');
+      } },
   ];
 
   /* The heading is what the column says on the tab you are on; the panel name
@@ -373,17 +409,20 @@
     // first-pass engineer and hours. No Proposal No. - a bid has not got one
     // until somebody picks it up, so the column would be all em-dashes.
     all: { on: ['sr', 'createdAt', 'engineer', 'estHrs', 'assignedHrs'],
-           off: ['proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs', 'location'],
+           off: ['proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs', 'location',
+                 'lastModified'],
            first: ['sr', 'createdAt'] },
 
     // Working: the team and what it has booked. The intake pair is deliberately
     // absent - showing both would put two "Estm Hrs" columns side by side.
-    active: { on: ['sr', 'proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs'],
+    active: { on: ['sr', 'proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs',
+                   'lastModified'],
               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'] },
 
     // On a won job, what it cost in effort is the point, so the hours stay on.
     awarded: { on: ['sr', 'result', 'proposalNo', 'team', 'task', 'activeEstHrs', 'activeAsgnHrs'],
-               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location'],
+               off: ['createdAt', 'engineer', 'estHrs', 'assignedHrs', 'location',
+                     'lastModified'],
                // Read by the project number, so it leads - behind the row
                // counter, which always comes first.
                first: ['sr', 'proposalNo'] }
@@ -863,7 +902,7 @@
    *
    * So an engineer with two tasks appears twice. That repetition is the point.
    */
-  function scheduleLines(bid) {
+  function allLines(bid) {
     var lines = root.Assign.rows(bid).map(function (r) {
       return {
         key: r.id,
@@ -884,6 +923,73 @@
     return lines;
   }
 
+  /* FILTERING BY A PERSON SHOULD GIVE YOU THAT PERSON'S WORK.
+   *
+   * The Engineer filter narrowed which BIDS were listed and then left every row
+   * stacking all of its people - so asking for SSJ's work got you the right
+   * seven projects and made you hunt down each one for SSJ's line.
+   *
+   * Engineer and Task are both facts about an ASSIGNMENT ROW rather than about
+   * the bid, so filtering on either narrows the lines as well as the list. It
+   * is done here, in the one function all three per-person renderers read, so
+   * the Engineer stack, the Task column and the calendar figures narrow
+   * together and stay aligned line-for-line by construction.
+   *
+   * WHAT DOES NOT NARROW: the hours columns, the load wash under each cell and
+   * the Booked/Free totals. Those are the bid's and the shop's real figures,
+   * and quietly reducing them to one person's share would mean a bid that says
+   * 4.5 hrs when it has 18 booked against it. The note under the chip bar says
+   * so - see lineFilterNote.
+   */
+  var LINE_FILTERS = {
+    team: function (l) { return l.label; },
+    task: function (l) { return l.taskType; }
+  };
+
+  function lineFilterValues() {
+    var g = cfg();
+    var out = null;
+    Object.keys(LINE_FILTERS).forEach(function (key) {
+      var f = g.filters[key];
+      if (!f || !f.values || !f.values.length) return;
+      if (!out) out = {};
+      out[key] = f.values;
+    });
+    return out;
+  }
+
+  function scheduleLines(bid) {
+    var want = lineFilterValues();
+    var lines = allLines(bid);
+    if (!want) return lines;
+
+    var kept = lines.filter(function (l) {
+      return Object.keys(want).every(function (key) {
+        return want[key].indexOf(LINE_FILTERS[key](l)) >= 0;
+      });
+    });
+
+    /* A ROW CAN NARROW TO NOTHING, and it must not narrow to no lines.
+       With Engineer=SSJ and Task=Estimating, a bid passes the row filter when
+       it has an SSJ row and an Estimating row - they need not be the same row.
+       Zero lines would leave the row with no height and throw every calendar
+       cell beside it out of step with the names, so the placeholder holds the
+       line open and says why it is empty. */
+    if (!kept.length) {
+      return [{ key: '', label: '', taskType: '', status: 'todo',
+                completedAt: '', named: false, unmatched: true }];
+    }
+    return kept;
+  }
+
+  /* The initials the lines have been narrowed to, or null when they have not
+     been. Read by the Engineer column on Comfortable and Compact, which is
+     drawn by Bids.teamCell rather than from the lines. */
+  function lineFilterInitials() {
+    var want = lineFilterValues();
+    return (want && want.team) || null;
+  }
+
   /* How many PEOPLE are on the bid, which is not how many lines it has. Used
      for capacity: a person holding two tasks must not double the bid's
      apparent ability to absorb hours. */
@@ -899,6 +1005,11 @@
      rather than anything that adds to it. */
   function engineerStack(bid) {
     return scheduleLines(bid).map(function (l) {
+      if (l.unmatched) {
+        return '<span class="sched-line text-xs text-faint italic" ' +
+          'title="This bid matches the filters, but no single task on it matches all of them">' +
+          'no matching task</span>';
+      }
       if (!l.named) {
         return '<span class="sched-line text-xs text-faint">' +
           U.esc(l.label || 'unassigned') + '</span>';
@@ -924,6 +1035,9 @@
   function taskStack(bid) {
     return scheduleLines(bid).map(function (l) {
       var s = root.Assign.STATUS[l.status] || root.Assign.STATUS.todo;
+      if (l.unmatched) {
+        return '<span class="sched-line text-xs text-faint italic">&mdash;</span>';
+      }
       if (!l.taskType) {
         return '<span class="sched-line text-xs text-faint">&mdash;</span>';
       }
@@ -1260,14 +1374,36 @@
       }
     });
     if (!chips.length) return '';
-    return '<div class="flex flex-wrap items-center gap-2 mb-3">' +
-      chips.map(function (ch) {
-        return '<span class="inline-flex items-center gap-1 px-2 py-1 bg-brand-soft text-brand-ink rounded text-xs">' +
-          U.esc(ch[1]) +
-          '<button onclick="BidGrid.clearFilter(\'' + ch[0] + '\')" class="hover:text-danger leading-none">&times;</button></span>';
-      }).join('') +
-      '<button onclick="BidGrid.clearFilters()" class="text-xs text-muted hover:text-danger underline">Clear all</button>' +
-      '</div>';
+    return '<div class="mb-3">' +
+      '<div class="flex flex-wrap items-center gap-2">' +
+        chips.map(function (ch) {
+          return '<span class="inline-flex items-center gap-1 px-2 py-1 bg-brand-soft text-brand-ink rounded text-xs">' +
+            U.esc(ch[1]) +
+            '<button onclick="BidGrid.clearFilter(\'' + ch[0] + '\')" class="hover:text-danger leading-none">&times;</button></span>';
+        }).join('') +
+        '<button onclick="BidGrid.clearFilters()" class="text-xs text-muted hover:text-danger underline">Clear all</button>' +
+      '</div>' +
+      lineFilterNote() +
+    '</div>';
+  }
+
+  /* THE ONE PLACE SOMEBODY COULD MISREAD THE NARROWED VIEW.
+     Filtering to a person hides everybody else's lines but deliberately leaves
+     the hours columns and the Booked/Free totals reporting the bid and the
+     shop in full - so a row can show one line and eighteen hours. Said here,
+     once, rather than annotating every figure it applies to. */
+  function lineFilterNote() {
+    var want = lineFilterValues();
+    if (!want) return '';
+    var who = want.team ? want.team.join(', ') : '';
+    var what = want.task ? want.task.join(', ') : '';
+    var subject = who && what ? who + ' on ' + what
+      : who ? who
+      : what;
+    return '<p class="mt-1.5 text-2xs text-muted flex items-center gap-1.5">' +
+      '<i class="fas fa-user-check text-faint"></i>' +
+      'Showing ' + U.esc(subject) + '&rsquo;s rows only &mdash; ' +
+      'the hours columns and the totals are still the whole bid&rsquo;s.</p>';
   }
 
   /* ---- popovers -------------------------------------------------------- */
@@ -1515,6 +1651,13 @@
         legacyCopy(b.location, done);
       }
     },
+    /* Which lines a per-person filter has narrowed each row to. Exported for
+       the Engineer column on Comfortable/Compact, which Bids.teamCell draws,
+       and for the tests that pin the narrowing. */
+    scheduleLines: scheduleLines,
+    allLines: allLines,
+    lineFilterInitials: lineFilterInitials,
+
     menuItem: menuItem,
     menuLink: menuLink,
     menuSeparator: menuSeparator,
@@ -1643,6 +1786,19 @@
         el.style.display = el.getAttribute('data-label').indexOf(q) >= 0 ? '' : 'none';
       });
     },
+    /* Set a column's filter without going through the popover. The popover is
+       where a person does it; this is the same write for everything else -
+       a shortcut elsewhere in the app, or a test pinning the behaviour - so
+       there is one place that knows an empty list means "no filter" rather
+       than "match nothing". */
+    setFilterValues: function (key, values) {
+      var g = cfg();
+      if (values && values.length) g.filters[key] = { values: values.slice() };
+      else delete g.filters[key];
+      root.Store.save();
+      root.Bids.filterTable();
+    },
+
     applyFilter: function (key) {
       var g = cfg();
       var c = col(key);
@@ -1650,13 +1806,13 @@
         var picked = [];
         Array.prototype.forEach.call(popover.querySelectorAll('#filterOptions input:checked'),
           function (cb) { picked.push(cb.value); });
-        if (picked.length) g.filters[key] = { values: picked };
-        else delete g.filters[key];
-      } else {
-        var v = popover.querySelector('#filterContains').value.trim();
-        if (v) g.filters[key] = { contains: v };
-        else delete g.filters[key];
+        closePopover();
+        root.BidGrid.setFilterValues(key, picked);
+        return;
       }
+      var v = popover.querySelector('#filterContains').value.trim();
+      if (v) g.filters[key] = { contains: v };
+      else delete g.filters[key];
       closePopover();
       root.Store.save();
       root.Bids.filterTable();

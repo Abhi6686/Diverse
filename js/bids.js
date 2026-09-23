@@ -232,8 +232,20 @@
      bid with six people cannot blow the row height out; the tooltip carries the
      full list with each engineer's hours, which is the question you actually
      open a bid to answer. */
-  function teamCell(bid) {
+  /* `only` narrows the chips to the people the Engineer filter names, so this
+     column says the same thing as the Task column beside it - which renders
+     from the same filtered lines. Null when no filter is on, which is the
+     ordinary case and shows everybody. */
+  function teamCell(bid, only) {
     var list = root.Assign.engineerList(bid);
+    if (only && only.length) {
+      list = list.filter(function (i) { return only.indexOf(i) >= 0; });
+      // The bid matched on something else - a task type, say - and none of its
+      // people are the ones asked for. Saying so beats an empty cell.
+      if (!list.length) {
+        return '<span class="text-faint italic text-2xs">not on this one</span>';
+      }
+    }
     if (!list.length) return '<span class="text-faint">&mdash;</span>';
 
     var byEngineer = {};
@@ -2079,7 +2091,11 @@
         'Team': root.Assign.engineerList(b).join('; '),
         'Team Est Hrs': t.est, 'Team Assigned Hrs': t.asgn,
         'Due Date': effectiveDueDate(b), 'Revised Due': b.revisedDueDate || '', 'Status': b.status,
-        'Link': b.link, 'Comments': b.comments
+        'Link': b.link, 'Comments': b.comments,
+        // The raw IST stamp, not "2h ago": a spreadsheet is sorted and filtered
+        // on, and a relative phrase is neither.
+        'Last Modified': U.stamp(root.History.lastMovedAt(b)),
+        'Modified By': b.updatedBy || ''
       };
     })), 'Bids');
 

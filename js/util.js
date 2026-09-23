@@ -140,6 +140,59 @@
              p.hour + ':' + p.minute + ' ' + U.TZ_LABEL;
     },
 
+    /* HOW LONG AGO THAT WAS, in words.
+     *
+     * For the questions a timestamp is actually read to answer - "has anybody
+     * touched this today", "what moved while I was out". An exact stamp is the
+     * right thing when you are reconciling a record and the wrong thing when
+     * you are scanning a column of forty of them: "09-22-2026 17:57 IST" has to
+     * be subtracted from today before it means anything, and "2h ago" does not.
+     *
+     * Everywhere this is shown, the exact stamp is on the hover - see the Last
+     * Modified column and the History card header. This is the reading; U.stamp
+     * is the record.
+     *
+     * DAYS ARE COUNTED IN IST, NOT IN ELAPSED HOURS. Something at 23:50 and
+     * something at 00:10 are twenty minutes apart and happened on different
+     * days, and a reader who has just turned a page of a calendar cares which
+     * day. So anything past the hour boundary is compared on U.stampISO - the
+     * same IST calendar day the rest of the app files records under - rather
+     * than on a division by 86400000, which would call that twenty minutes
+     * "0d ago" and mean yesterday.
+     */
+    ago: function (v) {
+      var d = v instanceof Date ? v : (v ? new Date(v) : null);
+      if (!d || isNaN(d)) return '';
+      var secs = Math.round((Date.now() - d.getTime()) / 1000);
+
+      // A clock that is behind the server's, or a record stamped a moment in
+      // the future. Reading "in 3 minutes" off an audit trail is worse than
+      // rounding it to now.
+      if (secs < 45) return 'just now';
+      if (secs < 5400) {                                  // under an hour and a half
+        var mins = Math.round(secs / 60);
+        return mins < 60 ? mins + 'm ago' : '1h ago';
+      }
+
+      /* BOTH SIDES IN IST. U.today() is the machine's local calendar day,
+         which is the right answer for a booking somebody types and the wrong
+         one here: this is comparing two INSTANTS, and mixing an IST day against
+         a local day would slide the "yesterday" boundary by the machine's
+         offset. On an office machine set to IST the two are identical anyway. */
+      var then = U.stampISO(d);
+      var today = U.stampISO(new Date());
+      if (then === today) return Math.round(secs / 3600) + 'h ago';
+
+      // Whole calendar days between the two IST dates. parseDate gives local
+      // midnight for both, so the subtraction is a whole number of days and
+      // never trips over a daylight-saving change in between.
+      var a = U.parseDate(then), b = U.parseDate(today);
+      var days = (a && b) ? Math.round((b - a) / 86400000) : 0;
+      if (days <= 1) return 'yesterday';
+      if (days < 7) return days + 'd ago';
+      return U.date(then);
+    },
+
     /* ISO -> MM-DD-YYYY for an input's value ('' rather than '-' when unset). */
     dateToInput: function (iso) {
       var s = U.date(iso);

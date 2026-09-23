@@ -292,9 +292,34 @@
      that matters. Set to 0 to record literally every commit. */
   var COALESCE_MS = 2 * 60 * 1000;
 
+  /* WHEN THIS BID LAST MOVED, AND WHO MOVED IT.
+   *
+   * Read by the Last Modified column on the bid lists, which is what answers
+   * "what changed today" without opening thirty projects one at a time.
+   *
+   * Stamped on the record rather than taken from the server's updated_at
+   * column: that column exists (see server/db.js) but is never sent - the
+   * bootstrap selects id, json and rev - so the client has never seen it.
+   * Living in the bid's own JSON, this needs no server change, no schema step,
+   * and works on the no-server path too.
+   *
+   * FROM THE ENTRY'S OWN TIMESTAMP, not from Date.now(). That is what makes it
+   * right in every case rather than in most: a bid being created stamps the
+   * moment it was created, a coalesced edit stamps the moment the session
+   * moved to, and the column can never disagree with the top line of the
+   * History card - because this is the call that writes both.
+   */
+  function touch(bid, entry) {
+    if (!bid || !entry) return entry;
+    bid.updatedAt = entry.at;
+    bid.updatedBy = entry.by || '';
+    return entry;
+  }
+
   function push(bid, entry) {
     if (!Array.isArray(bid.history)) bid.history = [];
     bid.history.push(entry);
+    touch(bid, entry);
     return entry;
   }
 
@@ -354,7 +379,10 @@
         bid.history = list.filter(function (e) { return e.id !== last.id; });
         return null;
       }
-      return last;
+      // Merged rather than pushed, so push() never saw it - the stamp has to be
+      // taken here or every second edit inside the window would leave Last
+      // Modified reading the one before it.
+      return touch(bid, last);
     }
 
     return push(bid, {
@@ -531,7 +559,9 @@
         return null;
       }
       compact(bid);
-      return last;
+      // Same reason as the coalescing branch of recordEdit: merged, not
+      // pushed, so the stamp is taken here.
+      return touch(bid, last);
     }
 
     var entry = push(bid, {
@@ -817,6 +847,26 @@
   var SHOW_LIMIT = 20;
   var expanded = {};
 
+  /* WHETHER THE CARD IS OPEN, AND IT STARTS SHUT.
+   *
+   * The log is reference material, not a dashboard. Open by default it was the
+   * tallest thing on the project page - nine entries pushing the estimate and
+   * the proposal, which is what somebody actually came for, below the fold.
+   *
+   * KEYED BY BID ID RATHER THAN A BARE BOOLEAN, and that is the whole subtlety
+   * here. The card re-renders on every save - Assign.save calls History.render
+   * - so a flag cleared on each render would snap the card shut the moment
+   * somebody typed an hours box with the log open. Holding the id instead means
+   * a repaint of the SAME bid leaves it open, and opening a DIFFERENT one comes
+   * back collapsed, which is the behaviour asked for.
+   *
+   * View state, like `expanded` and `filters`: it never goes near Store.save,
+   * because what somebody has open on their screen is not a change to the bid.
+   */
+  var openFor = null;
+
+  function isOpen(bid) { return !!bid && openFor === bid.id; }
+
   /* WHICH ENTRIES THE CARD IS SHOWING. On a job that has been worked, the
      document edits outnumber everything else - which is what the log was
      missing, but it means the stage moves the card was built for get buried.
@@ -900,15 +950,53 @@
           'bid is logged here from now on &mdash; who made it, when, and what moved. ' +
           'That includes the takeoff and the proposal.</p>');
 
+    var open = isOpen(bid);
+
+    /* WHAT THE BAR SAYS WHEN IT IS SHUT.
+       A collapsed card that only says "History" is a row of nothing somebody
+       has to open to find out whether it was worth opening. The last entry's
+       age and author is the question most people came with - "has anybody
+       touched this" - so it is answered without the click. */
+    var last = list[list.length - 1];
+    var summary = !open && last
+      ? '<span class="text-2xs text-muted font-normal whitespace-nowrap" title="' +
+        U.escAttr(when(last.at) + (last.by ? ' · ' + last.by : '')) + '">' +
+        'Last change ' + U.esc(U.ago(last.at)) +
+        (last.by ? ' &middot; ' + U.esc(last.by) : '') + '</span>'
+      : '';
+
+    /* The title block is the toggle, and it is a real <button> rather than a
+       div with an onclick - that is what gets Enter and Space, the focus ring
+       and the screen-reader announcement for free.
+
+       Deliberately NOT the whole header bar. The reverse action and the filter
+       chips sit in it too, and making the bar itself clickable would put a
+       toggle underneath them - so reaching for "Back to All Bids" and missing
+       it by two pixels would collapse the card instead. As siblings of the
+       button rather than children, they need no stopPropagation guard: there
+       is nothing above them to bubble to. */
     return '<div class="bg-surface rounded-xl shadow-card border border-line overflow-hidden" id="historyCard">' +
-      '<div class="px-5 py-3 border-b border-line bg-raised flex items-center justify-between gap-3 flex-wrap">' +
-        '<h3 class="text-sm font-bold text-ink flex items-center gap-2">' +
-          '<i class="fas fa-clock-rotate-left text-muted"></i>History' +
+      '<div class="px-5 py-3 ' + (open ? 'border-b border-line ' : '') +
+           'bg-raised flex items-center justify-between gap-3 flex-wrap">' +
+        '<button type="button" onclick="History.toggle(' + bid.id + ')" ' +
+          'aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="historyBody" ' +
+          'title="' + (open ? 'Hide the history' : 'Show what has happened to this bid') + '" ' +
+          'class="flex items-center gap-2 min-w-0 text-left rounded ' +
+          'hover:text-brand focus:outline-none focus:ring-2 focus:ring-brand/40">' +
+          '<i class="fas fa-chevron-' + (open ? 'down' : 'right') +
+            ' text-3xs text-faint w-2.5"></i>' +
+          '<i class="fas fa-clock-rotate-left text-muted"></i>' +
+          '<span class="text-sm font-bold text-ink">History</span>' +
           (list.length ? '<span class="text-3xs font-normal text-muted">' + list.length + '</span>' : '') +
-        '</h3>' +
-        '<span class="flex items-center gap-2">' + filterChips(bid, list) + action + '</span>' +
+          summary +
+        '</button>' +
+        // Only while open: they narrow a list that is not on screen otherwise.
+        '<span class="flex items-center gap-2">' +
+          (open ? filterChips(bid, list) : '') + action +
+        '</span>' +
       '</div>' +
-      '<div class="p-5">' + body + '</div></div>';
+      (open ? '<div class="p-5" id="historyBody">' + body + '</div>' : '') +
+    '</div>';
   }
 
   function render(bid) {
@@ -946,6 +1034,13 @@
     snapshot: snapshot,
     diff: diff,
 
+    /* When this bid last moved, and who moved it - written by every record*
+       call above. The Last Modified column reads it. */
+    touch: touch,
+    lastMovedAt: function (bid) {
+      return (bid && (bid.updatedAt || bid.createdAt)) || '';
+    },
+
     /* The same four, for the takeoff and the proposal. trackDoc is what the
        two documents' save paths wrap themselves in. */
     DOC_FIELDS: DOC_FIELDS,
@@ -965,6 +1060,16 @@
     HISTORY_BUDGET: HISTORY_BUDGET,
     DOC_COALESCE_MS: DOC_COALESCE_MS,
     size: sizeOf,
+
+    /* Open or shut, for this bid. Starts shut on every project - see openFor. */
+    toggle: function (bidId) {
+      openFor = (openFor === bidId) ? null : bidId;
+      // Closing and reopening is how somebody gets back to the top of a long
+      // log, so the "show all" goes with it rather than persisting invisibly.
+      if (openFor !== bidId) delete expanded[bidId];
+      render(db().bids.filter(function (b) { return b.id === bidId; })[0]);
+    },
+    isOpen: isOpen,
 
     setFilter: function (bidId, key) {
       filters[bidId] = key;
@@ -1049,7 +1154,11 @@
       var gone = entries(bid).filter(function (e) { return e.id === pending.entryId; })[0];
       if (gone) {
         bid.history = entries(bid).filter(function (e) { return e.id !== pending.entryId; });
-        bid.history.push({
+        // Through push() rather than straight onto the array, so pruning the
+        // log is stamped like every other change to the record. Editing the
+        // audit trail is a change to the bid, and arguably the one most worth
+        // having a timestamp against.
+        push(bid, {
           id: root.Store.uid('h'),
           at: new Date().toISOString(),
           by: actor(),

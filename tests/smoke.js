@@ -3807,8 +3807,115 @@ console.log('\n--- how a bid got where it is ---');
     History.entries(b).some(e => e.deletion === true),
     JSON.stringify(History.entries(b).map(e => e.comment)));
 
-  check('the card lists the moves',
-    /History/.test(History.card(b)) && /Active Bids/.test(History.card(b)));
+  /* THE CARD STARTS SHUT. It is reference material, and open by default it was
+     the tallest thing on the project page - pushing the estimate and the
+     proposal, which is what people actually come for, below the fold. */
+  check('the card is collapsed until somebody asks for it',
+    !History.isOpen(b) && !/Active Bids/.test(History.card(b)),
+    History.card(b).slice(0, 160));
+  check('but the bar still says when it last moved, so it is worth reading shut',
+    /Last change/.test(History.card(b)), History.card(b).slice(0, 200));
+
+  History.toggle(b.id);
+  check('opening it lists the moves',
+    History.isOpen(b) && /Active Bids/.test(History.card(b)));
+
+  /* THE REPAINT CASE. The card re-renders on every save - Assign.save calls
+     History.render - so a bare open/shut flag would snap it closed the moment
+     somebody typed an hours box with the log open. It is keyed by bid id. */
+  check('and a re-render of the same bid leaves it open',
+    /Active Bids/.test(History.card(b)) && History.isOpen(b));
+
+  const other = Bids.baseList().filter(x => x.id !== b.id)[0];
+  /* aria-expanded rather than the presence of the body's id: the header
+     carries aria-controls="historyBody" whether or not the body is there, so
+     matching on the bare id passes on a collapsed card too. */
+  check('while a different bid comes back collapsed',
+    !History.isOpen(other) && /aria-expanded="false"/.test(History.card(other)),
+    History.card(other).slice(0, 200));
+
+  History.toggle(b.id);
+  check('and it shuts again', !History.isOpen(b));
+
+  /* WHEN THIS BID LAST MOVED. Written by every record* call, from the entry's
+     own timestamp - so the column on the bid list and the top line of this
+     card are the same fact and cannot drift apart. */
+  check('a recorded change stamps the bid',
+    b.updatedAt === History.entries(b).slice(-1)[0].at,
+    b.updatedAt + ' vs ' + History.entries(b).slice(-1)[0].at);
+  check('and names who made it', b.updatedBy === History.entries(b).slice(-1)[0].by,
+    b.updatedBy);
+  check('pruning the log is itself a change to the record, and is stamped',
+    !!b.updatedAt && History.entries(b).some(e => e.deletion === true));
+
+  /* THE COALESCING BRANCH. recordEdit merges a second edit into the previous
+     entry and returns without calling push(), so a stamp taken only inside
+     push() would leave Last Modified reading the edit before this one. */
+  const wasAt = b.updatedAt;
+  History.recordEdit(b, [{ field: 'price', label: 'Bid Price', from: '$1', to: '$2' }]);
+  const firstAt = b.updatedAt;
+  check('a first edit moves it', firstAt !== wasAt, wasAt + ' -> ' + firstAt);
+
+  /* Backdated to a sentinel rather than compared against the previous value:
+     two recordEdit calls in a test land in the same millisecond, so the two
+     ISO strings would be equal whether or not the stamp was taken. What is
+     actually being asserted is that it tracks the MERGED entry. */
+  const n = History.entries(b).length;
+  b.updatedAt = '2020-01-01T00:00:00.000Z';
+  History.recordEdit(b, [{ field: 'price', label: 'Bid Price', from: '$2', to: '$3' }]);
+  check('and a second one inside the window still moves it, though it merged',
+    History.entries(b).length === n &&
+    b.updatedAt === History.entries(b).slice(-1)[0].at &&
+    b.updatedAt !== '2020-01-01T00:00:00.000Z',
+    History.entries(b).length + ' entries, stamp ' + b.updatedAt);
+
+  /* NOT every write. Assign.ensure backfills missing day rows as the card
+     draws and deliberately records nothing - laying out three empty days is
+     not a change anybody made, so it must not move the timestamp either. */
+  const settled = b.updatedAt;
+  b.assignments.forEach(r => { delete r.days; });
+  Assign.card(b);
+  check('but laying out empty day boxes does not, because nobody did it',
+    b.updatedAt === settled, settled + ' -> ' + b.updatedAt);
+
+  check('a bid nobody has edited still reports when it arrived',
+    History.lastMovedAt({ createdAt: '2026-03-03T00:00:00.000Z' }) ===
+      '2026-03-03T00:00:00.000Z');
+}
+
+console.log('\n--- the table layout follows the login ---');
+{
+  /* Everything in db.ui is written to the per-user user_prefs row, so a new
+     column inherits per-person persistence with nothing added. Pinned here
+     because it is most of what "save this view per login" asks for, and it
+     would be easy to break without noticing. */
+  Bids.setView('active');
+  BidGrid.toggleSort('lastModified');
+  const g = () => Store.db.ui.grids.active;
+  check('a sort is held against the view, not globally',
+    g().sort && g().sort.key === 'lastModified', JSON.stringify(g().sort));
+  check('and the other views are untouched by it',
+    !(Store.db.ui.grids.all && Store.db.ui.grids.all.sort),
+    JSON.stringify(Store.db.ui.grids.all && Store.db.ui.grids.all.sort));
+
+  BidGrid.toggleColumn('portal');
+  const hidPortal = g().visible.indexOf('portal') < 0;
+
+  Store.db.ui.theme = 'dark';
+  Store.db.ui.section = 'active';
+  await Store.resetLayout();
+
+  check('hiding a column sticks until it is reset', hidPortal);
+  check('Reset my table layout clears the sort',
+    !Store.db.ui.grids.active || !Store.db.ui.grids.active.sort,
+    JSON.stringify(Store.db.ui.grids.active && Store.db.ui.grids.active.sort));
+  check('and puts the hidden column back',
+    BidGrid.activeColumns().some(c => c.key === 'portal'),
+    BidGrid.activeColumns().map(c => c.key).join(','));
+  /* It resets TABLES. Somebody who works in the dark did not ask for the
+     lights, and resetting columns should not throw you to another tab. */
+  check('but leaves the theme alone', Store.db.ui.theme === 'dark', Store.db.ui.theme);
+  check('and where you were', Store.db.ui.section === 'active', Store.db.ui.section);
 }
 
 console.log('\n--- hours are booked against days ---');
@@ -4239,6 +4346,77 @@ console.log('\n--- the Employee view ---');
   check('a finished task ticks its own chip, not the whole person',
     chips2[0].querySelector('.fa-check') && !chips2[2].querySelector('.fa-check'),
     chips2.map(c => (c.querySelector('.fa-check') ? 'done' : 'open')).join(','));
+
+  /* ---- FILTERING BY A PERSON GIVES YOU THAT PERSON'S WORK ----------------
+     The Engineer filter narrowed which BIDS were listed and then left every
+     row stacking everybody - the right seven projects, and a hunt through
+     each one for the line you asked for. */
+  const bidAsgn = Assign.totals(b).asgn;
+  const bookedBefore = [...grid.querySelectorAll('tr.sched-totals td.sched-cell')]
+    .map(td => td.textContent.trim()).join(',');
+
+  BidGrid.setFilterValues('team', ['MGJ']);
+  const narrowed = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+
+  const nNames = narrowed.querySelectorAll('td.sched-team .sched-line').length;
+  const nTasks = narrowed.querySelectorAll('td.sched-task .sched-line').length;
+  const nCell = narrowed.querySelector('td.sched-cell').querySelectorAll('.sched-line').length;
+  check('filtering to one person leaves only their line',
+    nNames === 1, String(nNames));
+  check('and the Task column and the calendar narrow with it',
+    nTasks === 1 && nCell === 1, nTasks + '/' + nCell);
+  /* All three counts equal is what keeps the name, the task and the hours on
+     the same physical line - the alignment is by construction because all
+     three render from scheduleLines. */
+  check('so all three still line up',
+    nNames === nTasks && nTasks === nCell, [nNames, nTasks, nCell].join('/'));
+  /* AF is the other person on this bid - naming somebody who was never on it
+     would make the negative half of this pass without testing anything. */
+  check('and it is the right person',
+    /MGJ/.test(narrowed.querySelector('td.sched-team').textContent) &&
+    !/AF/.test(narrowed.querySelector('td.sched-team').textContent),
+    narrowed.querySelector('td.sched-team').textContent.trim());
+
+  /* THE AGGREGATES DO NOT NARROW. A person's share is not the bid's effort,
+     and quietly reducing these would mean a row reading 4.5 against 18 booked.
+     The note under the chip bar is what says so. */
+  check('the bid\'s hours are untouched by the filter',
+    Assign.totals(b).asgn === bidAsgn, Assign.totals(b).asgn + ' vs ' + bidAsgn);
+  check('and so is the shop\'s booked total',
+    [...grid.querySelectorAll('tr.sched-totals td.sched-cell')]
+      .map(td => td.textContent.trim()).join(',') === bookedBefore);
+  check('the chip bar says the figures are still the whole bid\'s',
+    /still the whole bid/.test(grid.innerHTML), 'no narrowing note');
+
+  /* A ROW CAN NARROW TO NOTHING. This bid has an MGJ row and an Estimating
+     row, so it passes the row filter on both - but no single row is both, and
+     zero lines would leave it with no height and throw the calendar beside it
+     out of step with the names. */
+  BidGrid.setFilterValues('task', ['Estimating']);
+  const empty = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  check('a bid with no row matching every filter keeps its height',
+    empty && empty.querySelectorAll('td.sched-team .sched-line').length === 1,
+    empty ? String(empty.querySelectorAll('td.sched-team .sched-line').length) : 'row gone');
+  check('and says why the line is empty rather than showing a blank',
+    /no matching task/.test(empty.querySelector('td.sched-team').innerHTML),
+    empty.querySelector('td.sched-team').textContent.trim());
+
+  BidGrid.clearFilters();
+  const restored = schedRows().find(tr => tr.textContent.indexOf(b.project) >= 0);
+  check('clearing the filter brings everybody back',
+    restored.querySelectorAll('td.sched-team .sched-line').length === 3,
+    String(restored.querySelectorAll('td.sched-team .sched-line').length));
+
+  /* The Comfortable view draws its Engineer column from Bids.teamCell rather
+     than from the lines, so it has to be narrowed by hand or the two views
+     disagree about who is on the bid. */
+  check('the Comfortable Engineer cell narrows too',
+    /MGJ/.test(Bids.teamCell(b, ['MGJ'])) && !/AF/.test(Bids.teamCell(b, ['MGJ'])),
+    Bids.teamCell(b, ['MGJ']));
+  check('and says so when the bid matched on something else entirely',
+    /not on this one/.test(Bids.teamCell(b, ['ZZZ'])), Bids.teamCell(b, ['ZZZ']));
+  check('while an unfiltered cell is unchanged',
+    /AF/.test(Bids.teamCell(b)) && /MGJ/.test(Bids.teamCell(b)), Bids.teamCell(b));
 
   Assign.remove(b.id, rSecond.id);
   Bids.filterTable();
@@ -5196,8 +5374,12 @@ console.log('\n--- a database from the last build comes forward ---');
   check('and the company details it already had are untouched',
     up.company.name === 'DiVerse', up.company.name);
 
+  /* The relationship, not the whole string: later steps append columns of
+     their own, and an exact match would fail every time one is added without
+     anything actually being wrong. */
   check('the Task column lands directly after Engineer',
-    up.ui.grids.active.order.join(',') === 'sr,team,task,status',
+    up.ui.grids.active.order.indexOf('task') ===
+      up.ui.grids.active.order.indexOf('team') + 1,
     up.ui.grids.active.order.join(','));
   check('switched on where there is a team to describe',
     up.ui.grids.active.visible.indexOf('task') >= 0,
@@ -5212,6 +5394,74 @@ console.log('\n--- a database from the last build comes forward ---');
     up.bids[0].reopenedInto === null,
     JSON.stringify([up.bids[0].revision, up.bids[0].revisionOf, up.bids[0].reopenedInto]));
   check('and it keeps the status it had', up.bids[0].status === 'Completed');
+
+  /* LAST MODIFIED, backfilled from the log each bid has been keeping all
+     along - the newest entry IS the last time anything happened to it. */
+  check('Last Modified lands after Status',
+    up.ui.grids.active.order.indexOf('lastModified') ===
+      up.ui.grids.active.order.indexOf('status') + 1,
+    up.ui.grids.active.order.join(','));
+  check('switched on where work is actually happening',
+    up.ui.grids.active.visible.indexOf('lastModified') >= 0 &&
+    up.ui.grids.all.visible.indexOf('lastModified') < 0,
+    up.ui.grids.all.visible.join(','));
+
+  const withLog = Store.migrate({
+    schemaVersion: 17, bids: [
+      { id: 1, project: 'Worked', createdAt: '2026-01-01T00:00:00.000Z', assignments: [],
+        history: [{ id: 'h1', at: '2026-01-01T00:00:00.000Z', by: 'MGJ', kind: 'created' },
+                  { id: 'h2', at: '2026-05-05T09:30:00.000Z', by: 'AJP', kind: 'edit',
+                    changes: [{ field: 'price', label: 'Bid Price', from: '', to: '$10' }] }] },
+      { id: 2, project: 'Never touched', createdAt: '2026-02-02T00:00:00.000Z',
+        assignments: [], history: [] }
+    ],
+    takeoffs: {}, proposals: {}, catalog: [], engineers: [], regions: [], ui: {}
+  });
+  check('a worked bid is stamped with its newest entry, and who made it',
+    withLog.bids[0].updatedAt === '2026-05-05T09:30:00.000Z' &&
+    withLog.bids[0].updatedBy === 'AJP',
+    withLog.bids[0].updatedAt + ' / ' + withLog.bids[0].updatedBy);
+  /* NOT stamped as today. Marking the whole register modified now would put
+     ninety bids nobody has touched in a year at the top of a column whose
+     only job is to say what is being worked on. */
+  check('and one nobody has touched falls back to when it arrived',
+    withLog.bids[1].updatedAt === '2026-02-02T00:00:00.000Z',
+    String(withLog.bids[1].updatedAt));
+}
+
+console.log('\n--- how long ago that was ---');
+{
+  const mins = n => new Date(Date.now() - n * 60000).toISOString();
+  check('a moment ago reads as now', U.ago(mins(0.2)) === 'just now', U.ago(mins(0.2)));
+  check('minutes', U.ago(mins(7)) === '7m ago', U.ago(mins(7)));
+  check('and hours once it is past one', /^\dh ago$/.test(U.ago(mins(150))), U.ago(mins(150)));
+  /* A clock behind the server's, or a record stamped a moment ahead. Reading
+     "in 3 minutes" off an audit trail is worse than rounding it to now. */
+  check('a timestamp in the future rounds to now rather than counting down',
+    U.ago(mins(-3)) === 'just now', U.ago(mins(-3)));
+  check('nothing is an empty string, not a dash or NaN',
+    U.ago('') === '' && U.ago(null) === '' && U.ago('not a date') === '',
+    JSON.stringify([U.ago(''), U.ago(null), U.ago('not a date')]));
+
+  /* DAYS ARE CALENDAR DAYS. 23:50 and 00:10 are twenty minutes apart and are
+     different days, and a reader who has turned a page of the calendar cares
+     which. Dividing elapsed hours would call that "0d ago" and mean
+     yesterday, so U.ago compares the two IST dates instead. */
+  const istDay = v => U.stampISO(v);
+  const today = istDay(new Date());
+  const backTo = iso => {
+    let n = 1;
+    while (istDay(mins(n * 60)) === today && n < 72) n++;
+    return n;
+  };
+  const yesterdayHrs = backTo();
+  check('the first instant on the previous IST day reads as yesterday',
+    U.ago(mins(yesterdayHrs * 60)) === 'yesterday',
+    U.ago(mins(yesterdayHrs * 60)) + ' at -' + yesterdayHrs + 'h');
+  check('then days', /^\dd ago$/.test(U.ago(mins(3 * 1440))), U.ago(mins(3 * 1440)));
+  check('and past a week it is just the date',
+    U.ago(mins(30 * 1440)) === U.date(U.stampISO(mins(30 * 1440))),
+    U.ago(mins(30 * 1440)));
 }
 
 console.log('\n--- the takeoff and the proposal reach the history ---');
@@ -5355,6 +5605,8 @@ console.log('\n--- the takeoff and the proposal reach the history ---');
   History.recordCreated(b);
   History.recordDoc(b, 'takeoff', [{ f: 'total', a: '$1', b: '$2' }]);
   History.recordDocEvent(b, 'proposal', 'exported-pdf');
+  // The card starts collapsed, so everything below is about its body.
+  if (!History.isOpen(b)) History.toggle(b.id);
   const card = () => History.card(b);
   check('the card offers a filter once there are documents in the log',
     /History.setFilter/.test(card()), 'no filter chips');
@@ -5363,10 +5615,17 @@ console.log('\n--- the takeoff and the proposal reach the history ---');
   check('an export reads as what it is',
     /exported to PDF/.test(card()), 'no export line');
   History.setFilter(b.id, 'bid');
+  /* Both halves asserted. Checking only that the export is ABSENT would pass
+     just as well on a collapsed card showing nothing at all, which is exactly
+     what it did the day the card learned to collapse. */
   check('narrowing to the bid leaves the document entries out',
-    !/exported to PDF/.test(History.card(b)));
+    !/exported to PDF/.test(History.card(b)) && /Bid created/.test(History.card(b)),
+    History.card(b).slice(-200));
   History.setFilter(b.id, 'all');
   check('and All puts them back', /exported to PDF/.test(History.card(b)));
+  check('and the filter chips only exist while it is open',
+    (History.toggle(b.id), !/History.setFilter/.test(History.card(b))),
+    History.card(b).slice(0, 160));
 }
 
 console.log('\n' + (failures === 0

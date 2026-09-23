@@ -23,7 +23,7 @@
   var IDB_NAME = 'diverse-bid';
   var IDB_VERSION = 1;
   var STATE_KEY = 'db';
-  var SCHEMA_VERSION = 17;
+  var SCHEMA_VERSION = 18;
   /* Column layouts version separately from the records. They have to: since
      accounts arrived they live in the server's user_prefs table and reach the
      app on their own route, so a migration gated on the record schema never
@@ -374,6 +374,30 @@
 
       g.order = place(g.order, true);
       g.visible = place(g.visible, view !== 'all');
+    });
+  }
+
+  /* Last Modified sits after Status - the two are read together when somebody
+     is scanning for what moved - and is switched on only where work is
+     actually happening. On All Bids the Created column already answers "when
+     did this arrive", and on Awarded the job is finished. */
+  function migrateLastModifiedColumn(db) {
+    var grids = (db.ui && db.ui.grids) || {};
+    Object.keys(grids).forEach(function (view) {
+      var g = grids[view];
+      if (!g) return;
+
+      function place(list, show) {
+        if (!Array.isArray(list)) return list;
+        var out = list.filter(function (k) { return k !== 'lastModified'; });
+        if (!show) return out;
+        var i = out.indexOf('status');
+        out.splice(i < 0 ? out.length : i + 1, 0, 'lastModified');
+        return out;
+      }
+
+      g.order = place(g.order, true);
+      g.visible = place(g.visible, view === 'active');
     });
   }
 
@@ -932,6 +956,30 @@
       db.schemaVersion = 17;
     }
 
+    if (v < 18) {
+      /* WHEN EACH BID LAST MOVED.
+       *
+       * Written from here on by History.touch, on every recorded change. For
+       * the bids that already exist the answer is in the log they have been
+       * keeping all along: the newest entry's timestamp IS the last time
+       * anything happened to the record, and its author is who did it.
+       *
+       * A bid with no history - seeded, or imported from a file older than the
+       * log - falls back to when it arrived. NOT to now: stamping the whole
+       * register as modified today would put ninety bids nobody has touched in
+       * a year at the top of a column whose only job is to say what is being
+       * worked on. */
+      (db.bids || []).forEach(function (b) {
+        if (b.updatedAt) return;
+        var log = Array.isArray(b.history) ? b.history : [];
+        var last = log[log.length - 1];
+        b.updatedAt = (last && last.at) || b.createdAt || null;
+        b.updatedBy = (last && last.by) || '';
+      });
+      migrateLastModifiedColumn(db);
+      db.schemaVersion = 18;
+    }
+
     // Backfill containers a hand-edited or partial file might be missing.
     ['regions', 'bids', 'catalog', 'engineers'].forEach(function (k) {
       if (!Array.isArray(db[k])) db[k] = [];
@@ -982,6 +1030,10 @@
       if (b.revisionOf === undefined) b.revisionOf = null;
       if (b.revisionBase === undefined) b.revisionBase = null;
       if (b.reopenedInto === undefined) b.reopenedInto = null;
+      /* When it last moved. Absent on a hand-edited or partial file; the
+         column falls back to createdAt rather than showing a blank. */
+      if (b.updatedAt === undefined) b.updatedAt = null;
+      if (b.updatedBy === undefined) b.updatedBy = '';
     });
     if (!Array.isArray(db.taskTypes) || !db.taskTypes.length) {
       db.taskTypes = DEFAULT_TASK_TYPES.slice();
