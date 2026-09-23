@@ -2069,139 +2069,26 @@
 
   /* ---- export ---------------------------------------------------------- */
 
+  /* THE BID REGISTER, AS A WORKBOOK. Built by js/bids.report.js - see the note
+     at the top of it for what this replaced and why.
+
+     The short version: this used to hand SheetJS every bid in the database
+     whichever tab you were on, plus a sheet PER TAKEOFF named after the
+     project. Two projects sharing a 28-character prefix crashed the export
+     outright, which stopped being hypothetical the day re-opening arrived and
+     revisions started carrying their original's project name. Nothing in the
+     new workbook is named after anything somebody typed.
+
+     It is also what finished off SheetJS. Its community build cannot set a
+     cell format - not a fill, not a number format - and a register of prices
+     and dates needs both, so this was the last thing using it. The library is
+     no longer loaded at all. */
   function exportXLSX() {
-    if (!root.XLSX) { U.toast('XLSX library did not load.', 'err'); return; }
-    var d = db();
-    var wb = root.XLSX.utils.book_new();
-
-    // The two stages are separate columns here too, headed so a spreadsheet
-    // reader can tell the intake guess from what the job actually took.
-    root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(d.bids.map(function (b) {
-      var t = root.Assign.totals(b);
-      return {
-        'Proposal No': b.proposalNo || '',
-        'Job No': b.awardNo || '', 'Active': b.active ? 'Yes' : 'No',
-        'Project': b.project, 'Portal': b.portal, 'Region': b.region,
-        'Location': b.location || '',
-        'In Region': b.inRegion === false ? 'No' : 'Yes',
-        'Product': (b.products || []).join('; '),
-        'Material': b.material, 'LF': b.lf, 'Bid Price': b.price,
-        'Intake Engineer': b.engineer,
-        'Intake Est Hrs': b.estHrs, 'Intake Assigned Hrs': b.assignedHrs,
-        'Team': root.Assign.engineerList(b).join('; '),
-        'Team Est Hrs': t.est, 'Team Assigned Hrs': t.asgn,
-        'Due Date': effectiveDueDate(b), 'Revised Due': b.revisedDueDate || '', 'Status': b.status,
-        'Link': b.link, 'Comments': b.comments,
-        // The raw IST stamp, not "2h ago": a spreadsheet is sorted and filtered
-        // on, and a relative phrase is neither.
-        'Last Modified': U.stamp(root.History.lastMovedAt(b)),
-        'Modified By': b.updatedBy || ''
-      };
-    })), 'Bids');
-
-    /* One row per engineer per task, so the hours can be pivoted by person or by
-       task type - the question a summed column cannot answer. */
-    var team = [];
-    d.bids.forEach(function (b) {
-      root.Assign.rows(b).forEach(function (r) {
-        team.push({
-          'Proposal No': b.proposalNo || '', 'Job No': b.awardNo || '', 'Project': b.project,
-          'Status': b.status, 'Engineer': r.engineer, 'Description': r.taskType,
-          'Task Status': root.Assign.statusLabel(r), 'Completed': r.completedAt || '',
-          'Est Hrs': U.n(r.estHrs), 'Assigned Hrs': U.n(r.asgnHrs)
-        });
-      });
-    });
-    if (team.length) {
-      root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(team), 'Team Hours');
-    }
-
-    /* THE LOG, IN A FORM THE OFFICE KEEPS.
-     *
-     * One row per change per bid - who, when, what moved, and from what to
-     * what. This is what makes the history genuinely reviewable later: inside
-     * the app it is a card on one project at a time, and the old entries are
-     * rolled up by day to keep the record inside its size budget. Here it is a
-     * sheet that can be sorted, filtered and pivoted across every bid at once,
-     * and it carries whatever is on the record at the moment of export.
-     *
-     * A field per row rather than a change list per row, because a row holding
-     * "Bid Price 12,000 -> 14,500; Tax 6 -> 7" cannot be filtered on. */
-    var log = [];
-    d.bids.forEach(function (b) {
-      root.History.entries(b).forEach(function (e) {
-        var base = {
-          'Proposal No': b.proposalNo || '', 'Project': b.project,
-          'When': e.at || '', 'Who': e.by || '',
-          'Kind': e.kind || 'stage',
-          'Document': e.doc || '',
-          'Entries Rolled Up': e.rolled ? e.rolled.n : '',
-          'Comment': e.comment || ''
-        };
-
-        // A stage move, a creation, or an export: one row, nothing to diff.
-        if (e.kind === 'doc' && e.event) {
-          log.push(Object.assign({}, base, { 'What': e.event }));
-          return;
-        }
-        if (e.kind === 'doc') {
-          (e.c || []).forEach(function (c) {
-            log.push(Object.assign({}, base, {
-              'What': root.History.docLabel(e.doc, c.f), 'From': c.a, 'To': c.b
-            }));
-          });
-          return;
-        }
-        if (e.kind === 'edit') {
-          (e.changes || []).forEach(function (c) {
-            log.push(Object.assign({}, base, {
-              'What': c.label || c.field, 'From': c.from, 'To': c.to
-            }));
-          });
-          return;
-        }
-        log.push(Object.assign({}, base, {
-          'What': e.kind === 'created' ? 'Bid created'
-            : 'Moved to ' + root.History.label(e.to),
-          'From': e.fromStatus || '', 'To': e.toStatus || ''
-        }));
-      });
-    });
-    if (log.length) {
-      root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(log), 'History');
-    }
-
-    // One summary sheet per takeoff, mirroring Project Cost Summary.
-    Object.keys(d.takeoffs).forEach(function (k) {
-      var t = d.takeoffs[k];
-      var roll = root.TakeoffModel.computeTakeoff(t);
-      var aoa = [['Project Name', t.project.name], ['Location', t.project.location],
-        ['Proposal No', t.project.proposalNo], ['Bid Due Date', t.project.bidDueDate], [],
-        ['Project Cost Summary'], ['Product', 'Total Cost', 'Qty', 'U/M']];
-      roll.products.forEach(function (x) {
-        aoa.push([x.product.type, x.calc.total, x.product.totalLF, x.product.unit]);
-      });
-      aoa.push(['Project Base Cost', roll.base, roll.totalLF, 'LF']);
-      aoa.push(['Miscellaneous Items Cost', roll.misc]);
-      aoa.push(['Delivery & Freight Cost', roll.freight]);
-      aoa.push(['Tax', roll.tax]);
-      aoa.push(['Roundoff', roll.roundoff]);
-      aoa.push(['Total Bid Cost', roll.total]);
-      var name = (t.project.name || 'Takeoff').replace(/[\\\/\?\*\[\]:]/g, '').slice(0, 28);
-      root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.aoa_to_sheet(aoa), name || 'Takeoff');
-    });
-
-    root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.json_to_sheet(
-      root.Catalog.all().map(function (c) {
-        return {
-          Vendor: c.vendor, 'Part No': c.partNo, Description: c.description,
-          Material: c.material, Grade: c.grade, 'U/M': c.um,
-          'Unit Cost': c.unitCost, 'Used On': c.sowTags.join('; '),
-          'Times Used': c.useCount, Source: c.source
-        };
-      })), 'Rate Library');
-
-    root.XLSX.writeFile(wb, 'Bid-Proposal-Manager-' + U.today() + '.xlsx');
+    if (!root.BidsReport) { U.toast('The workbook writer did not load.', 'err'); return; }
+    var wb = root.BidsReport.download();
+    if (!wb) return;
+    U.toast(wb.rows.length + ' bid' + (wb.rows.length === 1 ? '' : 's') + ' exported' +
+      (wb.rows.length < wb.total ? ' (filtered from ' + wb.total + ')' : '') + '.', 'ok');
   }
 
   /* ---- public ---------------------------------------------------------- */

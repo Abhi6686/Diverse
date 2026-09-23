@@ -126,5 +126,43 @@
     return out;
   }
 
-  root.Zip = { write: write, crc32: crc32 };
+  /* ---- the three primitives every xlsx writer needs ---------------------- */
+
+  /* They started in js/estimate.xlsx.js and live here because there are two
+     writers now - the estimate workbook and the bids report - and a second copy
+     of "which characters does Excel refuse" is a second place for it to be
+     wrong. This file is already the shared low-level end of writing a workbook,
+     so they sit beside the zip rather than in either writer. */
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      // Excel rejects the C0 controls outright; a stray tab or newline pasted
+      // into a description would otherwise make the whole file unreadable.
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  }
+
+  /* 0 -> A, 25 -> Z, 26 -> AA. */
+  function colName(i) {
+    var s = '';
+    for (i = i + 1; i > 0; i = Math.floor((i - 1) / 26)) {
+      s = String.fromCharCode(65 + (i - 1) % 26) + s;
+    }
+    return s;
+  }
+
+  /* Float dust: 45292.30150000001 is the same money as 45292.3015 and one of
+     them makes the sheet look broken. Ten places is far past the cent and well
+     inside a double's honest precision. */
+  function num(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return 0;
+    return Math.round(n * 1e10) / 1e10;
+  }
+
+  root.Zip = {
+    write: write, crc32: crc32,
+    esc: esc, colName: colName, num: num
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -760,12 +760,26 @@
 
   /* ---- rendering ------------------------------------------------------- */
 
+  /* THE ROWS THE TABLE IS SHOWING, in the order it is showing them.
+   *
+   * One expression, so the export and the screen cannot disagree about which
+   * bids are on the list. The XLSX export used to build its own list from
+   * db.bids and therefore ignored every filter somebody had set - you narrowed
+   * the table to one engineer, pressed export, and got all ninety-five.
+   *
+   * Defaults to the current tab's list, which is what a caller outside the
+   * render loop wants; render passes the list it was handed. */
+  function visibleRows(list) {
+    var all = list || root.Bids.baseList();
+    return applySort(all.filter(passesFilters));
+  }
+
   function render(list) {
     var host = U.$('bidsGridHost');
     if (!host) return;
     var g = cfg();
     var cols = activeColumns();
-    var rows = applySort(list.filter(passesFilters));
+    var rows = visibleRows(list);
 
     var run = stickyRun(cols);
     var d = density();
@@ -1657,6 +1671,12 @@
     scheduleLines: scheduleLines,
     allLines: allLines,
     lineFilterInitials: lineFilterInitials,
+
+    /* What the XLSX export reads, so the workbook is the table you are looking
+       at rather than a second opinion about it. cfg is already exported above. */
+    visibleRows: visibleRows,
+    cellText: textOf,
+    column: col,
 
     menuItem: menuItem,
     menuLink: menuLink,

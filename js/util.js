@@ -193,6 +193,50 @@
       return U.date(then);
     },
 
+    /* ---- dates as Excel understands them ---------------------------------- */
+
+    /* A SPREADSHEET SORTS AND SUMS, AND NEITHER WORKS ON A STRING.
+     *
+     * Writing "09-16-2026" into a cell gives you text that sorts alphabetically
+     * - so October lands between January and September - and that no date
+     * filter or formula can touch. Excel's own date is a number: whole days
+     * since 1899-12-30, with the time of day as the fraction. Write that with a
+     * date number format on the cell and the recipient gets a real date they
+     * can filter, subtract and chart.
+     *
+     * 1899-12-30 rather than 1900-01-01 because Lotus 1-2-3 believed 1900 was a
+     * leap year, Excel kept the bug for compatibility, and counting from the
+     * 30th of December is the arithmetic that comes out right for every date
+     * after 1900-03-01. Nothing in this app predates that.
+     *
+     * TAKES A CALENDAR DATE, NOT A MOMENT. Due dates are stored 'YYYY-MM-DD'
+     * and are the same day everywhere on earth - see the note on U.date - so
+     * this goes through U.parseDate and never near a timezone. For an instant,
+     * use excelStamp below.
+     */
+    EXCEL_EPOCH_OFFSET: 25569,          // days from 1899-12-30 to 1970-01-01
+
+    excelDate: function (v) {
+      var d = U.parseDate(v);
+      if (!d) return null;
+      // Built from the calendar parts rather than from the timestamp, so a
+      // machine an hour either side of UTC cannot shift the day.
+      return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000 +
+        U.EXCEL_EPOCH_OFFSET;
+    },
+
+    /* The same, for an INSTANT - a createdAt, a last-modified stamp. Rendered
+       on the IST clock, because that is the clock every timestamp in this app
+       is read on, and a workbook that said 12:25 where the History card says
+       17:55 would be two records of the same event. */
+    excelStamp: function (v) {
+      var p = U.istParts(v);
+      if (!p) return null;
+      return Date.UTC(+p.year, +p.month - 1, +p.day) / 86400000 +
+        U.EXCEL_EPOCH_OFFSET +
+        (+p.hour * 60 + +p.minute) / 1440;
+    },
+
     /* ISO -> MM-DD-YYYY for an input's value ('' rather than '-' when unset). */
     dateToInput: function (iso) {
       var s = U.date(iso);

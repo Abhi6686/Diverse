@@ -31,7 +31,13 @@
 <link rel="stylesheet" href="assets/tailwind.css">
 <link rel="stylesheet" href="assets/app.css">
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- SheetJS was here and is gone. It wrote the bids export until that export
+     needed formatting, which its community build cannot do at all - not a
+     fill, not a number format, not a frozen pane. Both workbooks this app
+     produces are now written directly (js/report.xlsx.js for the bid register,
+     js/estimate.xlsx.js for the takeoff) and packed by js/xlsx.zip.js, so the
+     last thing using it went with the rewrite. Dropping it takes 900KB and a
+     third-party CDN off every page load. -->
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -563,11 +569,17 @@
 <script src="js/xlsx.zip.js"></script>
 <script src="js/estimate.template.js"></script>
 <script src="js/estimate.xlsx.js"></script>
+<!-- The bid register export. report.xlsx.js is the writer - its own stylesheet,
+     sheet builder and container; bids.report.js is only what goes in the
+     sheets. Both pack through xlsx.zip.js above, which must load first: the
+     writers read their XML primitives off it at load time. -->
+<script src="js/report.xlsx.js"></script>
 <script src="js/takeoff.js"></script>
 <script src="js/proposal.paginate.js"></script>
 <script src="js/proposal.js"></script>
 <script src="js/ratelib.js"></script>
 <script src="js/bids.js"></script>
+<script src="js/bids.report.js"></script>
 <script src="js/assignments.js"></script>
 <script src="js/products.js"></script>
 <script src="js/history.js"></script>

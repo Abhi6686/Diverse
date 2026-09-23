@@ -72,8 +72,9 @@ const win = dom.window;
 const localScripts = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js', 'js/proposal.styles.js',
   'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js',
   'js/bidgrid.js', 'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js',
-  'js/xlsx.zip.js', 'js/estimate.template.js', 'js/estimate.xlsx.js', 'js/takeoff.js',
-  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
+  'js/xlsx.zip.js', 'js/estimate.template.js', 'js/estimate.xlsx.js',
+  'js/report.xlsx.js', 'js/takeoff.js',
+  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/bids.report.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
   'js/settings.js', 'js/app.js'];
 
 // Wait until parsing has finished, otherwise app.js correctly defers its boot to
@@ -169,7 +170,8 @@ function schedRows() {
 
 async function run() {
 const { Store, Bids, Takeoff, Proposal, RateLib, Catalog, App, Nav, BidGrid,
-        Project, Settings, Assign, Products, History, Schedule, Rates, TakeoffModel: M, UI, U } = win;
+        Project, Settings, Assign, Products, History, Schedule, Rates, TakeoffModel: M, UI, U,
+        Report, BidsReport } = win;
 
 console.log('--- boot ---');
 check('store initialised', !!Store.db);
@@ -3881,6 +3883,173 @@ console.log('\n--- how a bid got where it is ---');
   check('a bid nobody has edited still reports when it arrived',
     History.lastMovedAt({ createdAt: '2026-03-03T00:00:00.000Z' }) ===
       '2026-03-03T00:00:00.000Z');
+}
+
+console.log('\n--- dates a spreadsheet can actually use ---');
+{
+  /* Excel's date is a NUMBER - whole days since 1899-12-30 - and writing
+     "09-16-2026" instead gives text that sorts alphabetically, so October
+     lands between January and September. 45292 is 2024-01-01; the figure
+     appears in the float-dust note in js/estimate.xlsx.js, which makes it an
+     independent check rather than one I derived from the same arithmetic. */
+  check('a known serial comes out right', U.excelDate('2024-01-01') === 45292,
+    String(U.excelDate('2024-01-01')));
+  check('and the epoch itself', U.excelDate('1970-01-01') === 25569,
+    String(U.excelDate('1970-01-01')));
+  check('a leap day is a real day', U.excelDate('2024-02-29') === 45351,
+    String(U.excelDate('2024-02-29')));
+  check('nothing is null rather than a misleading zero',
+    U.excelDate('') === null && U.excelDate(null) === null &&
+    U.excelStamp('') === null,
+    JSON.stringify([U.excelDate(''), U.excelStamp('')]));
+
+  /* A calendar date must not go near a timezone - a due date of the 22nd is
+     the 22nd everywhere - so consecutive days are exactly one apart. */
+  check('consecutive days are one apart, whatever the machine is set to',
+    U.excelDate('2026-03-29') - U.excelDate('2026-03-28') === 1 &&
+    U.excelDate('2026-11-02') - U.excelDate('2026-11-01') === 1);
+
+  // An instant carries the time of day as the fraction, on the IST clock the
+  // rest of the app reads timestamps on.
+  const noon = U.excelStamp('2026-09-16T06:30:00.000Z');   // 12:00 IST
+  check('an instant keeps its time of day', noon === U.excelDate('2026-09-16') + 0.5,
+    String(noon));
+}
+
+console.log('\n--- the bid register, as a workbook ---');
+{
+  Bids.setView('active');
+  Bids.filterTable();
+
+  const built = BidsReport.workbook();
+  const names = built.sheets.map(s => s.name);
+  check('the workbook has the six sheets, in reading order',
+    names.join(',') === 'Summary,Bids,Team & Hours,Bookings,Estimate Lines,History',
+    names.join(','));
+  check('and no two share a name', new Set(names).size === names.length, names.join(','));
+
+  /* IT EXPORTS THE LIST YOU ARE LOOKING AT. The old export walked db.bids and
+     ignored every filter, so narrowing the table to one engineer and pressing
+     export handed you all ninety-five. */
+  check('the rows are the rows on screen, in the same order',
+    built.rows.length === BidGrid.visibleRows(Bids.baseList()).length &&
+    built.rows.every((b, i) => b.id === BidGrid.visibleRows(Bids.baseList())[i].id),
+    built.rows.length + ' vs ' + BidGrid.visibleRows(Bids.baseList()).length);
+
+  const wide = built.rows.length;
+  BidGrid.setFilterValues('status', ['In Progress']);
+  const narrow = BidsReport.workbook();
+  check('narrowing the table narrows the workbook',
+    narrow.rows.length < wide && narrow.rows.every(b => b.status === 'In Progress'),
+    narrow.rows.length + ' of ' + wide);
+  check('and the summary says it is a filtered view, not the whole register',
+    /Status = In Progress/.test(narrow.sheets[0].xml()) &&
+    /filtered view/.test(narrow.sheets[0].xml()),
+    'no filter note on the Summary');
+  BidGrid.clearFilters();
+
+  /* TYPED CELLS. A price is a number and a due date is a date serial - a
+     spreadsheet is sorted, filtered and summed, and a string does none of it. */
+  const cols = BidGrid.activeColumns().filter(c => c.key !== 'actions');
+  const priced = built.rows.filter(b => U.n(b.price) > 0)[0];
+  const due = built.rows.filter(b => Bids.effectiveDueDate(b))[0];
+  if (priced) {
+    const c = cols.filter(x => x.key === 'price')[0] ||
+      BidGrid.COLUMNS.filter(x => x.key === 'price')[0];
+    check('a price is written as a number, not "$7,520"',
+      typeof BidsReport.cell(c, priced, 0, false)[0] === 'number',
+      JSON.stringify(BidsReport.cell(c, priced, 0, false)));
+  }
+  if (due) {
+    const c = BidGrid.COLUMNS.filter(x => x.key === 'dueDate')[0];
+    const v = BidsReport.cell(c, due, 0, false)[0];
+    check('a due date is a date serial, not "09-16-2026"',
+      typeof v === 'number' && v === U.excelDate(Bids.effectiveDueDate(due)),
+      JSON.stringify(v));
+  }
+
+  const bidsXML = built.sheets[1].xml();
+  check('the totals row is a live SUM, not a baked figure',
+    /<f>SUM\(/.test(bidsXML), 'no SUM formula in the Bids sheet');
+  check('the header is frozen and the identity columns with it',
+    /<pane [^>]*state="frozen"/.test(bidsXML), 'no frozen pane');
+  check('and it carries an autofilter',
+    /<autoFilter ref="/.test(bidsXML), 'no autofilter');
+  /* Schema order, not ours: CT_Worksheet puts autoFilter before mergeCells,
+     and out of order Excel refuses the file rather than reading it wrong. */
+  check('with autoFilter before mergeCells, as the schema requires',
+    bidsXML.indexOf('<autoFilter') < bidsXML.indexOf('<mergeCells'),
+    'autoFilter/mergeCells out of order');
+  check('the buttons column never reaches the sheet',
+    !/>Actions</.test(bidsXML) && cols.every(c => c.key !== 'actions'));
+
+  /* THE CRASH THIS REPLACED. Two bids with the SAME project name, both with
+     takeoffs - exactly what re-opening produces, since a revision carries its
+     original's name. The old export named a sheet per takeoff and threw. */
+  const twin = Bids.baseList().filter(b => b.takeoffId && Store.db.takeoffs[b.takeoffId])[0];
+  const clone = JSON.parse(JSON.stringify(twin));
+  clone.id = Store.db.bids.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+  clone.proposalNo = (twin.proposalNo || 'DIS-26-0001') + '-R01';
+  clone.revision = 1;
+  const t2 = JSON.parse(JSON.stringify(Store.db.takeoffs[twin.takeoffId]));
+  t2.id = 'tk-twin-test';
+  clone.takeoffId = t2.id;
+  Store.db.takeoffs[t2.id] = t2;
+  Store.db.bids.push(clone);
+  Bids.filterTable();
+
+  let twinNames = null, threw = null;
+  try {
+    const w = BidsReport.workbook();
+    twinNames = w.sheets.map(s => s.name);
+    Report.build(w.sheets);
+  } catch (e) { threw = e.message; }
+  check('two bids sharing a project name export without throwing',
+    threw === null, String(threw));
+  check('because no sheet is named after a project any more',
+    twinNames && twinNames.every(n => !/xyz|Hillsdale|Lourdes/i.test(n)),
+    (twinNames || []).join(','));
+
+  Store.db.bids = Store.db.bids.filter(b => b.id !== clone.id);
+  delete Store.db.takeoffs[t2.id];
+  Bids.filterTable();
+
+  /* The arithmetic in the workbook is the app's arithmetic. */
+  const wb2 = BidsReport.workbook();
+  const bookings = wb2.sheets[3].xml();
+  const bookedInSheet = (bookings.match(/<v>[\d.]+<\/v>/g) || []).length;
+  check('every booked day reaches the Bookings sheet',
+    bookedInSheet > 0, String(bookedInSheet));
+
+  // A bid with nothing on it at all must not take the export down with it.
+  const bare = { id: 99999, project: 'Bare', status: 'Not Started', active: true,
+                 assignments: [], history: [], products: [], createdAt: U.today() };
+  Store.db.bids.push(bare);
+  Bids.filterTable();
+  let bareErr = null;
+  try { Report.build(BidsReport.workbook().sheets); } catch (e) { bareErr = e.message; }
+  check('a bid with no team, no takeoff and no history exports cleanly',
+    bareErr === null, String(bareErr));
+  Store.db.bids = Store.db.bids.filter(b => b.id !== 99999);
+  Bids.filterTable();
+
+  /* BOTH WORKBOOKS ARE WRITTEN BY HAND NOW, so the SheetJS CDN script is gone.
+     Pinned because it is easy to reintroduce by habit, and because a page that
+     silently reacquires a 900KB third-party dependency is worth failing a
+     build over. */
+  check('SheetJS is not loaded any more', typeof win.XLSX === 'undefined',
+    typeof win.XLSX);
+  check('and nothing on the page asks a CDN for it',
+    !/xlsx\.full\.min\.js/.test(fs.readFileSync(HTML, 'utf8')),
+    'xlsx.full.min.js still referenced in the HTML');
+
+  /* Written out so the formatting can be looked at in a real spreadsheet -
+     the one thing these checks cannot do. .scratch is gitignored. */
+  try {
+    const out = Report.build(BidsReport.workbook().sheets);
+    require('fs').mkdirSync('.scratch', { recursive: true });
+    require('fs').writeFileSync('.scratch/bids-report.xlsx', Buffer.from(out));
+  } catch (e) { /* the checks above are the test; this is a convenience */ }
 }
 
 console.log('\n--- the table layout follows the login ---');

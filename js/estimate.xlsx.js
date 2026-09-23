@@ -37,31 +37,12 @@
 
   /* ---- XML ------------------------------------------------------------- */
 
-  function esc(s) {
-    return String(s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      // Excel rejects the C0 controls outright; a stray tab or newline pasted
-      // into a description would otherwise make the whole file unreadable.
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-  }
-
-  function colName(i) {
-    var s = '';
-    for (i = i + 1; i > 0; i = Math.floor((i - 1) / 26)) {
-      s = String.fromCharCode(65 + (i - 1) % 26) + s;
-    }
-    return s;
-  }
-
-  /* Float dust: 45292.30150000001 is the same money as 45292.3015 and one of
-     them makes the sheet look broken. Ten places is far past the cent and well
-     inside a double's honest precision. */
-  function num(v) {
-    var n = Number(v);
-    if (!isFinite(n)) return 0;
-    return Math.round(n * 1e10) / 1e10;
-  }
+  /* XML escaping, column letters and float-dust rounding are the same job in
+     every xlsx writer. They started here and moved to js/xlsx.zip.js when the
+     bids report became a second writer - a second copy of "which characters
+     does Excel refuse" is a second place for it to be wrong. See the note
+     there. */
+  var esc = root.Zip.esc, colName = root.Zip.colName, num = root.Zip.num;
 
   /* ---- a sheet under construction --------------------------------------- */
 
