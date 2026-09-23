@@ -858,8 +858,9 @@ its own stage's figures. The column selector distinguishes them as *(intake)* an
 `+ Add new task type...` on the card adds to that same list. Renaming a type there carries
 onto every row using it; deleting one warns if it is in use and leaves the value on those rows.
 
-The XLSX export carries both stages, plus a **Team Hours** sheet with one row per engineer per
-task so the hours can be pivoted by person or by task type.
+The XLSX export carries both stages, plus a **Team & Hours** sheet with one row per engineer
+per task, and a **Bookings** sheet with one row per engineer per day — see
+[Exporting the bid list](#exporting-the-bid-list).
 
 ### Who is free, and for how long
 
@@ -931,6 +932,40 @@ A bid can match on one filter and have no single task matching *all* of them —
 row and an Estimating row, but they are different rows. That line reads `no matching task`
 rather than going blank, which would collapse the row and pull the calendar beside it out of
 alignment.
+
+## Exporting the bid list
+
+**XLSX** on the Bids toolbar exports **the tab you are on, as you are looking at it** — the
+same columns, the same order, the same filters and the same sort. Narrow the table to one
+engineer and the workbook holds their bids and says so on its first page.
+
+Six sheets:
+
+| Sheet | One row per | |
+|---|---|---|
+| **Summary** | — | Who exported it and when, which filters were on, and the headline counts: bids by status, total value, hours, due this week, overdue |
+| **Bids** | bid | The register, mirroring the screen |
+| **Team & Hours** | engineer × task | Pivot by person or by task type |
+| **Bookings** | engineer × day | The workload pivot — hours by person by week |
+| **Estimate Lines** | product × bid | The cost roll-up beside each bid |
+| **History** | change | The full log, across every exported bid |
+
+The Bids sheet freezes its header and the identity columns, carries an autofilter, and ends
+in a totals row of **live `SUM` formulas** — so it still adds up after the recipient deletes
+the rows they do not care about. Statuses are in the app's own colours and an overdue due
+date is red.
+
+**Cells are typed, not formatted text.** A price is a number and a due date is a real date,
+so the recipient can sort, filter, subtract and chart them. A workbook full of `"$7,520"` and
+`"09-16-2026"` looks the same and can do none of that.
+
+> **If you have seen `Worksheet with name ... already exists!`** — that was this export
+> naming a sheet after each project. Two projects whose names matched for 28 characters
+> collided, which a re-opened job guarantees, since a revision keeps its original's name.
+> No sheet is named after a project any more.
+
+For the full estimate — every material line, the formulas, the lookup sheets and the shop's
+own formatting — use **Export to Excel** on the takeoff itself, below.
 
 ## Exporting a takeoff to Excel
 
@@ -1248,6 +1283,9 @@ spot.
 | `js/catalog.seed.js` | 60 parts extracted from the workbook |
 | `js/takeoff.model.js` | cost maths and the `fx` quantity evaluator (no `eval`) |
 | `js/takeoff.js` | Takeoff tab UI |
+| `js/xlsx.zip.js` | writes a zip container, and the XML primitives both workbook writers share |
+| `js/report.xlsx.js` | the bid report's writer: its own stylesheet, sheet builder and container |
+| `js/bids.report.js` | what goes in those sheets — the six sheets of the bid export |
 | `js/history.js` | the audit trail: bid fields, takeoff and proposal digests, and the compaction that keeps them inside the record's size budget |
 | `js/schedule.js` | the calendar behind the Employee view; working-day lengths and the cross-bid "hours left" index |
 | `js/proposal.js` | proposal document, editor, print |

@@ -202,7 +202,10 @@
           'there is nothing waiting to be saved.',
         'Backing the office up is copying the diverse.db file on the server; ' +
           'restoring one is putting that file back.',
-        'The bids table exports to Excel, as does a takeoff.',
+        'XLSX exports the bid list you are looking at - the same columns, filters and ' +
+          'sort - as a formatted workbook, with sheets for the team, the day bookings, ' +
+          'the estimate lines and the change log.',
+        'A takeoff has its own Export to Excel, which writes the shop\'s estimate workbook.',
         'Proposals export to PDF.'
       ]
     },
