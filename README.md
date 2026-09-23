@@ -301,6 +301,34 @@ The three lists are one table over three sets of bids, so sorting, per-column fi
 column selector work on all three. Each keeps **its own** column layout — hiding a column on
 Awarded does not take it off Active.
 
+**Your layout is yours, and it follows your login.** The column order, which columns are
+shown, the sort, the filters, the row density and the calendar zoom are all saved per view
+against your account rather than against the browser — so they are waiting for you on
+whichever machine you sit at, and a colleague rearranging their columns never moves yours.
+**Reset my table layout**, in the menu under your name, puts every table back to its
+defaults; it leaves your theme and the tab you are on alone, because resetting tables should
+not turn the lights on or throw you to another page.
+
+### Last Modified
+
+A sortable **Last Modified** column, on by default on Active Bids and one tick away on the
+other two. It answers "what moved today" from the list, instead of opening bids one at a
+time to read their History cards.
+
+```
+LAST MODIFIED
+   2h ago          hover: 09-22-2026 17:57 IST · ABH
+    ABH
+```
+
+Shown as how long ago with the exact IST stamp on hover — an absolute timestamp is the right
+thing when you are reconciling one record and the wrong thing in a column of forty, where it
+has to be subtracted from today before it means anything. A bid nobody has edited since it
+was entered reads as its arrival rather than as a blank.
+
+It is written on every change the History card records, from that entry's own timestamp, so
+the column and the top line of the card are the same fact and cannot drift apart.
+
 ### The project page
 
 Clicking a bid opens it full screen: the app header, the module bar and the footer all get
@@ -522,7 +550,19 @@ Comfortable and Compact is left exactly where you put it.
   It has not been: it is the date on the record, and the reason the revision is worth knowing
   about. In the bids table the date in force leads and the original sits under it, labelled
   `orig`.
-- **Everything that happens to it.** The **History** card is a full audit trail: the bid being
+- **Everything that happens to it.** The **History** card is a full audit trail. It **starts
+  collapsed** — it is reference material, and open by default it was the tallest thing on the
+  page, pushing the estimate and the proposal below the fold. Shut, it still says when the bid
+  last moved and who moved it; click the header to open it.
+
+  ```
+  ▸  History  9              Last change 2h ago · ABH        [Back to All Bids]
+  ```
+
+  Opening it is a one-off for that bid: another project opens collapsed again. It stays open
+  while you work on the one you opened it for, so editing an hours box does not snap it shut.
+
+  What it records: the bid being
   created, every field that changes and what it changed from, every change to the team or the
   products, and every move between stages — each with who did it and when, in IST.
 
@@ -865,6 +905,32 @@ appears twice, because their hours are booked per task — summing them into one
 neither which task the hours were against nor whether either was finished. Capacity still
 counts people rather than lines, so a two-task engineer does not double the bid's apparent
 room.
+
+### Filtering to one person
+
+Filtering the **Engineer** column narrows the *lines* as well as the list, so asking for one
+person's work gives you their work rather than the projects it is somewhere inside:
+
+```
+[Engineer: SSJ ×]  [Clear all]
+👤 Showing SSJ's rows only — the hours columns and the totals are still the whole bid's.
+
+PROJECT                        ENGINEER  TASK                    ASGN   TUE  WED
+Johnstown Elevator Addition    SSJ       Estimating In progress  10.5    4.5   ·
+```
+
+The **Task** filter does the same thing, and the two combine — *SSJ's open Estimating work*
+is two filters, not a hunt.
+
+**The hours do not narrow, and the note says so.** Estm/Asgn Hrs, the load shading and the
+Booked/Free rows keep reporting the bid and the shop in full. A person's share is not the
+bid's effort, and quietly reducing those figures would leave a row reading 4.5 against 18
+hours actually booked to it.
+
+A bid can match on one filter and have no single task matching *all* of them — it has an SSJ
+row and an Estimating row, but they are different rows. That line reads `no matching task`
+rather than going blank, which would collapse the row and pull the calendar beside it out of
+alignment.
 
 ## Exporting a takeoff to Excel
 
