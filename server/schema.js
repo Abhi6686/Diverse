@@ -269,6 +269,20 @@ const STEPS = [
          the only query against it, changesSince, was already using the rowid. */
       db.exec('DROP INDEX IF EXISTS changes_seq');
     }
+  },
+
+  {
+    version: 5,
+    name: 'carry the record rev in the change log',
+    up: function (db) {
+      /* A client that applied somebody else's change without learning the rev
+         it produced still held the rev from before it. Its next edit to that
+         record was then refused as stale, and the server's copy replaced what
+         it had typed - the "only one entry survives" report. The rev travels
+         with every change from now on. Old rows stay NULL: a client that meets
+         one fetches the record (and its rev) from /api/records instead. */
+      db.exec('ALTER TABLE changes ADD COLUMN rev INTEGER');
+    }
   }
 ];
 

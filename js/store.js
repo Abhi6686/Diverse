@@ -71,6 +71,15 @@
   var serverUser = null;
   var online = true;          // false once the server stops answering
   var conflictHandler = null;
+  /* The write path to the server. One push on the wire at a time: two racing
+     each other carry the same rev, and the second is refused as stale for no
+     reason but timing. Edits made while one is in flight go up when it lands. */
+  var inflight = null;
+  var retryTimer = null;
+  var retryDelay = 1000;
+  var retryAt = null;
+  var lastError = null;
+  var restoredCount = 0;
   /* Set by the two operations that replace the whole database rather than edit
      part of it - Load and Reset - and read by the next write, so the server can
      hold them to project.load. Cleared as soon as it is used. */
@@ -1113,8 +1122,23 @@
 
   /* ---- status + notification ------------------------------------------ */
 
+  /* How many records this screen has changed that the server does not yet
+     hold. 0 is the only state in which "Saved" is true. */
+  function pendingCount() {
+    if (backend !== 'server' || !DB || !root.Remote) return 0;
+    return root.Remote.diff(DB).length;
+  }
+
   function setStatus(state, detail) {
-    lastStatus = { state: state, at: new Date(), detail: detail || null };
+    lastStatus = {
+      state: state, at: new Date(), detail: detail || null,
+      // Not counted while typing - 'dirty' fires per keystroke, and the count
+      // is a stringify of the whole dataset.
+      pending: state === 'dirty' ? null : pendingCount(),
+      live: backend !== 'server' || online,
+      retryAt: retryAt,
+      error: lastError ? (lastError.message || String(lastError)) : null
+    };
     statusListeners.forEach(function (fn) {
       try { fn(lastStatus); } catch (e) { console.error(e); }
     });
@@ -1176,9 +1200,14 @@
           save();
         } else {
           root.Remote.remember(db);
+          // Edits a previous page made and never got to the server - the tab
+          // was closed offline, or the machine went down. Merged onto what the
+          // server holds now, and sent once the stream is up.
+          restoredCount = restoreOutbox(db, body.user);
         }
 
         wireStream();
+        if (restoredCount) schedulePush();
         return db;
       });
     }).catch(function (e) {
@@ -1283,19 +1312,106 @@
     });
   }
 
+  /* ---- the outbox ------------------------------------------------------ */
+
+  /* Unsent edits, on disk in this browser, so closing the tab or losing the
+     machine while the server is unreachable does not lose them. One slot per
+     tab - two tabs must not clear each other's - under the signed-in person,
+     so nobody else signing in on this machine is handed them. */
+  function outboxKey(user) {
+    var u = user || serverUser;
+    return 'dvbid.outbox.' + (u && u.id != null ? u.id : 'anon');
+  }
+
+  function readOutbox(user) {
+    try {
+      var raw = root.localStorage.getItem(outboxKey(user));
+      var all = raw ? JSON.parse(raw) : {};
+      return all && typeof all === 'object' ? all : {};
+    } catch (e) { return {}; }
+  }
+
+  function writeOutbox(entries) {
+    if (backend !== 'server' || !DB || !root.Remote) return;
+    try {
+      var all = readOutbox();
+      if (entries && entries.length) all[tabId] = { at: Date.now(), entries: entries };
+      else delete all[tabId];
+      if (Object.keys(all).length) root.localStorage.setItem(outboxKey(), JSON.stringify(all));
+      else root.localStorage.removeItem(outboxKey());
+    } catch (e) {
+      // Full, or private browsing. The edits are still in memory and still
+      // being retried; only surviving a closed tab is lost.
+    }
+  }
+
+  function persistOutbox() { writeOutbox(root.Remote.pending(DB)); }
+
+  function restoreOutbox(db, user) {
+    var all = readOutbox(user);
+    var slots = Object.keys(all);
+    if (!slots.length) return 0;
+    var n = 0;
+    slots.sort(function (a, b) { return (all[a].at || 0) - (all[b].at || 0); })
+      .forEach(function (slot) {
+        (all[slot].entries || []).forEach(function (entry) {
+          try { if (root.Remote.restore(db, entry)) n++; }
+          catch (e) { console.error('Could not restore an unsent edit:', e); }
+        });
+      });
+    // Taken: from here they are this page's unsent edits, and it writes its
+    // own slot. A tab still open elsewhere rewrites its slot on its next save.
+    try { root.localStorage.removeItem(outboxKey(user)); } catch (e) { /* nothing to clear */ }
+    return n;
+  }
+
   /* Someone else's edit arriving, or the catch-up after a reconnection. */
   function wireStream() {
     root.Remote.onChanges(function (list) {
-      list.forEach(function (c) { root.Remote.applyChange(DB, c); });
+      var merged = false;
+      var clashes = [];
+      list.forEach(function (c) {
+        // Merged into, not written over: a record this screen has edits on
+        // keeps them. See Remote.absorb.
+        var r = root.Remote.absorb(DB, c);
+        if (!r) return;
+        merged = true;
+        r.conflicts.forEach(function (x) {
+          clashes.push(Object.assign({ kind: c.kind, id: c.id, by: c.byName || null }, x));
+        });
+      });
       notify();
       if (externalChangeHandler) {
-        externalChangeHandler({ remote: true, changes: list, by: list[0] && list[0].byName });
+        externalChangeHandler({ remote: true, changes: list, by: list[0] && list[0].byName,
+          merged: merged, conflicts: clashes });
       }
+      // The merged record is an edit of ours on top of theirs - send it.
+      if (merged) schedulePush();
     });
     root.Remote.onStatus(function (up, detail) {
       online = up;
-      setStatus(up ? 'saved' : 'offline', detail);
+      if (!up) {
+        if (detail) lastError = { message: String(detail.message || detail) };
+        setStatus('offline', detail);
+        return;
+      }
+      /* Back. The catch-up has already been merged in by now (Remote waits
+         for it before saying so), so whatever is still unsent goes up on top
+         of the current server copies. Being connected is not the same as
+         being saved, and the status must not claim it is. */
+      retryDelay = 1000;
+      pushNow(0);
     });
+    /* Every other sign that the network is back, so nothing waits out a
+       backoff it no longer needs to. */
+    if (root.addEventListener) {
+      root.addEventListener('online', function () { if (pendingCount()) pushNow(0); });
+    }
+    if (root.document && root.document.addEventListener) {
+      root.document.addEventListener('visibilitychange', function () {
+        if (root.document.visibilityState === 'visible' && !inflight && pendingCount()) pushNow(0);
+      });
+    }
     /* This browser has been away long enough that the server will not send the
        gap. There is no correct way to patch up from here - what is on screen is
        older than anything the change log still offers - so the page is reloaded
@@ -1396,33 +1512,121 @@
 
   /* ---- write ----------------------------------------------------------- */
 
-  /* Somebody else changed this record between us reading it and saving. The
-     server's copy is the truth - it is already what everyone else can see - so
-     it is applied here and the person is told what happened, rather than their
-     save quietly reverting a colleague's work.
+  /* Somebody else changed a record between us reading it and saving.
 
-     A duplicate is the same shape of problem: the number they typed is now on
-     another bid. Both surface through the same handler. */
-  function resolveConflict(body) {
+     That used to be settled by throwing this screen's edit away. Now both are
+     kept: their copy is merged into ours (js/merge.js) and the batch goes again
+     on top of it. Only a value the two of them changed to different things is
+     a real clash - ours is kept, and the person is told which field so they can
+     check it.
+
+     A duplicate is a different problem - the number they typed is now on
+     another bid - and is not merged: it surfaces through the same handler for
+     the person to fix. */
+  var MAX_MERGE_ATTEMPTS = 3;
+
+  function resolveConflict(body, attempt) {
     if (body.error === 'duplicate') {
       setStatus('error', body);
       if (conflictHandler) conflictHandler(body);
       return;
     }
-    if (body.kind && body.id != null) {
-      root.Remote.applyChange(DB, {
-        kind: body.kind, id: body.id, op: 'put', json: body.current
-      });
-      root.Remote.setRev(body.kind, body.id, body.rev);
-      notify();
-    }
+    var list = body.conflicts || (body.kind && body.id != null
+      ? [{ kind: body.kind, id: body.id, current: body.current, rev: body.rev }] : []);
+    var clashes = [];
+    list.forEach(function (c) {
+      var r = root.Remote.absorb(DB, { kind: c.kind, id: c.id, op: 'put', json: c.current, rev: c.rev });
+      if (r) r.conflicts.forEach(function (x) { clashes.push(Object.assign({ kind: c.kind, id: c.id }, x)); });
+    });
+    notify();
+    if (clashes.length && conflictHandler) conflictHandler({ error: 'merged', conflicts: clashes });
+    if ((attempt || 0) < MAX_MERGE_ATTEMPTS) return pushNow((attempt || 0) + 1);
+
+    // Still refused after merging three times running - somebody is saving the
+    // same record continuously. Left unsent and said so; the retry goes again.
     setStatus('conflict', body);
     if (conflictHandler) conflictHandler(body);
+    scheduleRetry();
+  }
+
+  function scheduleRetry() {
+    if (retryTimer) return;
+    var wait = retryDelay;
+    retryAt = Date.now() + wait;
+    retryTimer = setTimeout(function () {
+      retryTimer = null;
+      retryAt = null;
+      pushNow(0);
+    }, wait);
+    retryDelay = Math.min(retryDelay * 2, 15000);
+  }
+
+  function clearRetry() {
+    if (!retryTimer) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    retryAt = null;
+  }
+
+  /* A push soon, without the repaint save() does - for a merge that arrived
+     off the stream, where the screen has already been told. */
+  function schedulePush() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(writeNow, SAVE_DEBOUNCE_MS);
+  }
+
+  /* Everything unsent, to the server. `attempt` counts pushes in a row without
+     a pause, so a record somebody else saves continuously cannot loop here. */
+  function pushNow(attempt) {
+    if (inflight) return inflight;     // it sends whatever is left when it lands
+    clearRetry();
+    writePrefs();
+    var batch = root.Remote.diff(DB);
+    if (!batch.length) {
+      writeOutbox(null);
+      lastError = null;
+      setStatus('saved');
+      return Promise.resolve();
+    }
+    // On disk before it goes on the wire: if this request never comes back,
+    // the edit is still on this machine.
+    persistOutbox();
+    setStatus('saving');
+
+    var reason = nextReason;
+    nextReason = null;
+    inflight = root.Remote.push(batch, reason).then(function () {
+      inflight = null;
+      online = true;
+      retryDelay = 1000;
+      lastError = null;
+      // Typed while it was on the wire - send that too, straight away.
+      if (attempt < 5 && root.Remote.diff(DB).length) return pushNow(attempt + 1);
+      persistOutbox();
+      setStatus(root.Remote.diff(DB).length ? 'dirty' : 'saved');
+    }, function (e) {
+      inflight = null;
+      if (reason) nextReason = reason;      // a Load still needs saying on the retry
+      if (e.status === 409 && e.body) return resolveConflict(e.body, attempt);
+      lastError = e;
+      console.error('Save failed:', e);
+      /* Refused outright - not allowed, or malformed. Asking again will not
+         change the answer, so it is shown rather than retried. Anything else
+         (no answer, a server error) is the network, and is retried. */
+      if (e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
+        setStatus('error', e);
+        return;
+      }
+      online = false;
+      scheduleRetry();
+      setStatus('offline', e);
+    });
+    return inflight;
   }
 
   function writeNow() {
     saveTimer = null;
-    setStatus('saving');
+    if (backend !== 'server') setStatus('saving');
 
     var done = function () {
       setStatus('saved');
@@ -1441,21 +1645,7 @@
       // Only what actually moved goes up. Sending the whole database on every
       // keystroke would make the last person to type the winner, quietly
       // discarding whatever anyone else had done in the meantime.
-      writePrefs();
-      var batch = root.Remote.diff(DB);
-      if (!batch.length) { setStatus('saved'); return Promise.resolve(); }
-
-      var reason = nextReason;
-      nextReason = null;
-      return root.Remote.push(batch, reason).then(function () {
-        online = true;
-        done();
-      }).catch(function (e) {
-        if (e.status === 409 && e.body) return resolveConflict(e.body);
-        online = false;
-        setStatus('offline', e);
-        console.error('Save failed:', e);
-      });
+      return pushNow(0);
     }
 
     if (backend === 'indexeddb') {
@@ -1584,6 +1774,17 @@
     /* A conflict or a duplicate came back from the server. js/app.js puts it on
        screen; nothing else needs to know. */
     onConflict: function (fn) { conflictHandler = fn; },
+
+    /* Unsent records, for the status pill and the leave-the-page guard. */
+    pendingCount: pendingCount,
+    /* Edits a previous page left unsent and this one picked back up. */
+    get restored() { return restoredCount; },
+    /* "Retry now" on the status pill: skip whatever backoff is running. */
+    retryNow: function () {
+      if (backend !== 'server') return Promise.resolve();
+      retryDelay = 1000;
+      return pushNow(0);
+    },
 
     /* Every table back to its defaults, for this person only. Where they were
        is kept - resetting your columns should not also throw you back to a

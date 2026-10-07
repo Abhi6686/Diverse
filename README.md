@@ -82,9 +82,15 @@ one browser. That is the single-user mode the app started as — useful on a lap
 nothing is shared. Firefox and Safari refuse IndexedDB on `file://` URLs and drop to a smaller
 localStorage fallback; the app says so in an amber bar.
 
-When the server goes away mid-session, the app says so rather than pretending: the footer shows
-**Offline** and edits stop being accepted until it reconnects, so two people can never drift
-apart and overwrite each other.
+When the server goes away mid-session, the app says so rather than pretending. The footer
+shows **Offline - N changes waiting** and an amber bar explains what is happening. You can
+keep working. Every unsent edit is kept on disk in that browser and retried automatically,
+backing off from 1 to 15 seconds; click the indicator, or **Retry now** on the bar, to send
+at once. Changes other people make still arrive in the meantime and are merged with yours,
+so nothing typed offline is overwritten. A tab closed while offline sends its unsent edits
+the next time that person opens the app on that machine. The dot beside the indicator shows
+whether you are connected, and the words show whether your edits are saved. **All changes
+saved** appears only when nothing is left to send.
 
 The original `Bid_Proposal_Manager_2026 (1).html` is left untouched as a reference copy.
 
@@ -104,8 +110,15 @@ A few things worth knowing:
 - **Only what changed is sent.** On save the client compares each record against the copy the
   server last confirmed and sends the difference. Sending the whole database would make the
   last person to type the winner.
-- **Two people editing one bid do not silently overwrite each other.** Every record carries a
-  revision; the second save is refused, the server's version is shown, and the app says so.
+- **Two people editing one record both keep their work.** Every record carries a revision,
+  and every change on the stream carries the revision it produced. A save made against an
+  older revision is merged rather than thrown away (`js/merge.js`), then sent again. Products,
+  groups, material rows, catalog parts and history entries are matched by id, so both sides'
+  additions and deletions survive, and drawing-takeoff rows added on both sides are all kept.
+  Only one field changed by both people to different values counts as a real clash. In that
+  case the value typed on your screen stands, and a toast names the field so you can check it.
+  The same merge runs when a colleague's change arrives while you still have unsent edits to
+  that record.
 - **The project number is unique in the database itself**, not only in the form that types it.
   A check in the browser can be raced by two machines; a constraint cannot.
 - **Dropping the connection is cheap.** Every change has a sequence number, so a browser that
@@ -1249,6 +1262,7 @@ or one at a time:
 
 ```
 npm run test:costs   # cost maths vs the workbook, to the cent
+npm run test:merge   # the three-way merge on its own, no dependencies
 npm run test:api     # 100 checks: schema, conflicts, uniqueness, the change log, accounts
 npm run test:ui      # 521 checks driving the app in a real DOM
 npm run test:sync    # 37 checks: two browsers, two people, one server, live
@@ -1263,7 +1277,10 @@ ending at **Total Bid Cost $619,300.12**.
 `sync.js` is the one that proves the shared part works: it starts a real server, opens two
 browsers against it — one signing up through the setup screen as an Admin, the other logging in
 as an Employee, each with its own cookie jar — and checks that an edit in one shows up in the
-other, that a conflict is reported rather than lost, that the Employee's screen has no delete
+other, that two people editing one record, one after the other or at the same moment, both
+keep their work, that a same-field clash keeps the local value and says so, that edits made
+offline survive a colleague's change and are sent on reconnecting (or after the tab is closed
+and reopened), that the Employee's screen has no delete
 button, that a delete forged past the screen is refused anyway, and that one person's column
 layout does not move anybody else's.
 

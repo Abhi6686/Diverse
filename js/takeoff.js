@@ -54,6 +54,10 @@
   function save() {
     var t = takeoff();
     if (t) t.updatedAt = new Date().toISOString();
+    // The bid's price and LF follow the takeoff as it is typed, not only when
+    // somebody remembers to press Save takeoff - the edit is already on the
+    // server, and the bids table should not say otherwise.
+    if (t) pushToBid(t);
     recordChange(t);
     root.Store.save();
     render();
@@ -74,7 +78,7 @@
       root.History.recordDocEvent(bid, 'takeoff', 'created');
     }
     state.takeoffId = bid.takeoffId;
-    state.productId = null;
+    recallSelection();
     d.ui.lastTakeoffId = state.takeoffId;
     // The baseline the next save diffs against. Without it the first edit of a
     // session reports every field as having moved from empty.
@@ -83,12 +87,55 @@
     root.App.switchTab('takeoff');
   }
 
+  /* Opening a takeoff is not an edit of it. This used to go through save(),
+     which stamped updatedAt and wrote the whole record to the server - so
+     merely looking at a takeoff repainted every colleague's screen and marked
+     its proposal out of date. Only the layout (which takeoff is open) moves. */
   function openTakeoff(id) {
     state.takeoffId = id;
-    state.productId = null;
+    recallSelection();
     db().ui.lastTakeoffId = id;
     remember(takeoff());
-    save();
+    root.Store.save();
+    render();
+  }
+
+  /* Which product was selected, per takeoff, in this person's layout - so a
+     reload, a trip to another tab or a colleague's save brings them back to
+     the product they were on rather than the first one. */
+  function rememberSelection() {
+    if (!state.takeoffId) return;
+    var ui = db().ui;
+    if (!ui.takeoffSel || typeof ui.takeoffSel !== 'object') ui.takeoffSel = {};
+    ui.takeoffSel[state.takeoffId] = { productId: state.productId, groupId: state.groupId };
+  }
+
+  function recallSelection() {
+    var all = db().ui.takeoffSel;
+    var sel = state.takeoffId && all && all[state.takeoffId];
+    state.productId = sel ? sel.productId || null : null;
+    state.groupId = sel ? sel.groupId || null : null;
+  }
+
+  /* A selection, shown. Not save(): picking a product changes nothing in the
+     takeoff, and writing it anyway bumped the record's rev under anybody else
+     editing it and repainted every other screen on the project. */
+  function showSelection() {
+    rememberSelection();
+    root.Store.save();          // the layout only - no record has changed
+    render();
+    revealActive();
+  }
+
+  /* The selected product's row, scrolled into the list's view if it is not
+     already - and left exactly where it is if it is. */
+  function revealActive() {
+    var box = U.$('takeoffTreeScroll');
+    var el = box && box.querySelector('[data-active-product]');
+    if (!el || !el.getBoundingClientRect) return;
+    var b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (r.top < b.top) box.scrollTop -= (b.top - r.top) + 4;
+    else if (r.bottom > b.bottom) box.scrollTop += (r.bottom - b.bottom) + 4;
   }
 
   function bidFor(t) {
@@ -332,13 +379,18 @@
     if (!host || host.classList.contains('hidden')) return;
     var t = takeoff();
     if (!t) { host.innerHTML = renderPicker(); return; }
-    host.innerHTML =
-      '<div class="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6">' +
-        // The tree stays up in both views, so the effect of a rate change on
-        // Total Bid Cost is visible while you are making it.
-        '<div>' + renderTree(t) + '</div>' +
-        '<div>' + (state.view === 'rates' ? renderProjectRates(t) : renderProductPane(t)) + '</div>' +
-      '</div>';
+    // The product list keeps its scroll position across the rebuild. Without
+    // this every render - a click, an edit, a colleague's save - put the list
+    // back at the top, which reads as "it jumped to the first product".
+    U.preserveView(function () {
+      host.innerHTML =
+        '<div class="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6">' +
+          // The tree stays up in both views, so the effect of a rate change on
+          // Total Bid Cost is visible while you are making it.
+          '<div>' + renderTree(t) + '</div>' +
+          '<div>' + (state.view === 'rates' ? renderProjectRates(t) : renderProductPane(t)) + '</div>' +
+        '</div>';
+    });
   }
 
   function renderPicker() {
@@ -376,7 +428,7 @@
         ? U.qty(p.totalQty || c.itemCount) + ' EA'
         : U.qty(p.totalLF) + ' LF';
 
-      var head = '<div class="flex items-center gap-1 px-2 py-2 rounded-lg cursor-pointer ' +
+      var head = '<div' + (active ? ' data-active-product' : '') + ' class="flex items-center gap-1 px-2 py-2 rounded-lg cursor-pointer ' +
         (active ? 'bg-brand-soft ring-1 ring-brand/40' : 'hover:bg-raised') + '">' +
         '<button onclick="event.stopPropagation();Takeoff.toggle(\'p:' + p.id + '\')" class="w-5 text-faint hover:text-ink text-xs">' +
           '<i class="fas fa-chevron-' + (open ? 'down' : 'right') + '"></i></button>' +
@@ -439,7 +491,7 @@
           '<button onclick="Takeoff.openTakeoff(null)" class="text-xs text-faint hover:text-ink px-1.5 py-1" title="Choose another takeoff"><i class="fas fa-exchange-alt"></i></button>' +
         '</div>' +
       '</div>' +
-      '<div class="p-2 max-h-[520px] overflow-y-auto">' +
+      '<div id="takeoffTreeScroll" data-keep-scroll class="p-2 max-h-[520px] overflow-y-auto">' +
         (products || '<p class="text-sm text-faint text-center py-8">No product types yet.<br>Add one below.</p>') +
       '</div>' +
       renderRollup(t, roll) +
@@ -475,7 +527,7 @@
         '<span class="text-xs font-bold text-ink-strong uppercase tracking-wider">Total Bid Cost</span>' +
         '<span class="font-mono text-base font-bold text-ink-strong">' + U.currency2(roll.total) + '</span></div>' +
       '<div class="flex gap-2 mt-3">' +
-        '<button onclick="Takeoff.commit()" class="flex-1 px-3 py-2 bg-ok hover:bg-ok-hover text-white rounded-lg text-xs font-semibold"><i class="fas fa-save mr-1"></i>Save takeoff</button>' +
+        '<button onclick="Takeoff.commit()" title="Every change is already saved as you type. This also teaches the rate library any new or repriced parts." class="flex-1 px-3 py-2 bg-ok hover:bg-ok-hover text-white rounded-lg text-xs font-semibold"><i class="fas fa-save mr-1"></i>Save takeoff</button>' +
         '<button onclick="Proposal.generateFromTakeoff(\'' + t.id + '\')" class="flex-1 px-3 py-2 bg-chrome hover:bg-chrome-soft text-white rounded-lg text-xs font-semibold"><i class="fas fa-file-contract mr-1"></i>Proposal</button>' +
       '</div>' +
       /* The whole takeoff as a workbook. There is a per-product export in each
@@ -1890,20 +1942,22 @@
     currentId: function () { return state.takeoffId; },
     commit: commit,
 
+    // Layout only (db.ui is this person's, not the takeoff's) - see showSelection.
     toggle: function (key) {
       var c = db().ui.collapsed;
       c[key] = !c[key];
-      save();
+      root.Store.save();
+      render();
     },
     selectProduct: function (id) {
       state.productId = id; state.groupId = null;
       state.view = 'estimate';       // picking a product means you want it shown
-      save();
+      showSelection();
     },
     selectGroup: function (pid, gid) {
       state.productId = pid; state.groupId = gid;
       state.view = 'estimate';
-      save();
+      showSelection();
     },
     setTab: function (tb) { state.tab = tb; render(); },
     setView: function (v) { state.view = v; render(); },
@@ -2358,7 +2412,17 @@
       save();
     },
     removeRow: function (i) { currentGroup().grid.rows.splice(i, 1); save(); },
-    setRowRef: function (i, v) { currentGroup().grid.rows[i].ref = v; root.Store.save(); },
+    /* Stamped like any other takeoff edit, because the refs now print on the
+       proposal's scope - a changed ref has to mark the proposal out of date so
+       Regenerate picks it up. No render(): this fires on blur, and rebuilding
+       the grid then would drop the focus that is on its way to the next cell. */
+    setRowRef: function (i, v) {
+      var t = takeoff();
+      currentGroup().grid.rows[i].ref = v;
+      if (t) t.updatedAt = new Date().toISOString();
+      recordChange(t);
+      root.Store.save();
+    },
 
     /* ---- documents ---------------------------------------------------- */
 

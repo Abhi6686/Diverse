@@ -25,7 +25,7 @@ function check(label, cond, detail) {
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 const FILES = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js',
-  'js/proposal.styles.js', 'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/remote.js',
+  'js/proposal.styles.js', 'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/merge.js', 'js/remote.js',
   'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js', 'js/bidgrid.js',
   'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js', 'js/takeoff.js',
   'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
@@ -45,7 +45,7 @@ const HTML = fs.readFileSync(path.join(ROOT, 'Bid_Proposal_Manager_2026.html'), 
 
    The jar is per browser, which is what makes two windows two different people
    rather than one session shared by both. */
-function openBrowser(origin, label, jar) {
+function openBrowser(origin, label, jar, storage) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', e => {
     failures++; errors.push(label + ' page error');
@@ -57,7 +57,7 @@ function openBrowser(origin, label, jar) {
     url: (origin || 'file://' + ROOT.replace(/\\/g, '/')) + '/',
     virtualConsole: vc,
     beforeParse(win) {
-      const store = {};
+      const store = storage || {};   // shared between two pages = a reload
       Object.defineProperty(win, 'localStorage', {
         value: {
           getItem: k => (k in store ? store[k] : null),
@@ -374,23 +374,114 @@ async function main() {
     check('and a delete forged past the screen is refused anyway', forged.status === 403,
       String(forged.status));
 
-    console.log('\n--- a conflict is reported, not silently lost ---');
-    // Somebody edits the record straight on the server while A holds an older
-    // copy - exactly two people editing one bid at the same moment.
-    const contested = A.Store.db.bids[1];
-    const serverCopy = db.snapshot().bids.find(b => b.id === contested.id);
-    db.putMany([{ kind: 'bid', id: contested.id, op: 'put',
-      json: Object.assign({}, serverCopy, { project: 'Won the race' }) }], null);
+    const onServer = id => db.snapshot().bids.find(b => b.id === id);
+    const bidOn = (W, id) => W.Store.db.bids.find(b => b.id === id);
+    const notices = [];
+    A.Store.onConflict(body => notices.push(body));
 
-    contested.project = 'Lost the race';
+    console.log('\n--- one after the other, on the same record ---');
+    // A edits, B receives it, then B edits the same bid. B used to still hold
+    // the rev from before A's edit, so its save was refused as stale and A's
+    // copy replaced what B typed.
+    const seqBid = A.Store.db.bids[5];
+    seqBid.project = 'Named by A';
     A.Store.save();
     await wait(1400);
-    check('the server keeps the version that got there first',
-      db.snapshot().bids.find(b => b.id === contested.id).project === 'Won the race',
-      db.snapshot().bids.find(b => b.id === contested.id).project);
-    check('and A is corrected to it rather than believing its own',
-      A.Store.db.bids.find(b => b.id === contested.id).project === 'Won the race',
-      A.Store.db.bids.find(b => b.id === contested.id).project);
+    bidOn(B, seqBid.id).location = 'Placed by B';
+    B.Store.save();
+    await wait(1400);
+    check('B\'s edit after A\'s lands on the server',
+      onServer(seqBid.id).location === 'Placed by B', onServer(seqBid.id).location);
+    check('without undoing A\'s', onServer(seqBid.id).project === 'Named by A',
+      onServer(seqBid.id).project);
+    check('and B is not told it lost anything', B.Store.status.state === 'saved', B.Store.status.state);
+
+    console.log('\n--- at the same moment, on the same record ---');
+    const both = A.Store.db.bids[6];
+    both.project = 'Project typed on A';
+    bidOn(B, both.id).location = 'Location typed on B';
+    A.Store.save();
+    B.Store.save();
+    await wait(2000);
+    check('both edits are on the server',
+      onServer(both.id).project === 'Project typed on A' &&
+      onServer(both.id).location === 'Location typed on B',
+      JSON.stringify({ p: onServer(both.id).project, l: onServer(both.id).location }));
+    check('and on both screens',
+      bidOn(A, both.id).location === 'Location typed on B' &&
+      bidOn(B, both.id).project === 'Project typed on A');
+
+    console.log('\n--- the same field, changed twice ---');
+    // Somebody edits the record straight on the server while A holds an older
+    // copy. Only one value can stand: the one typed here, and A is told which.
+    const contested = A.Store.db.bids[1];
+    const serverCopy = onServer(contested.id);
+    db.putMany([{ kind: 'bid', id: contested.id, op: 'put',
+      json: Object.assign({}, serverCopy, { project: 'Typed elsewhere', notes: 'Theirs' }) }], null);
+
+    contested.project = 'Typed on A';
+    A.Store.save();
+    await wait(1400);
+    check('the value typed on this screen stands',
+      onServer(contested.id).project === 'Typed on A', onServer(contested.id).project);
+    check('their other change is kept, not reverted', onServer(contested.id).notes === 'Theirs',
+      onServer(contested.id).notes);
+    check('and A is told which field clashed',
+      notices.some(n => n.error === 'merged' && n.conflicts.some(c => /project$/.test(c.path))),
+      JSON.stringify(notices));
+
+    console.log('\n--- offline, while somebody else carries on ---');
+    const realFetch = A.fetch;
+    const cut = (u, o) => (o && o.method === 'POST' && String(u).indexOf('/api/changes') >= 0
+      ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(u, o));
+    A.fetch = cut;
+    const away = A.Store.db.bids[7];
+    away.project = 'Typed on A while offline';
+    A.Store.save();
+    await wait(800);
+    check('A says it is offline, not saved', A.Store.status.state === 'offline', A.Store.status.state);
+    check('and counts what is waiting', A.Store.status.pending >= 1, String(A.Store.status.pending));
+    check('the unsent edit is kept on disk',
+      /Typed on A while offline/.test(A.localStorage.getItem('dvbid.outbox.' + A.Store.user.id) || ''));
+
+    bidOn(B, away.id).location = 'B carried on';
+    B.Store.save();
+    await wait(1200);
+    check('B\'s change reaches A while it cannot save',
+      bidOn(A, away.id).location === 'B carried on', bidOn(A, away.id).location);
+    check('without wiping what A typed',
+      bidOn(A, away.id).project === 'Typed on A while offline', bidOn(A, away.id).project);
+
+    A.fetch = realFetch;
+    await A.Store.retryNow();
+    await wait(600);
+    check('back online, A\'s edit reaches the server',
+      onServer(away.id).project === 'Typed on A while offline', onServer(away.id).project);
+    check('beside B\'s', onServer(away.id).location === 'B carried on', onServer(away.id).location);
+    check('and only now does A say saved', A.Store.status.state === 'saved' && A.Store.status.pending === 0,
+      A.Store.status.state + '/' + A.Store.status.pending);
+    check('with nothing left on disk', !A.localStorage.getItem('dvbid.outbox.' + A.Store.user.id));
+
+    console.log('\n--- closed while offline ---');
+    const disk = {};
+    const C = await openBrowser(ORIGIN, 'client C', jarA, disk);
+    const cFetch = C.fetch;
+    C.fetch = (u, o) => (o && o.method === 'POST' && String(u).indexOf('/api/changes') >= 0
+      ? Promise.reject(new TypeError('Failed to fetch')) : cFetch(u, o));
+    const lost = C.Store.db.bids.find(b => b.id === A.Store.db.bids[8].id);
+    lost.project = 'Typed before the tab closed';
+    C.Store.save();
+    await wait(800);
+    C.Remote.disconnect();
+    C.close();
+    check('it never reached the server', onServer(lost.id).project !== 'Typed before the tab closed');
+    const C2 = await openBrowser(ORIGIN, 'client C reopened', jarA, disk);
+    await wait(1500);
+    check('the reopened page picks the edit back up', C2.Store.restored >= 1, String(C2.Store.restored));
+    check('and sends it', onServer(lost.id).project === 'Typed before the tab closed',
+      onServer(lost.id).project);
+    C2.Remote.disconnect();
+    C2.close();
 
     console.log('\n--- no server, no problem ---');
     const solo = await openBrowser(null, 'offline client');

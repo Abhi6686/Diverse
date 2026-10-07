@@ -166,7 +166,19 @@
         : '';
     }
 
+    /* The drawings this product was measured from, first - the line the
+       client's reviewer checks the scope against. Every Drawing Ref. No. typed
+       on the product's takeoff grids, in the order they appear, each once. */
+    var refs = [];
+    p.groups.forEach(function (g) {
+      ((g.grid && g.grid.rows) || []).forEach(function (row) {
+        var r = String(row.ref == null ? '' : row.ref).trim();
+        if (r && refs.indexOf(r) < 0) refs.push(r);
+      });
+    });
+
     var lead = [];
+    if (refs.length) lead.push('Drawing Ref. No.: ' + refs.join(', '));
     if (p.material) lead.push('Material: ' + p.material);
     if (lead.length) html.push(bullets(lead));
 
@@ -949,6 +961,8 @@
   root.Proposal = {
     render: render,
     generateFromTakeoff: generateFromTakeoff,
+    // The bullet list one product contributes to the scope, on its own - for tests.
+    scopeDetailsFor: detailsFor,
     isStale: isStale,
     total: total,
     open: function (id) {

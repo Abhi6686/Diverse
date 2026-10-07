@@ -144,8 +144,8 @@ function linkEngineer(user, actorId) {
   // leaving one person attached to two entries.
   if (already && (!match || already.id !== match.id)) {
     const freed = Object.assign({}, already.rec, { userId: null });
-    db.put('engineer', already.id, freed, already.rev, actorId);
-    sync.broadcast([{ kind: 'engineer', id: already.id, op: 'put', json: freed }], null);
+    const freedOut = db.put('engineer', already.id, freed, already.rev, actorId);
+    sync.broadcast([{ kind: 'engineer', id: already.id, op: 'put', json: freed, seq: freedOut.seq, rev: freedOut.rev }], null);
   }
 
   let id, rec, rev;
@@ -161,7 +161,7 @@ function linkEngineer(user, actorId) {
   }
 
   const out = db.put('engineer', id, rec, rev, actorId);
-  sync.broadcast([{ kind: 'engineer', id: id, op: 'put', json: rec, seq: out.seq }], null);
+  sync.broadcast([{ kind: 'engineer', id: id, op: 'put', json: rec, seq: out.seq, rev: out.rev }], null);
   return id;
 }
 
@@ -298,9 +298,14 @@ async function handle(req, res, ctx) {
         /* The list is a prefix of the gap, not the whole of it - the client
            must reload rather than apply it and believe it is caught up. */
         truncated: out.truncated,
+        /* A row logged before the change log carried revs goes out hollow, so
+           the client fetches the record and its current rev from /api/records
+           rather than applying a body whose rev it cannot know. */
         changes: out.rows.map(r => ({
           seq: r.seq, kind: r.kind, id: r.entity_id, op: r.op,
-          json: r.json ? JSON.parse(r.json) : null, at: r.at, by: r.by
+          json: r.json && (r.rev != null || r.op === 'delete') ? JSON.parse(r.json) : null,
+          rev: r.rev == null ? null : r.rev,
+          at: r.at, by: r.by
         }))
       });
       return true;
@@ -355,7 +360,8 @@ async function handle(req, res, ctx) {
           // instead of overwriting somebody else's edit.
           json(res, 409, {
             error: 'conflict', kind: e.kind, id: e.id,
-            current: e.current.json, rev: e.current.rev
+            current: e.current.json, rev: e.current.rev,
+            conflicts: e.all || [{ kind: e.kind, id: e.id, current: e.current.json, rev: e.current.rev }]
           });
           return true;
         }
@@ -372,7 +378,7 @@ async function handle(req, res, ctx) {
          office; the client fetches those from /api/records. */
       const originId = body && body.clientId ? body.clientId : null;
       sync.broadcast(applied.map((a, i) => ({
-        seq: a.seq, kind: a.kind, id: a.id,
+        seq: a.seq, kind: a.kind, id: a.id, rev: a.rev,
         op: batch[i].op || 'put',
         json: (batch[i].op === 'delete' || !db.bodyTravels(batch[i].json))
           ? null : batch[i].json,

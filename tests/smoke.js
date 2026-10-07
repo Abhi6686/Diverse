@@ -70,7 +70,7 @@ const dom = new JSDOM(html, {
 // them from file:// reliably across platforms.
 const win = dom.window;
 const localScripts = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js', 'js/proposal.styles.js',
-  'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js',
+  'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/merge.js', 'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js',
   'js/bidgrid.js', 'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js',
   'js/xlsx.zip.js', 'js/estimate.template.js', 'js/estimate.xlsx.js',
   'js/report.xlsx.js', 'js/takeoff.js',
@@ -1006,6 +1006,36 @@ check('no amounts leak into the bullet list',
   !/\$[\d,]/.test(scope0.details), scope0.details);
 check('the scope item is worded the way the printed proposal words it',
   /^Supply and Installation of /.test(scope0.description), scope0.description);
+
+/* The drawings a product was measured from lead its scope bullets, above the
+   material - each ref once, in the order the grids list them, blanks skipped. */
+{
+  const sample = JSON.parse(JSON.stringify(t.products[0]));
+  sample.material = 'Galvanized Steel';
+  sample.groups[0].grid.rows = [
+    { ref: '1', values: {} }, { ref: ' 2 ', values: {} }, { ref: '', values: {} }, { ref: '1', values: {} }
+  ];
+  const html = Proposal.scopeDetailsFor(sample);
+  check('Drawing Ref. No. is the first scope bullet',
+    html.indexOf('<ul><li>Drawing Ref. No.: 1, 2</li><li>Material: Galvanized Steel</li>') === 0, html);
+  sample.groups.forEach(g => { g.grid.rows = [{ ref: '  ', values: {} }]; });
+  check('and is left out when no row has a ref',
+    !/Drawing Ref/.test(Proposal.scopeDetailsFor(sample)));
+}
+
+/* Picking a product is not an edit: it must not stamp the takeoff, or every
+   click would write the record and repaint everybody else's screen. */
+{
+  const stamp = t.updatedAt;
+  const json = JSON.stringify(t);
+  Takeoff.selectProduct(t.products[t.products.length - 1].id);
+  Takeoff.selectProduct(t.products[0].id);
+  check('selecting a product leaves the takeoff record untouched',
+    JSON.stringify(t) === json && t.updatedAt === stamp);
+  check('and is remembered in the layout',
+    Store.db.ui.takeoffSel && Store.db.ui.takeoffSel[t.id] &&
+    Store.db.ui.takeoffSel[t.id].productId === t.products[0].id);
+}
 
 /* The spec bullet is the feature and the full description - what the printed
    proposal carries - rather than the abbreviated Options value it used to use. */

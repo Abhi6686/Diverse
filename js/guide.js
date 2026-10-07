@@ -199,7 +199,14 @@
       points: [
         'Every edit is written to the shared database as you make it, and reaches ' +
           'everyone else\'s screen straight away. There is no Save button because ' +
-          'there is nothing waiting to be saved.',
+          'there is nothing waiting to be saved. Save takeoff does one extra thing: it ' +
+          'teaches the rate library any new or repriced parts.',
+        'If the connection drops, keep working. The footer counts the changes waiting, they ' +
+          'are kept on this computer, and they go up by themselves when it comes back. ' +
+          '"All changes saved" only shows when nothing is left to send.',
+        'Two people can work in the same takeoff at once. Both sets of edits are merged. ' +
+          'If you both changed the same field, your value is kept and a message names the ' +
+          'field so you can check it.',
         'Backing the office up is copying the diverse.db file on the server; ' +
           'restoring one is putting that file back.',
         'XLSX exports the bid list you are looking at - the same columns, filters and ' +

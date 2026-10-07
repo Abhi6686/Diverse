@@ -158,7 +158,127 @@
     }
 
     if (change.op === 'delete') { delete shadow[key]; delete revs[key]; }
-    else shadow[key] = JSON.stringify(change.json);
+    else {
+      shadow[key] = JSON.stringify(change.json);
+      // The rev this body is at. Without it the next edit here to the same
+      // record went up carrying the rev from before, was refused as stale, and
+      // the server's copy replaced what had been typed.
+      if (change.rev != null) revs[key] = change.rev;
+    }
+  }
+
+  /* ---- unsent edits ------------------------------------------------------ */
+
+  function collectionOf(kind) {
+    return COLLECTIONS.filter(function (x) { return x.kind === kind; })[0] || null;
+  }
+
+  function currentOf(db, kind, id) {
+    if (kind === 'setting') return db[id];
+    var c = collectionOf(kind);
+    if (!c || !db[c.prop]) return undefined;
+    if (c.shape === 'array') {
+      return db[c.prop].filter(function (r) { return String(r.id) === String(id); })[0];
+    }
+    return db[c.prop][id];
+  }
+
+  function setRecord(db, kind, id, value) {
+    if (kind === 'setting') { db[id] = value; return; }
+    var c = collectionOf(kind);
+    if (!c) return;
+    if (c.shape === 'array') {
+      var list = db[c.prop];
+      var i = list.findIndex(function (r) { return String(r.id) === String(id); });
+      if (i >= 0) list[i] = value; else list.push(value);
+    } else {
+      db[c.prop][id] = value;
+    }
+  }
+
+  /* Has this screen changed the record since the server last confirmed it? */
+  function isDirty(db, kind, id) {
+    var key = keyOf(kind, id);
+    var cur = currentOf(db, kind, id);
+    if (cur === undefined) return shadow[key] !== undefined;
+    return shadow[key] !== JSON.stringify(cur);
+  }
+
+  /* SOMEBODY ELSE'S CHANGE, LANDING ON A RECORD WITH EDITS NOT YET SENT.
+   *
+   * applyChange on its own replaced the record outright, and moved the shadow
+   * to match - so whatever had been typed here and not yet sent disappeared,
+   * and the diff could no longer even see that it had been there. That is how
+   * a machine that had been offline lost everything it typed the moment it
+   * caught up.
+   *
+   * A record with no local edits is still simply replaced. One with local
+   * edits gets the three-way merge in js/merge.js: their change folded into
+   * ours, the shadow moved to the server's copy and the rev to theirs, so the
+   * next save sends the merged record as a clean edit on top of theirs.
+   *
+   * Returns the merge result ({value, conflicts}) when a merge happened, else
+   * null. A remote delete always wins - there is nothing left to merge into. */
+  function absorb(db, change) {
+    var key = keyOf(change.kind, change.id);
+    var local = currentOf(db, change.kind, change.id);
+    if (change.op === 'delete' || !root.Merge || !isDirty(db, change.kind, change.id)) {
+      applyChange(db, change);
+      return null;
+    }
+    if (local === undefined) {
+      // Deleted here, edited there: the delete stands, now against their rev.
+      shadow[key] = JSON.stringify(change.json);
+      if (change.rev != null) revs[key] = change.rev;
+      return null;
+    }
+    var base = shadow[key] !== undefined ? JSON.parse(shadow[key]) : undefined;
+    var r = root.Merge.merge3(base, local, change.json);
+    setRecord(db, change.kind, change.id, r.value);
+    shadow[key] = JSON.stringify(change.json);
+    if (change.rev != null) revs[key] = change.rev;
+    return r;
+  }
+
+  /* The unsent edits as something that can be written to disk and read back by
+     the next page load: each one with the base it was made against, so it can
+     be merged onto whatever the server holds by then rather than overwrite it. */
+  function pending(db) {
+    return diff(db).map(function (c) {
+      var key = keyOf(c.kind, c.id);
+      return {
+        kind: c.kind, id: c.id, op: c.op, json: c.op === 'delete' ? null : c.json,
+        base: shadow[key] !== undefined ? JSON.parse(shadow[key]) : null
+      };
+    });
+  }
+
+  /* An entry from pending(), saved by an earlier page, folded into a freshly
+     loaded database. Returns the merge result, or null if there was nothing to
+     restore (the server already has it, or the record has gone). */
+  function restore(db, entry) {
+    var server = currentOf(db, entry.kind, entry.id);
+    if (entry.op === 'delete') {
+      if (server === undefined) return null;
+      // Only if nobody has touched it since - a delete must not take a
+      // colleague's later work with it.
+      if (root.Merge.eq(server, entry.base)) {
+        if (entry.kind === 'setting') delete db[entry.id];
+        else {
+          var c = collectionOf(entry.kind);
+          if (c.shape === 'array') {
+            db[c.prop] = db[c.prop].filter(function (r) { return String(r.id) !== String(entry.id); });
+          } else delete db[c.prop][entry.id];
+        }
+        return { value: null, conflicts: [] };
+      }
+      return null;
+    }
+    if (server === undefined && entry.base != null) return null;   // deleted on the server since
+    if (server !== undefined && root.Merge.eq(server, entry.json)) return null;
+    var r = root.Merge.merge3(entry.base == null ? undefined : entry.base, entry.json, server);
+    setRecord(db, entry.kind, entry.id, r.value);
+    return r;
   }
 
   /* ---- delivering changes ------------------------------------------------ */
@@ -340,6 +460,10 @@
     remember: remember,
     diff: diff,
     applyChange: applyChange,
+    absorb: absorb,
+    isDirty: isDirty,
+    pending: pending,
+    restore: restore,
 
     /* Sends a batch and returns what the server made of it. A conflict or a
        duplicate comes back as a rejected promise carrying the server's version,
@@ -355,9 +479,15 @@
       }).then(function (body) {
         (body.applied || []).forEach(function (a, i) {
           var key = keyOf(a.kind, a.id);
-          revs[key] = a.rev;
           if (batch[i] && batch[i].op === 'delete') { delete shadow[key]; delete revs[key]; }
-          else if (batch[i]) shadow[key] = JSON.stringify(batch[i].json);
+          // Unless a later change to the same record already arrived off the
+          // stream while this request was in flight - then that one is newer,
+          // and stepping the shadow back to what we sent would make the next
+          // save look stale.
+          else if (batch[i] && !(revs[key] > a.rev)) {
+            revs[key] = a.rev;
+            shadow[key] = JSON.stringify(batch[i].json);
+          }
           if (a.seq > lastSeq) lastSeq = a.seq;
         });
         return body;

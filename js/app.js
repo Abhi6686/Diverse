@@ -112,6 +112,10 @@
         root.Bids.refresh();
         resumeLastSession();
         hideBooting();
+        if (root.Store.restored) {
+          U.toast('Recovered ' + plural(root.Store.restored, 'unsaved change') +
+            ' from your last session. Sending ' + (root.Store.restored === 1 ? 'it' : 'them') + ' now.', 'info');
+        }
       })
       .catch(function (err) {
         console.error(err);
@@ -121,7 +125,16 @@
     // Best effort: an IndexedDB write started here usually completes, but the
     // debounce is short enough that there is rarely anything pending.
     root.addEventListener('pagehide', function () { root.Store.flush(); });
-    root.addEventListener('beforeunload', function () { root.Store.flush(); });
+    root.addEventListener('beforeunload', function (e) {
+      root.Store.flush();
+      /* Nothing is lost by leaving - unsent edits are on disk and the next
+         page sends them - but somebody closing a tab while offline should
+         know their work has not reached anyone else yet. */
+      if (root.Store.shared && !root.Store.online && root.Store.pendingCount()) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
   }
 
   /* Reopen the takeoff and proposal that were last in use, then land on the
@@ -191,28 +204,69 @@
 
   /* The footer used to say "Auto-saved" as static text, which was decoration.
      With an async database a silent write failure would otherwise be invisible. */
+  /* Two things, kept apart because conflating them is how a screen said
+     "online" while the server did not have the edit: whether this window can
+     reach the server, and whether everything typed here has got there. "Saved"
+     now appears only when the count of unsent records is zero.
+
+     Clicking it sends whatever is waiting straight away, rather than after the
+     retry's backoff. */
   function wireSaveIndicator() {
+    var lastSaved = null;
     root.Store.onStatus(function (s) {
+      var pending = s.pending || 0;
+      if (s.state === 'saved' && !pending) lastSaved = s.at;
+
+      // The banner: only when something is actually waiting on the network.
+      var bar = U.$('offlineBar');
+      if (bar) {
+        var waiting = s.state === 'offline' && pending > 0;
+        bar.classList.toggle('hidden', !waiting);
+        if (waiting) {
+          bar.querySelector('.offline-message').textContent = 'Offline - ' + plural(pending, 'change') +
+            ' kept on this computer, and sent automatically when the connection returns.' +
+            ' Keep working; nothing is lost.';
+        }
+      }
+
       // Looked up per update, not once: in a popped-out window the indicator
       // lives in a header js/nav.js has not rendered yet at wire time.
       var el = U.$('saveIndicator');
       if (!el) return;
-      var time = s.at ? s.at.toLocaleTimeString('en-US',
-        { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+      var time = function (d) {
+        return d ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+      };
+      var waitingText = pending ? plural(pending, 'change') + ' waiting' : '';
       var map = {
         idle: ['fa-clock', 'text-faint', 'Ready'],
         dirty: ['fa-pen', 'text-warn', 'Unsaved changes'],
         saving: ['fa-circle-notch fa-spin', 'text-brand', 'Saving...'],
-        saved: ['fa-check-circle', 'text-ok', 'Saved ' + time],
-        error: ['fa-exclamation-triangle', 'text-danger', 'Save failed'],
+        saved: pending
+          ? ['fa-pen', 'text-warn', waitingText]
+          : ['fa-check-circle', 'text-ok', 'All changes saved ' + time(s.at)],
+        error: ['fa-exclamation-triangle', 'text-danger', 'Not saved - ' + (s.error || 'refused by the server')],
         nostore: ['fa-exclamation-triangle', 'text-danger', 'Not being saved'],
-        offline: ['fa-plug-circle-xmark', 'text-danger', 'Offline'],
-        conflict: ['fa-code-branch', 'text-warn', 'Changed by someone else']
+        offline: ['fa-plug-circle-xmark', 'text-danger',
+          pending ? 'Offline - ' + waitingText + ', retrying' : 'Offline'],
+        conflict: ['fa-code-branch', 'text-warn', 'Busy record - ' + (waitingText || 'retrying')]
       };
       var m = map[s.state] || map.idle;
-      el.innerHTML = '<i class="fas ' + m[0] + ' mr-1 ' + m[1] + '"></i>' + U.esc(m[2]);
+      // The dot is the connection, the words are the saving.
+      var dot = root.Store.shared
+        ? '<span class="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ' +
+          (s.live ? 'bg-ok' : 'bg-danger') + '"></span>'
+        : '';
+      el.innerHTML = dot + '<i class="fas ' + m[0] + ' mr-1 ' + m[1] + '"></i>' + U.esc(m[2]);
+      el.title = (s.live ? 'Connected to the server.' : 'Not connected to the server.') +
+        (pending ? ' ' + plural(pending, 'record') + ' not yet saved - click to send now.' : '') +
+        (lastSaved ? ' Last saved ' + time(lastSaved) + '.' : '') +
+        (s.error && s.state !== 'saved' ? '\nLast error: ' + s.error : '');
+      el.style.cursor = pending ? 'pointer' : '';
+      el.onclick = pending ? function () { root.Store.retryNow(); } : null;
     });
   }
+
+  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
 
   /* Somebody else's edit arriving - from another tab on this machine, or from
      another person on the shared server. Either way the rule is the same: the
@@ -261,10 +315,13 @@
       // hear about it, so there is nothing to reload - only to repaint.
       if (info && info.remote) {
         var who = info.by ? U.esc(info.by) : 'Someone else';
+        if (info.conflicts && info.conflicts.length) clashToast(info.conflicts, info.by);
         if (busy) {
           bar.classList.remove('hidden');
+          // True now: their change was merged into the record, not written
+          // over it - see Remote.absorb.
           bar.querySelector('.change-message').innerHTML =
-            who + ' changed this project while you were editing. Your edit is still here, ' +
+            who + ' changed this project while you were editing. Both sets of changes are kept, ' +
             'and the screen will catch up when you finish.';
           defer(function () {
             bar.classList.add('hidden');
@@ -310,9 +367,16 @@
         U.toast(body.message, 'err');
         return;
       }
+      /* Both edits were kept and merged. The only thing worth saying is a
+         field the two people changed to different values - this screen's
+         value stood, and the person should know to check it. */
+      if (body.error === 'merged') {
+        clashToast(body.conflicts);
+        return;
+      }
       repaint();
-      U.toast('That bid was changed by someone else first, so their version is ' +
-        'showing. Re-apply your edit if you still want it.', 'warn');
+      U.toast('Somebody else is saving this record continuously. Your edit is still here and ' +
+        'will be sent again in a moment.', 'warn');
     });
   }
 
@@ -325,6 +389,21 @@
       root.Bids.refresh();
       if (RENDERERS[currentTab]) RENDERERS[currentTab]();
     });
+  }
+
+  /* "You and Priya both changed qty; yours was kept." One toast for however
+     many fields, named rather than counted when there are only a few. */
+  function clashToast(conflicts, by) {
+    if (!conflicts || !conflicts.length) return;
+    var names = [];
+    conflicts.forEach(function (c) {
+      var n = root.Merge ? root.Merge.describe(c) : 'a value';
+      if (names.indexOf(n) < 0) names.push(n);
+    });
+    var who = by || (conflicts[0] && conflicts[0].by) || 'someone else';
+    var what = names.length <= 3 ? names.join(', ') : names.length + ' fields';
+    U.toast('You and ' + who + ' both changed ' + what + ' at the same time. Your value was kept - ' +
+      'check it if that is not what you meant.', 'warn');
   }
 
   function describe(changes) {

@@ -172,7 +172,7 @@ function latestSeq() {
  * caught up. */
 function changesSince(seq, limit, maxBytes) {
   const rows = stmt(
-    'SELECT seq, kind, entity_id, op, json, at, by FROM changes ' +
+    'SELECT seq, kind, entity_id, op, json, at, by, rev FROM changes ' +
     'WHERE seq > ? ORDER BY seq LIMIT ?').all(Number(seq) || 0, limit || 5000);
 
   const budget = maxBytes || CATCHUP_MAX_BYTES;
@@ -303,7 +303,7 @@ function put(kind, id, rec, expectedRev, userId) {
     throw friendlyConstraint(e, rec);
   }
 
-  const seq = logChange(kind, key, 'put', json, now, userId);
+  const seq = logChange(kind, key, 'put', json, now, userId, rev);
   return { kind, id: key, rev, seq };
 }
 
@@ -313,7 +313,7 @@ function remove(kind, id, userId) {
   const key = def.idType === 'number' ? Number(id) : String(id);
   const now = new Date().toISOString();
   stmt('DELETE FROM ' + def.table + ' WHERE id = ?').run(key);
-  const seq = logChange(kind, key, 'delete', null, now, userId);
+  const seq = logChange(kind, key, 'delete', null, now, userId, 0);
   return { kind, id: key, rev: 0, seq };
 }
 
@@ -330,11 +330,12 @@ function remove(kind, id, userId) {
  * Without this the log grew by the size of the whole document on every
  * autosave: 1,969 changes had become 98MB of a 107MB database, against under
  * 3MB of live records. */
-function logChange(kind, id, op, json, at, userId) {
+function logChange(kind, id, op, json, at, userId, rev) {
   const body = json && Buffer.byteLength(json) > LOG_BODY_MAX ? null : json;
   const info = stmt(
-    'INSERT INTO changes (kind, entity_id, op, json, at, by) VALUES (?,?,?,?,?,?)')
-    .run(kind, String(id), op, body, at, userId == null ? null : Number(userId));
+    'INSERT INTO changes (kind, entity_id, op, json, at, by, rev) VALUES (?,?,?,?,?,?,?)')
+    .run(kind, String(id), op, body, at, userId == null ? null : Number(userId),
+      rev == null ? null : Number(rev));
   return Number(info.lastInsertRowid);
 }
 
@@ -351,11 +352,34 @@ function bodyTravels(rec) {
    conflict on the third of five edits cannot leave the first two applied and
    the client believing otherwise. */
 function putMany(batch, userId) {
-  return tx(() => batch.map(item => (
-    item.op === 'delete'
-      ? remove(item.kind, item.id, userId)
-      : put(item.kind, item.id, item.json, item.rev, userId)
-  )));
+  return tx(() => {
+    /* Every stale record in the batch, not just the first. The client merges
+       its edit into each server copy and sends the batch again - knowing about
+       all of them at once means one retry is enough, rather than one round
+       trip per conflicting record. */
+    const conflicts = [];
+    for (const item of batch) {
+      if (item.op === 'delete' || item.rev == null) continue;
+      const def = schema.KINDS[item.kind];
+      if (!def) continue;
+      const key = def.idType === 'number' ? Number(item.id) : String(item.id);
+      const row = stmt('SELECT rev, json FROM ' + def.table + ' WHERE id = ?').get(key);
+      if (row && Number(item.rev) !== row.rev) {
+        conflicts.push({ kind: item.kind, id: item.id, current: JSON.parse(row.json), rev: row.rev });
+      }
+    }
+    if (conflicts.length) {
+      const first = conflicts[0];
+      const e = new Conflict(first.kind, first.id, { json: first.current, rev: first.rev });
+      e.all = conflicts;
+      throw e;
+    }
+    return batch.map(item => (
+      item.op === 'delete'
+        ? remove(item.kind, item.id, userId)
+        : put(item.kind, item.id, item.json, item.rev, userId)
+    ));
+  });
 }
 
 /* ---- per-person preferences -------------------------------------------- */
