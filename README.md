@@ -152,6 +152,8 @@ administers the shop or the people in it. Both are editable, and you can add mor
 | Dashboard, Bid Management | ✓ | ✓ |
 | Production / Inventory / Report / Scheduler | | ✓ |
 | Add, edit, take-off, proposal, award, XLSX | ✓ | ✓ |
+| Teach the Rate Library from a takeoff (Save takeoff) | ✓ | ✓ |
+| Edit or delete parts on the Rate Library page | | ✓ |
 | **Delete a bid** | | ✓ |
 | Settings | | ✓ |
 | **Reset the database to seed data** | | ✓ |
@@ -173,6 +175,17 @@ Things worth knowing:
   button stops an honest mistake; the check in `server/api.js` is what actually protects the
   data, and it runs whether or not the request came from our own page. The test suite proves
   this by forging the request an Employee has no button for.
+- **Save takeoff teaches the Rate Library under its own permission, `catalog.learn`.** It
+  covers adding a part the library hasn't seen, versioning a changed price, counting use, and
+  filling in an empty description. Changing anything else about a part, or deleting one, is
+  editing the library and needs `settings.edit`. Before this permission existed, an
+  Employee's Save takeoff was refused whole, takeoff included. Database upgrade v6 gives
+  `catalog.learn` to every role that may edit takeoffs.
+- **A refused record never holds up the rest.** If the server refuses part of a save, it says
+  which records. A record the person's role may not write is put back the way the server has
+  it, and everything else is sent again straight away. A bid whose Proposal No. or Job No.
+  clashes with another bid is held back until the number is changed, and everything else
+  still saves.
 - **Permissions apply immediately.** They are read from the role on every request, so moving
   somebody to a different role takes effect at once — they reload the page to see the buttons
   change, but the server has already changed its mind.

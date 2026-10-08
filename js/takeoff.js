@@ -161,7 +161,11 @@
     if (!t) return;
     var learned = 0, repriced = 0, dups = [];
     priceFlags = {};
-    t.products.forEach(function (p) {
+    /* Only for somebody allowed to teach the Rate Library. Without it the
+       server refuses the part writes, so they are not made at all - the
+       takeoff itself is already saved as it is typed. */
+    var teach = !root.Auth || !root.Auth.can || root.Auth.can('catalog.learn');
+    if (teach) t.products.forEach(function (p) {
       p.groups.forEach(function (g) {
         g.items.forEach(function (it) {
           if (!it.description && !it.partNo) return;

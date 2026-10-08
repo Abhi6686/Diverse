@@ -1534,8 +1534,16 @@
 
   function resolveConflict(body, attempt) {
     if (body.error === 'duplicate') {
-      setStatus('error', body);
       if (conflictHandler) conflictHandler(body);
+      /* Only that bid is held back until somebody changes the number; the rest
+         of what was typed still goes. Without the record named (an older
+         server), there is nothing to hold, and it waits for the next edit. */
+      if (body.kind && body.id != null && (attempt || 0) < MAX_MERGE_ATTEMPTS) {
+        lastError = { message: body.message };
+        root.Remote.hold(DB, body.kind, body.id);
+        return pushNow((attempt || 0) + 1);
+      }
+      setStatus('error', body);
       return;
     }
     var list = body.conflicts || (body.kind && body.id != null
@@ -1590,6 +1598,13 @@
     writePrefs();
     var batch = root.Remote.diff(DB);
     if (!batch.length) {
+      // A held record (a clashing number) is still unsent work: kept on disk,
+      // and the status says so rather than "saved".
+      if (root.Remote.heldCount()) {
+        persistOutbox();
+        setStatus('error', lastError);
+        return Promise.resolve();
+      }
       writeOutbox(null);
       lastError = null;
       setStatus('saved');
@@ -1606,15 +1621,28 @@
       inflight = null;
       online = true;
       retryDelay = 1000;
-      lastError = null;
       // Typed while it was on the wire - send that too, straight away.
       if (attempt < 5 && root.Remote.diff(DB).length) return pushNow(attempt + 1);
       persistOutbox();
+      if (root.Remote.heldCount()) { setStatus('error', lastError); return; }
+      lastError = null;
       setStatus(root.Remote.diff(DB).length ? 'dirty' : 'saved');
     }, function (e) {
       inflight = null;
       if (reason) nextReason = reason;      // a Load still needs saying on the retry
       if (e.status === 409 && e.body) return resolveConflict(e.body, attempt);
+      /* Refused for particular records this person may not write. Those go
+         back to the server's copy - they could never be saved from here - and
+         everything else in the batch is sent again at once. It used to be
+         refused whole, and stayed refused on every later save and every
+         reload, so nothing that person typed reached anybody. */
+      if (e.status === 403 && e.body && Array.isArray(e.body.refused) && e.body.refused.length &&
+          attempt < MAX_MERGE_ATTEMPTS) {
+        e.body.refused.forEach(function (r) { root.Remote.revert(DB, r.kind, r.id); });
+        notify();
+        if (conflictHandler) conflictHandler({ error: 'refused', refused: e.body.refused, message: e.message });
+        return pushNow(attempt + 1);
+      }
       lastError = e;
       console.error('Save failed:', e);
       /* Refused outright - not allowed, or malformed. Asking again will not

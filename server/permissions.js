@@ -41,6 +41,13 @@ const PERMISSIONS = [
      its own permission an estimator's whole save would be refused for it, since
      a batch is all-or-nothing. See requiredFor(). */
   { key: 'list.extend', group: 'Bids', label: 'Add an engineer or task type while working a bid' },
+  /* Save takeoff teaches the Rate Library: parts it has not seen are added,
+     a changed price is versioned, and every part used has its count bumped.
+     That is estimating work, not administering the library - and while it sat
+     under settings.edit, an Employee's every Save takeoff was refused whole,
+     takeoff and all. Editing or removing parts on the Rate Library page stays
+     settings.edit. See learnOnly(). */
+  { key: 'catalog.learn', group: 'Bids', label: 'Teach the Rate Library from a takeoff (new parts, prices, usage)' },
 
   { key: 'settings.view', group: 'Settings', label: 'Open Settings' },
   { key: 'settings.edit', group: 'Settings', label: 'Change rates, regions, references, company' },
@@ -77,7 +84,7 @@ const ROLE_DEFAULTS = {
   Employee: [
     'module.dashboard', 'module.bids',
     'bid.create', 'bid.edit', 'bid.award', 'bid.export',
-    'takeoff.edit', 'proposal.edit', 'list.extend'
+    'takeoff.edit', 'proposal.edit', 'list.extend', 'catalog.learn'
   ]
 };
 
@@ -100,6 +107,33 @@ function onlyAdditions(prev, next) {
   if (!Array.isArray(prev) || !Array.isArray(next)) return false;
   const have = new Set(next.map(String));
   return prev.every(v => have.has(String(v)));
+}
+
+/* True when `next` differs from the Rate Library part `prev` only in the ways
+   Catalog.learn (js/catalog.js) changes one: usage counted, a price versioned,
+   a stock size learned, a product type tagged, an empty description filled in.
+   Anything else - a renamed part, a changed vendor, a removed tag, an
+   overwritten description - is editing the library, and needs settings.edit. */
+const LEARN_FREE = ['useCount', 'lastUsedAt', 'unitCost', 'priceHistory', 'packQty'];
+const LEARN_FILL = ['description', 'feature', 'option', 'material', 'grade', 'um', 'packUm'];
+
+function learnOnly(prev, next) {
+  if (!prev || !next || typeof prev !== 'object' || typeof next !== 'object') return false;
+  const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+  const keys = new Set(Object.keys(prev).concat(Object.keys(next)));
+  for (const k of keys) {
+    if (LEARN_FREE.indexOf(k) >= 0) continue;
+    if (k === 'sowTags') {
+      if (!same(prev.sowTags, next.sowTags) && !onlyAdditions(prev.sowTags || [], next.sowTags)) return false;
+      continue;
+    }
+    if (LEARN_FILL.indexOf(k) >= 0) {
+      if (!same(prev[k], next[k]) && prev[k]) return false;    // only an empty one may be filled
+      continue;
+    }
+    if (!same(prev[k], next[k])) return false;
+  }
+  return true;
 }
 
 /* The permission a change item requires, given what the database currently
@@ -141,7 +175,10 @@ function requiredFor(item, existing) {
       }
       return 'settings.edit';
 
-    case 'catalog': return 'settings.edit';
+    case 'catalog':
+      if (op === 'delete') return 'settings.edit';
+      if (!existing) return 'catalog.learn';
+      return learnOnly(existing, item.json) ? 'catalog.learn' : 'settings.edit';
     default: return 'settings.edit';
   }
 }
@@ -150,5 +187,5 @@ function isDecision(status) { return status === 'Awarded' || status === 'Lost'; 
 
 module.exports = {
   PERMISSIONS, ALL, ROLE_DEFAULTS,
-  isPermission, clean, requiredFor, onlyAdditions
+  isPermission, clean, requiredFor, onlyAdditions, learnOnly
 };

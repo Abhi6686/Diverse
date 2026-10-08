@@ -44,6 +44,11 @@
      every call site having to say which record it touched. */
   var shadow = {};
   var revs = {};
+  /* Records the server refused for a reason only the person can fix - a
+     Proposal No. already on another bid. 'kind:id' -> the JSON that was
+     refused. Left out of every push until the record changes again, so one
+     clashing number does not hold up everything else they type. */
+  var held = {};
 
   function canFetch() {
     return typeof root.fetch === 'function' &&
@@ -96,7 +101,7 @@
   /* Everything that differs from the server's copy, as a change batch. Cheap:
      the whole dataset is a few hundred kilobytes and stringifying all of it
      takes well under a millisecond. */
-  function diff(db) {
+  function diff(db, withHeld) {
     var batch = [];
     var seen = {};
 
@@ -105,7 +110,11 @@
         var key = keyOf(c.kind, id);
         seen[key] = true;
         var json = JSON.stringify(rec);
-        if (shadow[key] === json) return;
+        if (shadow[key] === json) { delete held[key]; return; }
+        if (held[key] !== undefined) {
+          if (held[key] === json && !withHeld) return;    // unchanged since it was refused
+          if (held[key] !== json) delete held[key];        // edited: worth trying again
+        }
         batch.push({ kind: c.kind, id: id, op: 'put', json: rec, rev: revs[key] || null });
       });
     });
@@ -240,11 +249,42 @@
     return r;
   }
 
+  /* A record the server refused because this person may not write it. Put back
+     the way the server has it - or removed, if it never reached the server - so
+     it stops being sent, and everything else in the batch can go. */
+  function revert(db, kind, id) {
+    var key = keyOf(kind, id);
+    delete held[key];
+    if (shadow[key] !== undefined) {
+      setRecord(db, kind, id, JSON.parse(shadow[key]));
+      return;
+    }
+    if (kind === 'setting') { delete db[id]; return; }
+    var c = collectionOf(kind);
+    if (!c || !db[c.prop]) return;
+    if (c.shape === 'array') {
+      var list = db[c.prop];
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (String(list[i].id) === String(id)) list.splice(i, 1);
+      }
+    } else {
+      delete db[c.prop][id];
+    }
+  }
+
+  function hold(db, kind, id) {
+    var cur = currentOf(db, kind, id);
+    if (cur !== undefined) held[keyOf(kind, id)] = JSON.stringify(cur);
+  }
+
+  function heldCount() { return Object.keys(held).length; }
+
   /* The unsent edits as something that can be written to disk and read back by
      the next page load: each one with the base it was made against, so it can
-     be merged onto whatever the server holds by then rather than overwrite it. */
+     be merged onto whatever the server holds by then rather than overwrite it.
+     A held record is included - it is still this person's unsent work. */
   function pending(db) {
-    return diff(db).map(function (c) {
+    return diff(db, true).map(function (c) {
       var key = keyOf(c.kind, c.id);
       return {
         kind: c.kind, id: c.id, op: c.op, json: c.op === 'delete' ? null : c.json,
@@ -464,6 +504,9 @@
     isDirty: isDirty,
     pending: pending,
     restore: restore,
+    revert: revert,
+    hold: hold,
+    heldCount: heldCount,
 
     /* Sends a batch and returns what the server made of it. A conflict or a
        duplicate comes back as a rejected promise carrying the server's version,

@@ -107,15 +107,22 @@ function validateBatch(batch) {
 function assertAllowed(batch, user, reason) {
   if (reason === 'load') auth.require(user, 'project.load');
 
-  const needed = new Set();
+  /* Every item the caller may not write, not just the first. The answer names
+     them, so the client can put those records back the way the server has them
+     and send the rest - one refused record must not hold up a whole morning's
+     takeoff, which is what happened while it said only "not allowed". */
+  const refused = [];
   for (const item of batch) {
     const row = db.getOne(item.kind, item.id);
     let existing = null;
     if (row) { try { existing = JSON.parse(row.json); } catch (e) { existing = null; } }
     const perm = perms.requiredFor(item, existing);
-    if (perm) needed.add(perm);
+    if (perm && !auth.can(user, perm)) refused.push({ kind: item.kind, id: item.id, permission: perm });
   }
-  for (const perm of needed) auth.require(user, perm);
+  if (refused.length) {
+    try { auth.require(user, refused[0].permission); }
+    catch (e) { e.refused = refused; throw e; }
+  }
 }
 
 /* ---- the engineer behind an account ------------------------------------ */
@@ -366,7 +373,10 @@ async function handle(req, res, ctx) {
           return true;
         }
         if (e.name === 'Duplicate') {
-          json(res, 409, { error: 'duplicate', field: e.field, value: e.value, message: e.message });
+          // Which record carries the clashing number, so the client can hold
+          // that one back and still send everything else.
+          json(res, 409, { error: 'duplicate', field: e.field, value: e.value, message: e.message,
+            kind: e.kind || null, id: e.id == null ? null : e.id });
           return true;
         }
         throw e;
@@ -471,7 +481,10 @@ async function handle(req, res, ctx) {
   } catch (e) {
     const status = e.status || 500;
     if (status >= 500) console.error('API error on ' + route + ':', e);
-    json(res, status, { error: e.message || 'Server error', code: e.code || null });
+    const out = { error: e.message || 'Server error', code: e.code || null };
+    // Which records a refused write was refused for - see assertAllowed.
+    if (e.refused) out.refused = e.refused;
+    json(res, status, out);
     return true;
   }
 }

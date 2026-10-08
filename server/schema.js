@@ -283,6 +283,21 @@ const STEPS = [
          one fetches the record (and its rev) from /api/records instead. */
       db.exec('ALTER TABLE changes ADD COLUMN rev INTEGER');
     }
+  },
+
+  {
+    version: 6,
+    name: 'let takeoff editors teach the Rate Library',
+    up: function (db) {
+      /* catalog.learn is new, and the roles in an existing database were
+         written before it existed - so the Employee role would not have it, and
+         every Employee's Save takeoff would go on being refused. Anyone who may
+         edit a takeoff gets it, which is who the default would have given it
+         to. It is an ordinary checkbox on Roles & Access from here on. */
+      db.exec(
+        "INSERT OR IGNORE INTO role_permissions (role_id, perm) " +
+        "SELECT role_id, 'catalog.learn' FROM role_permissions WHERE perm = 'takeoff.edit'");
+    }
   }
 ];
 

@@ -516,6 +516,69 @@ async function main() {
     C2.Remote.disconnect();
     C2.close();
 
+    console.log('\n--- an Employee\'s Save takeoff ---');
+    // Save takeoff also teaches the Rate Library, which an Employee used to be
+    // refused - and the takeoff with it, on that save and every one after.
+    {
+      const bidT = B.Store.db.bids[10];
+      B.Takeoff.openForBid(bidT.id);
+      const tk = B.Store.db.takeoffs[bidOn(B, bidT.id).takeoffId];
+      const prod = B.TakeoffModel.newProduct(B.Rates.TYPES[0], tk);
+      prod.groups[0].items.push(B.TakeoffModel.newItem({ description: 'Employee taught part', partNo: 'EMP-1', unitCost: 7 }));
+      tk.products.push(prod);
+      B.Store.save();
+      B.Takeoff.commit();
+      await wait(1600);
+      const srvTk = () => db.snapshot().takeoffs[tk.id];
+      check('the Employee\'s takeoff reaches the server',
+        srvTk() && srvTk().products.some(p => p.id === prod.id), B.Store.status.state);
+      check('and the part it taught reaches the Rate Library',
+        db.snapshot().catalog.some(c => c.partNo === 'EMP-1'));
+      check('with nothing refused and nothing left waiting',
+        B.Store.status.state === 'saved' && B.Store.status.pending === 0,
+        B.Store.status.state + '/' + B.Store.status.pending + ' ' + B.Store.status.error);
+
+      // A role without the right: the part is refused, the takeoff is not.
+      const empRole = db.handle().prepare("SELECT id FROM roles WHERE name = 'Employee'").get().id;
+      db.handle().prepare("DELETE FROM role_permissions WHERE role_id = ? AND perm = 'catalog.learn'").run(empRole);
+      prod.groups[0].items.push(B.TakeoffModel.newItem({ description: 'Not allowed part', partNo: 'EMP-2', unitCost: 3 }));
+      prod.totalLF = 77;
+      B.Store.save();
+      B.Takeoff.commit();
+      await wait(2000);
+      check('without it, the takeoff edit still lands', srvTk().products.find(p => p.id === prod.id).totalLF === 77,
+        JSON.stringify(srvTk().products.find(p => p.id === prod.id).totalLF));
+      check('the refused part is not on the server', !db.snapshot().catalog.some(c => c.partNo === 'EMP-2'));
+      check('and is taken back off B\'s screen, not left to be refused forever',
+        !B.Store.db.catalog.some(c => c.partNo === 'EMP-2'));
+      check('so B ends up saved, not stuck', B.Store.status.state === 'saved' && B.Store.status.pending === 0,
+        B.Store.status.state + '/' + B.Store.status.pending);
+      db.handle().prepare("INSERT OR IGNORE INTO role_permissions (role_id, perm) VALUES (?, 'catalog.learn')").run(empRole);
+    }
+
+    console.log('\n--- a clashing Proposal No. holds back only its own bid ---');
+    {
+      const taken = A.Store.db.bids[13];
+      taken.proposalNo = 'DIS-26-8888';
+      A.Store.save();
+      await wait(1400);
+      const clash = bidOn(B, A.Store.db.bids[11].id);
+      const other = bidOn(B, A.Store.db.bids[12].id);
+      clash.proposalNo = taken.proposalNo;
+      other.project = 'Saved despite the clash';
+      B.Store.save();
+      await wait(1600);
+      check('the other edit lands', onServer(other.id).project === 'Saved despite the clash', onServer(other.id).project);
+      check('the clashing bid does not', onServer(clash.id).proposalNo !== taken.proposalNo);
+      check('and B is told it is not saved', B.Store.status.state === 'error', B.Store.status.state);
+      clash.proposalNo = 'DIS-26-9999';
+      B.Store.save();
+      await wait(1400);
+      check('once the number is changed, that bid goes too', onServer(clash.id).proposalNo === 'DIS-26-9999',
+        onServer(clash.id).proposalNo);
+      check('and B is saved again', B.Store.status.state === 'saved', B.Store.status.state);
+    }
+
     console.log('\n--- no server, no problem ---');
     const solo = await openBrowser(null, 'offline client');
     check('a browser with no server still opens',

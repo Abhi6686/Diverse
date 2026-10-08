@@ -300,7 +300,9 @@ function put(kind, id, rec, expectedRev, userId) {
       ).run(key, json, rev, now, userId == null ? null : Number(userId));
     }
   } catch (e) {
-    throw friendlyConstraint(e, rec);
+    const err = friendlyConstraint(e, rec);
+    if (err && err.name === 'Duplicate') { err.kind = kind; err.id = key; }
+    throw err;
   }
 
   const seq = logChange(kind, key, 'put', json, now, userId, rev);

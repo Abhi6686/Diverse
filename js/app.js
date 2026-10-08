@@ -364,7 +364,22 @@
        silently revert. */
     root.Store.onConflict(function (body) {
       if (body.error === 'duplicate') {
-        U.toast(body.message, 'err');
+        U.toast(body.message + ' Change it to save that bid - everything else you type is still being saved.', 'err');
+        return;
+      }
+      /* Records this person's role cannot write. They have been put back the
+         way the server has them and the rest of their work has gone up - say
+         which part did not, in words rather than a permission key. */
+      if (body.error === 'refused') {
+        var kinds = {};
+        (body.refused || []).forEach(function (r) { kinds[r.kind] = true; });
+        var what = Object.keys(kinds).map(function (k) {
+          return k === 'catalog' ? 'the Rate Library' : k === 'setting' ? 'the shop settings'
+            : k === 'engineer' ? 'the engineer list' : k === 'bid' ? 'that bid' : 'a ' + k;
+        }).join(' or ');
+        U.toast('Your role cannot change ' + what + ', so that part was not saved. ' +
+          'Everything else was. Ask an Admin if it needs changing.', 'warn');
+        repaint();
         return;
       }
       /* Both edits were kept and merged. The only thing worth saying is a

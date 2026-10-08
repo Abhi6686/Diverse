@@ -514,6 +514,35 @@ async function run() {
   });
   check('awarding is allowed - the screenshots mark it for everyone', r.status === 200, JSON.stringify(r.body));
 
+  // Save takeoff teaches the Rate Library. That is estimating work: an
+  // Employee whose every save was refused for it lost the whole takeoff too.
+  const part = { id: 'cat-emp-1', vendor: 'Acme', partNo: 'P-1', description: '', um: 'EA',
+    unitCost: 10, sowTags: ['Guardrail'], useCount: 1, lastUsedAt: null, priceHistory: [] };
+  r = await post('/changes', { changes: [{ kind: 'catalog', id: part.id, json: part }] });
+  check('an employee\'s takeoff can add a new part to the Rate Library', r.status === 200, JSON.stringify(r.body));
+  const learned = Object.assign({}, part, {
+    useCount: 2, lastUsedAt: '2026-10-08T10:00:00.000Z', unitCost: 12, description: 'Rail post',
+    sowTags: ['Guardrail', 'Stair'], priceHistory: [{ cost: 12, at: '2026-10-08T10:00:00.000Z', project: 'X' }]
+  });
+  r = await post('/changes', { changes: [{ kind: 'catalog', id: part.id, rev: 1, json: learned }] });
+  check('and record its use, a new price and a filled-in description', r.status === 200, JSON.stringify(r.body));
+  r = await post('/changes', {
+    changes: [
+      { kind: 'bid', id: 20, rev: 3, json: { id: 20, project: 'Kept alongside', awardNo: 'DIS-26-0900', status: 'Awarded' } },
+      { kind: 'catalog', id: part.id, rev: 2, json: Object.assign({}, learned, { vendor: 'Renamed' }) }
+    ]
+  });
+  check('but editing the part itself is still refused',
+    r.status === 403 && /settings.edit/.test(r.body.error), JSON.stringify(r.body));
+  check('and the refusal names exactly which record, so the rest can be resent',
+    Array.isArray(r.body.refused) && r.body.refused.length === 1 &&
+    r.body.refused[0].kind === 'catalog' && r.body.refused[0].id === part.id, JSON.stringify(r.body.refused));
+  r = await post('/changes', { changes: [{ kind: 'catalog', id: part.id, op: 'delete' }] });
+  check('as is deleting it', r.status === 403, JSON.stringify(r.body));
+  r = await get('/session');
+  check('the Employee role has catalog.learn',
+    (r.body.user && r.body.user.permissions || []).indexOf('catalog.learn') >= 0, JSON.stringify(r.body.user));
+
   r = await get('/users');
   check('the people screen is refused', r.status === 403, String(r.status));
   r = await post('/roles', { name: 'Sneaky', permissions: ['bid.delete'] });
@@ -610,6 +639,17 @@ async function run() {
       snap.bids.length === 1 && snap.bids[0].project === 'Survives');
     check('and so does the change log', db.latestSeq() === seqBefore, String(db.latestSeq()));
     check('the schema is not re-applied on a second open', true);
+
+    // A database whose roles predate catalog.learn - the office's, before v6.
+    const h = db.handle();
+    const empId = h.prepare("SELECT id FROM roles WHERE name = 'Employee'").get().id;
+    h.prepare("DELETE FROM role_permissions WHERE perm = 'catalog.learn'").run();
+    h.prepare("UPDATE meta SET value = '5' WHERE key = 'schemaVersion'").run();
+    db.close();
+    db.open(tmp);
+    const has = db.handle().prepare(
+      "SELECT 1 FROM role_permissions WHERE role_id = ? AND perm = 'catalog.learn'").get(empId);
+    check('upgrading gives the existing Employee role catalog.learn', !!has);
     db.close();
     for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch (e) {} }
     db.open(':memory:');
