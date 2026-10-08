@@ -376,6 +376,39 @@ async function main() {
 
     const onServer = id => db.snapshot().bids.find(b => b.id === id);
     const bidOn = (W, id) => W.Store.db.bids.find(b => b.id === id);
+    console.log('\n--- a reload keeps the shop\'s own lists ---');
+    // 'On Hold', 'Bronze' and 'Dodge' went up in "settings travel too". A page
+    // loaded fresh used to drop all three and show the defaults instead.
+    {
+      const R = await openBrowser(ORIGIN, 'client A reloaded', jarA);
+      check('a custom status survives a reload',
+        (R.Store.db.statuses || []).some(s => s.name === 'On Hold'), JSON.stringify(R.Store.db.statuses));
+      check('so does a material', R.Store.db.materials.includes('Bronze'), JSON.stringify(R.Store.db.materials));
+      check('and a portal', R.Store.db.portals.includes('Dodge'), JSON.stringify(R.Store.db.portals));
+      check('the status is offered wherever statuses are listed',
+        R.Bids.allStatuses().some(s => s.key === 'On Hold'));
+      R.Bids.openAdd();
+      check('including the Add Bid form',
+        [...R.U.$('mStatus').options].some(o => o.value === 'On Hold'));
+      R.Bids.closeModal && R.Bids.closeModal();
+      check('every shared list in the snapshot is loaded',
+        R.Remote.SETTING_KEYS.every(k => {
+          const s = db.snapshot()[k];
+          return s === undefined || JSON.stringify(R.Store.db[k]) === JSON.stringify(s);
+        }));
+
+      // Adding another after a reload used to send "defaults + new one" and
+      // overwrite the list on the server.
+      R.Store.db.statuses.push({ name: 'Waiting on GC', tone: 'info' });
+      R.Store.save();
+      await wait(1400);
+      const names = (db.snapshot().statuses || []).map(s => s.name);
+      check('a status added after a reload joins the others on the server',
+        names.includes('On Hold') && names.includes('Waiting on GC'), JSON.stringify(names));
+      R.Remote.disconnect();
+      R.close();
+    }
+
     const notices = [];
     A.Store.onConflict(body => notices.push(body));
 

@@ -1235,7 +1235,14 @@
       rates: snap.rates || null,
       ui: null
     };
-    ['regions', 'productTypes', 'taskTypes', 'references', 'company'].forEach(function (k) {
+    /* Every shared list the server holds, read from the one list of them
+       (Remote.SETTING_KEYS, checked against the server's by tests/sync.js).
+       This used to be a hand-written copy of five of the nine, and the other
+       three - custom bid statuses, materials, portals - were dropped on every
+       page load: migrate() put the defaults back, the shadow recorded the
+       defaults as the server's, and the next one anybody added went up as
+       "defaults + new one", overwriting the real list on the server. */
+    (root.Remote ? root.Remote.SETTING_KEYS : []).forEach(function (k) {
       if (snap[k] !== undefined) db[k] = snap[k];
     });
     return db;
