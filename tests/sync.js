@@ -579,6 +579,116 @@ async function main() {
       check('and B is saved again', B.Store.status.state === 'saved', B.Store.status.state);
     }
 
+    console.log('\n--- two people typing in one takeoff ---');
+    {
+      // Count every refusal either browser is given: the point is that there
+      // are none, because the server merges a save made against an older copy.
+      let refusals = 0;
+      const count = W => {
+        const real = W.fetch;
+        W.fetch = (u, o) => real(u, o).then(r => { if (r.status === 409) refusals++; return r; });
+        return () => { W.fetch = real; };
+      };
+      const undoA = count(A), undoB = count(B);
+
+      const tbid = A.Store.db.bids[14];
+      A.Takeoff.openForBid(tbid.id);
+      const tkId = bidOn(A, tbid.id).takeoffId;
+      const tA = A.Store.db.takeoffs[tkId];
+      ['p-one', 'p-two'].forEach(id => {
+        const p = A.TakeoffModel.newProduct(A.Rates.TYPES[0], tA);
+        p.id = id;
+        p.type = 'Guardrail ' + id;
+        p.groups[0].items.push(A.TakeoffModel.newItem({ id: id + '-i1', description: 'a' }));
+        p.groups[0].items.push(A.TakeoffModel.newItem({ id: id + '-i2', description: 'b' }));
+        tA.products.push(p);
+      });
+      A.Store.save();
+      await wait(1400);
+      const tB = B.Store.db.takeoffs[tkId];
+      check('B has the takeoff A started', !!tB && tB.products.length === 2);
+
+      // Ten edits each, interleaved, on one product and on different ones:
+      // A on p-one's first row and p-two; B on p-one's SECOND row.
+      const item = (t, pid, iid) => t.products.find(p => p.id === pid).groups[0].items.find(i => i.id === iid);
+      for (let n = 1; n <= 10; n++) {
+        item(A.Store.db.takeoffs[tkId], 'p-one', 'p-one-i1').qty = n;
+        A.Store.db.takeoffs[tkId].products.find(p => p.id === 'p-two').totalLF = n * 10;
+        A.Store.save();
+        item(B.Store.db.takeoffs[tkId], 'p-one', 'p-one-i2').qty = n * 100;
+        B.Store.save();
+        await wait(150);
+      }
+      await wait(2500);
+      const srv = db.snapshot().takeoffs[tkId];
+      check('every one of A\'s edits is on the server',
+        item(srv, 'p-one', 'p-one-i1').qty === 10 && srv.products.find(p => p.id === 'p-two').totalLF === 100,
+        JSON.stringify({ q: item(srv, 'p-one', 'p-one-i1').qty, lf: srv.products.find(p => p.id === 'p-two').totalLF }));
+      check('and every one of B\'s, in the same product', item(srv, 'p-one', 'p-one-i2').qty === 1000,
+        String(item(srv, 'p-one', 'p-one-i2').qty));
+      check('and both screens agree with it',
+        JSON.stringify(A.Store.db.takeoffs[tkId].products) === JSON.stringify(srv.products) &&
+        JSON.stringify(B.Store.db.takeoffs[tkId].products) === JSON.stringify(srv.products));
+      check('without a single save being refused', refusals === 0, refusals + ' refusals');
+      check('and both say saved', A.Store.status.state === 'saved' && B.Store.status.state === 'saved',
+        A.Store.status.state + '/' + B.Store.status.state);
+
+      console.log('\n--- both adding a drawing row at once ---');
+      // Same product, same group, same moment. Neither screen is repainted
+      // between adding the row and typing in it.
+      A.Takeoff.openTakeoff(tkId); A.Takeoff.selectProduct('p-one');
+      B.Takeoff.openTakeoff(tkId); B.Takeoff.selectProduct('p-one');
+      const rowsOf = W => W.Store.db.takeoffs[tkId].products.find(p => p.id === 'p-one').groups[0].grid.rows;
+      A.Takeoff.addRow();
+      const rowA = rowsOf(A)[rowsOf(A).length - 1].id;
+      B.Takeoff.addRow();
+      const rowB = rowsOf(B)[rowsOf(B).length - 1].id;
+      await wait(1400);
+      check('new rows carry an id', !!rowA && !!rowB && rowA !== rowB);
+      A.Takeoff.setRowRef(rowA, 'A-101');
+      B.Takeoff.setRowRef(rowB, 'B-202');
+      await wait(1600);
+      const rowsSrv = db.snapshot().takeoffs[tkId].products.find(p => p.id === 'p-one').groups[0].grid.rows;
+      check('both rows survive', rowsSrv.some(r => r.id === rowA) && rowsSrv.some(r => r.id === rowB),
+        JSON.stringify(rowsSrv));
+      check('and each person\'s typing landed in their own row',
+        rowsSrv.find(r => r.id === rowA).ref === 'A-101' && rowsSrv.find(r => r.id === rowB).ref === 'B-202',
+        JSON.stringify(rowsSrv.map(r => r.id + '=' + r.ref)));
+      check('still without a refusal', refusals === 0, refusals + ' refusals');
+      undoA(); undoB();
+
+      console.log('\n--- somebody else\'s save does not move your page ---');
+      B.Proposal.generateFromTakeoff(tkId);
+      const propId = B.Proposal.currentId();
+      B.App.switchTab('proposal');
+      await wait(1400);
+      const marker = () => { const el = B.document.getElementById('proposalEditScroll'); return el && el.dataset.mark; };
+      B.document.getElementById('proposalEditScroll').dataset.mark = 'untouched';
+      const notice = () => B.document.getElementById('liveNotice');
+
+      // A works on a DIFFERENT project.
+      const elsewhere = A.Store.db.bids[16];
+      elsewhere.location = 'Elsewhere';
+      A.Store.save();
+      await wait(1400);
+      check('a change to another project leaves B\'s proposal alone', marker() === 'untouched');
+      check('with no notice', notice().classList.contains('hidden'));
+
+      // A works on THIS proposal.
+      A.Store.db.proposals[propId].proposalData.projectName = 'Renamed by Ada';
+      A.Store.save();
+      await wait(1400);
+      check('a change to the proposal B has open is not repainted under B', marker() === 'untouched');
+      check('B is told, by name', !notice().classList.contains('hidden') &&
+        /Ada/.test(notice().textContent), notice().textContent.replace(/\s+/g, ' '));
+      check('and the data underneath already has it',
+        B.Store.db.proposals[propId].proposalData.projectName === 'Renamed by Ada');
+      B.App.showLiveChanges();
+      check('Show changes brings the screen up to date', marker() !== 'untouched');
+      check('and takes the notice down', notice().classList.contains('hidden'));
+      B.App.switchTab('active');
+    }
+
     console.log('\n--- no server, no problem ---');
     const solo = await openBrowser(null, 'offline client');
     check('a browser with no server still opens',

@@ -545,6 +545,8 @@
     var host = U.$('section-project');
     if (!host || host.classList.contains('hidden')) return;
     var bid = currentBid();
+    // Drawn from the data as it stands, colleagues' changes included.
+    if (root.App && root.App.screenIsCurrent) root.App.screenIsCurrent();
 
     if (!bid) {
       host.innerHTML = root.UI.emptyCard({

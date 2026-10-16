@@ -231,6 +231,21 @@ async function run() {
   check('and nothing from it was written',
     !r.body.db.bids.some(b => b.id === 3), JSON.stringify(r.body.db.bids.map(b => b.id)));
 
+  // The same stale save, but saying what it was made against: merged, not
+  // refused. Somebody renamed the bid; this save changed its status.
+  const bid2 = { id: 2, project: 'CVS Keystone', active: false };
+  r = await post('/changes', { changes: [{ kind: 'bid', id: 2, rev: 1, json: Object.assign({}, bid2, { project: 'CVS Keystone Rehab' }) }] });
+  r = await post('/changes', { changes: [{ kind: 'bid', id: 2, rev: 1, base: bid2,
+    json: Object.assign({}, bid2, { status: 'In Progress' }) }] });
+  check('a stale save that carries its base is merged, not refused', r.status === 200, JSON.stringify(r.body));
+  check('and hands back the merged record with both edits in it',
+    r.body.applied && r.body.applied[0].json && r.body.applied[0].json.project === 'CVS Keystone Rehab' &&
+    r.body.applied[0].json.status === 'In Progress', JSON.stringify(r.body.applied));
+  r = await get('/bootstrap');
+  const b2 = r.body.db.bids.find(b => b.id === 2);
+  check('which is what the server stored', b2.project === 'CVS Keystone Rehab' && b2.status === 'In Progress',
+    JSON.stringify(b2));
+
   console.log('\n--- uniqueness is the database\'s job ---');
   r = await post('/changes', { changes: [{ kind: 'bid', id: 4, json: { id: 4, project: 'Dup', proposalNo: 'p-1' } }] });
   check('a duplicate Proposal No. is refused, case-insensitively',
@@ -650,6 +665,20 @@ async function run() {
     const has = db.handle().prepare(
       "SELECT 1 FROM role_permissions WHERE role_id = ? AND perm = 'catalog.learn'").get(empId);
     check('upgrading gives the existing Employee role catalog.learn', !!has);
+
+    // Takeoffs from before rows had ids - the office's, before v7.
+    const oldTk = { id: 'tko-old', bidId: 100, products: [{ id: 'p1', extras: [{ label: 'Lift' }],
+      groups: [{ id: 'g1', items: [], grid: { columns: [], rows: [{ ref: '1', values: {} }, { ref: '2', values: {} }] } }] }] };
+    db.putMany([{ kind: 'takeoff', id: 'tko-old', json: oldTk }], null);
+    db.handle().prepare("UPDATE meta SET value = '6' WHERE key = 'schemaVersion'").run();
+    db.close();
+    db.open(tmp);
+    const upgraded = JSON.parse(db.handle().prepare("SELECT json FROM takeoffs WHERE id = 'tko-old'").get().json);
+    const rowsUp = upgraded.products[0].groups[0].grid.rows;
+    check('upgrading gives every drawing row an id', rowsUp.every(r => r.id) && rowsUp[0].id !== rowsUp[1].id,
+      JSON.stringify(rowsUp));
+    check('and every extra charge', !!upgraded.products[0].extras[0].id);
+    check('without touching what was in them', rowsUp[0].ref === '1' && rowsUp[1].ref === '2');
     db.close();
     for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch (e) {} }
     db.open(':memory:');

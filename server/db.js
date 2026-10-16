@@ -16,6 +16,7 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 const schema = require('./schema');
+const Merge = require('../js/merge.js');
 
 let db = null;
 let dbPath = null;
@@ -355,32 +356,52 @@ function bodyTravels(rec) {
    the client believing otherwise. */
 function putMany(batch, userId) {
   return tx(() => {
-    /* Every stale record in the batch, not just the first. The client merges
-       its edit into each server copy and sends the batch again - knowing about
-       all of them at once means one retry is enough, rather than one round
-       trip per conflicting record. */
+    /* A record somebody else saved since this client read it.
+     *
+     * When the client says what it read (`base`), the server merges: the edit
+     * is folded into the record as it stands now, by id for products, groups,
+     * rows and scope items, field by field below that - js/merge.js, the same
+     * code the browser runs. Two people on different products of one takeoff
+     * never conflict, and on the same field the one that reached the server
+     * last wins, which is the rule Figma's multiplayer server uses. Nothing is
+     * refused, so nobody's save waits on a round trip.
+     *
+     * Without a base (a page from before this) it is refused as it always was,
+     * every stale record at once so one retry is enough. */
     const conflicts = [];
-    for (const item of batch) {
-      if (item.op === 'delete' || item.rev == null) continue;
+    const merged = new Map();          // index in batch -> clashes found merging it
+    batch.forEach((item, i) => {
+      if (item.op === 'delete' || item.rev == null) return;
       const def = schema.KINDS[item.kind];
-      if (!def) continue;
+      if (!def) return;
       const key = def.idType === 'number' ? Number(item.id) : String(item.id);
       const row = stmt('SELECT rev, json FROM ' + def.table + ' WHERE id = ?').get(key);
-      if (row && Number(item.rev) !== row.rev) {
-        conflicts.push({ kind: item.kind, id: item.id, current: JSON.parse(row.json), rev: row.rev });
+      if (!row || Number(item.rev) === row.rev) return;
+      const current = JSON.parse(row.json);
+      if (item.base !== undefined && item.base !== null) {
+        const r = Merge.merge3(item.base, item.json, current);
+        item.json = r.value;
+        item.rev = row.rev;
+        merged.set(i, r.conflicts);
+        return;
       }
-    }
+      conflicts.push({ kind: item.kind, id: item.id, current: current, rev: row.rev });
+    });
     if (conflicts.length) {
       const first = conflicts[0];
       const e = new Conflict(first.kind, first.id, { json: first.current, rev: first.rev });
       e.all = conflicts;
       throw e;
     }
-    return batch.map(item => (
-      item.op === 'delete'
+    return batch.map((item, i) => {
+      const out = item.op === 'delete'
         ? remove(item.kind, item.id, userId)
-        : put(item.kind, item.id, item.json, item.rev, userId)
-    ));
+        : put(item.kind, item.id, item.json, item.rev, userId);
+      // What was stored is not what was sent: hand it back, so the writer's
+      // screen holds what everybody else now holds.
+      if (merged.has(i)) { out.json = item.json; out.conflicts = merged.get(i); }
+      return out;
+    });
   });
 }
 

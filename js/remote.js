@@ -511,15 +511,25 @@
     /* Sends a batch and returns what the server made of it. A conflict or a
        duplicate comes back as a rejected promise carrying the server's version,
        so the caller can put the truth on screen rather than guessing. */
-    push: function (batch, reason) {
+    push: function (batch, reason, db) {
       if (!batch.length) return Promise.resolve({ applied: [] });
+      /* Each edit goes with the copy it was made against, so a server that has
+         moved on since can merge it in rather than refuse it - see
+         server/db.js putMany. A record this browser has never had (a create)
+         has no base. */
+      var sent = batch.map(function (c) {
+        if (c.op === 'delete') return c;
+        var base = shadow[keyOf(c.kind, c.id)];
+        return Object.assign({}, c, { base: base === undefined ? null : JSON.parse(base) });
+      });
       return api('/changes', {
         method: 'POST',
         // `reason` tells the server this batch is a whole-database restore
         // rather than ordinary editing, so it can hold the caller to
         // project.load on top of the per-record checks it makes anyway.
-        body: JSON.stringify({ clientId: clientId, changes: batch, reason: reason || null })
+        body: JSON.stringify({ clientId: clientId, changes: sent, reason: reason || null })
       }).then(function (body) {
+        var clashes = [];
         (body.applied || []).forEach(function (a, i) {
           var key = keyOf(a.kind, a.id);
           if (batch[i] && batch[i].op === 'delete') { delete shadow[key]; delete revs[key]; }
@@ -530,9 +540,20 @@
           else if (batch[i] && !(revs[key] > a.rev)) {
             revs[key] = a.rev;
             shadow[key] = JSON.stringify(batch[i].json);
+            /* The server merged this save into somebody else's and stored the
+               result. Take it, the way a change off the stream is taken: if
+               nothing was typed here since sending, it simply replaces the
+               record; if something was, that is merged on top. */
+            if (a.json != null && db) {
+              absorb(db, { kind: a.kind, id: a.id, op: 'put', json: a.json, rev: a.rev });
+              (a.conflicts || []).forEach(function (c) {
+                clashes.push(Object.assign({ kind: a.kind, id: a.id }, c));
+              });
+            }
           }
           if (a.seq > lastSeq) lastSeq = a.seq;
         });
+        body.clashes = clashes;
         return body;
       });
     },

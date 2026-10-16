@@ -364,14 +364,19 @@
     if (!host || host.classList.contains('hidden')) return;
     var p = current();
     if (!p) { host.innerHTML = renderPicker(); return; }
-    host.innerHTML =
-      '<div class="grid grid-cols-1 xl:grid-cols-[440px_1fr] gap-6 no-print-grid">' +
-        '<div class="no-print">' + renderEditor(p) + '</div>' +
-        '<div>' + renderDocShell(p) + '</div>' +
-      '</div>';
-    ['pd-proposalData-submittedDate', 'pd-proposalData-approvalDeadline']
-      .forEach(function (id) { U.wireDateField(id); });
-    paintDoc();
+    // Where the page, the editor panel and each text box were scrolled to, and
+    // the cursor, all put back - a rebuild must never throw somebody to the top.
+    U.preserveView(function () {
+      host.innerHTML =
+        '<div class="grid grid-cols-1 xl:grid-cols-[440px_1fr] gap-6 no-print-grid">' +
+          '<div class="no-print">' + renderEditor(p) + '</div>' +
+          '<div>' + renderDocShell(p) + '</div>' +
+        '</div>';
+      ['pd-proposalData-submittedDate', 'pd-proposalData-approvalDeadline']
+        .forEach(function (id) { U.wireDateField(id); });
+      paintDoc();
+    });
+    if (root.App && root.App.screenIsCurrent) root.App.screenIsCurrent();
   }
 
   function renderPicker() {
@@ -490,7 +495,7 @@
       var id = 'rt-' + path.replace(/\./g, '-');
       return '<div><label class="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">' + label + '</label>' +
         toolbar(id) +
-        '<div id="' + id + '" contenteditable="true" data-path="' + path + '" ' +
+        '<div id="' + id + '" data-keep-scroll contenteditable="true" data-path="' + path + '" ' +
         'oninput="Proposal.richInput(this)" ' +
         'class="prose-mini w-full px-2.5 py-2 bg-surface border border-line rounded-b-lg text-sm outline-none focus:border-brand max-h-56 overflow-y-auto">' +
         U.sanitizeHTML(U.toHTMLList(val)) + '</div></div>';
@@ -552,7 +557,7 @@
             (on ? 'text-brand-ink border-b-2 border-brand bg-surface' : 'text-muted hover:text-ink-strong') + '">' + t[1] + '</button>';
         }).join('') + '</div>' +
 
-      '<div class="p-4 space-y-3 max-h-[560px] overflow-y-auto">' + sections[state.editing] + '</div>' +
+      '<div id="proposalEditScroll" data-keep-scroll class="p-4 space-y-3 max-h-[560px] overflow-y-auto">' + sections[state.editing] + '</div>' +
 
       '<div class="p-3 border-t border-line bg-raised grid grid-cols-2 gap-2">' +
         '<button onclick="Proposal.print()" class="px-3 py-2 bg-chrome hover:bg-chrome-soft text-white rounded-lg text-xs font-semibold"><i class="fas fa-file-pdf mr-1"></i>Export PDF</button>' +
@@ -578,24 +583,39 @@
       '</div>';
   }
 
+  /* A scope item by its id - or, for one saved before items had ids, its
+     position. Handlers used to take the position only, and a colleague adding
+     or removing an item while this screen was not repainted (it is not, see
+     wireExternalChanges in js/app.js) sent the next edit into the wrong item. */
+  function scopeAt(ref) {
+    var list = current().scopeItems;
+    var hit = typeof ref === 'string' && !/^\d+$/.test(ref)
+      ? list.filter(function (x) { return x.id === ref; })[0]
+      : list[Number(ref)];
+    if (!hit) U.toast('That scope item has just been removed by someone else.', 'warn');
+    return hit || null;
+  }
+
   function renderScopeEditor(p) {
     return '<div class="space-y-2">' + p.scopeItems.map(function (s, i) {
+      // By id, not position - see scopeAt.
+      var k = s.id ? "'" + s.id + "'" : String(i);
       return '<div class="border border-line rounded-lg p-3 ' + (s.locked ? 'bg-warn-soft/40 border-warn/40' : 'bg-raised/50') + '">' +
         '<div class="flex items-center gap-2 mb-2">' +
           '<span class="w-6 h-6 rounded bg-line text-muted text-[10px] font-bold flex items-center justify-center">' + (i + 1) + '</span>' +
-          '<input value="' + U.escAttr(s.description) + '" onchange="Proposal.setScope(' + i + ',\'description\',this.value)" ' +
+          '<input value="' + U.escAttr(s.description) + '" onchange="Proposal.setScope(' + k + ',\'description\',this.value)" ' +
             'class="flex-1 px-2 py-1 bg-surface border border-line rounded text-sm font-semibold outline-none focus:border-brand">' +
-          '<button onclick="Proposal.toggleLock(' + i + ')" title="' + (s.locked ? 'Unlock - regeneration will overwrite this wording' : 'Lock the wording so regenerating the proposal keeps it') + '" ' +
+          '<button onclick="Proposal.toggleLock(' + k + ')" title="' + (s.locked ? 'Unlock - regeneration will overwrite this wording' : 'Lock the wording so regenerating the proposal keeps it') + '" ' +
             'class="w-6 h-6 rounded text-xs ' + (s.locked ? 'text-warn' : 'text-faint hover:text-muted') + '"><i class="fas fa-' + (s.locked ? 'lock' : 'lock-open') + '"></i></button>' +
-          '<button onclick="Proposal.removeScope(' + i + ')" class="w-6 h-6 rounded text-faint hover:text-danger text-xs"><i class="fas fa-times"></i></button>' +
+          '<button onclick="Proposal.removeScope(' + k + ')" class="w-6 h-6 rounded text-faint hover:text-danger text-xs"><i class="fas fa-times"></i></button>' +
         '</div>' +
         toolbar('sc-' + i) +
-        '<div id="sc-' + i + '" contenteditable="true" data-scope="' + i + '" oninput="Proposal.scopeRichInput(this)" ' +
+        '<div id="sc-' + i + '" data-keep-scroll contenteditable="true" data-scope="' + U.escAttr(s.id || String(i)) + '" oninput="Proposal.scopeRichInput(this)" ' +
           'class="prose-mini px-2 py-2 bg-surface border border-line rounded-b text-xs outline-none focus:border-brand max-h-40 overflow-y-auto">' +
           U.sanitizeHTML(U.toHTMLList(s.details)) + '</div>' +
         '<div class="flex items-center gap-2 mt-2">' +
           '<span class="text-[10px] font-bold text-muted uppercase">Cost</span>' +
-          '<input type="number" step="any" value="' + (s.cost == null ? '' : s.cost) + '" onchange="Proposal.setScope(' + i + ',\'cost\',this.value)" ' +
+          '<input type="number" step="any" value="' + (s.cost == null ? '' : s.cost) + '" onchange="Proposal.setScope(' + k + ',\'cost\',this.value)" ' +
             'class="w-32 px-2 py-1 bg-surface border border-line rounded text-sm text-right font-mono outline-none focus:border-brand">' +
         '</div></div>';
     }).join('') +
@@ -614,7 +634,7 @@
   /* ---- the document ---------------------------------------------------- */
 
   function renderDocShell() {
-    return '<div class="overflow-x-auto"><div id="proposalDoc" class="mx-auto shadow-xl"></div></div>';
+    return '<div id="proposalDocScroll" data-keep-scroll class="overflow-x-auto"><div id="proposalDoc" class="mx-auto shadow-xl"></div></div>';
   }
 
   /* The printed document, block by block, in the order it appears on paper.
@@ -1029,8 +1049,9 @@
       paintDoc();
     },
     scopeRichInput: function (el) {
-      var i = Number(el.getAttribute('data-scope'));
-      current().scopeItems[i].details = U.sanitizeHTML(el.innerHTML);
+      var s = scopeAt(el.getAttribute('data-scope'));
+      if (!s) return;
+      s.details = U.sanitizeHTML(el.innerHTML);
       commit();
       paintDoc();
     },
@@ -1042,8 +1063,9 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
     },
 
-    setScope: function (i, field, value) {
-      var s = current().scopeItems[i];
+    setScope: function (ref, field, value) {
+      var s = scopeAt(ref);
+      if (!s) return;
       s[field] = field === 'cost' ? (value === '' ? 0 : Number(value)) : value;
       commit();
       paintDoc();
@@ -1055,9 +1077,15 @@
       });
       save();
     },
-    removeScope: function (i) { current().scopeItems.splice(i, 1); save(); },
-    toggleLock: function (i) {
-      var s = current().scopeItems[i];
+    removeScope: function (ref) {
+      var list = current().scopeItems, s = scopeAt(ref);
+      if (!s) return;
+      list.splice(list.indexOf(s), 1);
+      save();
+    },
+    toggleLock: function (ref) {
+      var s = scopeAt(ref);
+      if (!s) return;
       s.locked = !s.locked;
       save();
     },

@@ -204,9 +204,12 @@
         'If the connection drops, keep working. The footer counts the changes waiting, they ' +
           'are kept on this computer, and they go up by themselves when it comes back. ' +
           '"All changes saved" only shows when nothing is left to send.',
-        'Two people can work in the same takeoff at once. Both sets of edits are merged. ' +
-          'If you both changed the same field, your value is kept and a message names the ' +
-          'field so you can check it.',
+        'Several people can work in the same project, even the same takeoff, at once. ' +
+          'Every save is merged product by product and row by row, so no entries ' +
+          'are lost. If two people change the same field, the later save stands and both are told.',
+        'A save made by somebody else never redraws your page. A small notice at the bottom says ' +
+          'who changed what. Click Show changes to see it; you stay where you were on the page.',
+        'In a takeoff, the product list shows the initials of anybody else working on each product.',
         'Backing the office up is copying the diverse.db file on the server; ' +
           'restoring one is putting that file back.',
         'XLSX exports the bid list you are looking at - the same columns, filters and ' +

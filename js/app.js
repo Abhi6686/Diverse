@@ -54,6 +54,7 @@
       root.Nav.setCurrent(tab);
     }
     currentTab = tab;
+    clearNotice();                 // a page drawn fresh is up to date
 
     var target = root.Nav.domOf(tab);
     root.Nav.domIds().forEach(function (id) {
@@ -71,7 +72,10 @@
     if (root.Presence) {
       var onProject = root.Nav.current.module === 'project';
       var bid = onProject && root.Project.currentBid();
-      root.Presence.here(bid ? bid.id : null, tab);
+      // On a takeoff, which product - so the others in it can see who is on
+      // what, and steer clear before two people type in the same rows.
+      var where = tab === 'takeoff' && root.Takeoff.presenceSection ? root.Takeoff.presenceSection() : tab;
+      root.Presence.here(bid ? bid.id : null, where);
     }
   }
 
@@ -305,6 +309,126 @@
     fn();
   }
 
+  /* SOMEBODY ELSE'S SAVE, AND WHAT IT DOES TO THIS SCREEN.
+   *
+   * It used to repaint whatever page was up, every time - so with three people
+   * typing in takeoffs, somebody reading a proposal had it rebuilt under them
+   * every few seconds and thrown back to the top. Now it depends on the page:
+   *
+   *   a list (dashboard, the bid tables, settings lists) - nobody types there
+   *     for long, and a live list is what is expected: repainted in place,
+   *     scroll kept, held back while a field has the cursor;
+   *   an editor (takeoff, proposal, project) showing a DIFFERENT record - not
+   *     touched at all, only the project bar's figures;
+   *   an editor showing THIS record - not repainted either. The change is
+   *     already merged into the data underneath, and every handler addresses
+   *     rows and items by id, so carrying on typing is safe. A slim notice
+   *     names who changed what, and Show changes repaints, keeping the place.
+   *     The person's own next edit repaints anyway and takes the notice down.
+   */
+  var EDITOR_TABS = { takeoff: true, proposal: true, project: true };
+  var notice = { names: [], what: [], count: 0, clashes: [] };
+
+  /* 'kind:id' of the records the editor on screen is showing. */
+  function openRecords() {
+    var keys = {};
+    if (currentTab === 'takeoff' && root.Takeoff.currentId()) keys['takeoff:' + root.Takeoff.currentId()] = true;
+    if (currentTab === 'proposal' && root.Proposal.currentId()) keys['proposal:' + root.Proposal.currentId()] = true;
+    var bid = root.Project && root.Project.currentBid ? root.Project.currentBid() : null;
+    if (bid && currentTab === 'project') {
+      keys['bid:' + bid.id] = true;
+      if (bid.takeoffId) keys['takeoff:' + bid.takeoffId] = true;
+      if (bid.proposalId) keys['proposal:' + bid.proposalId] = true;
+    }
+    return keys;
+  }
+
+  /* What moved inside a takeoff or proposal, in words a person recognises:
+     the products (or scope items) whose content differs from before. */
+  function whatChanged(c, beforeJson) {
+    var coll = c.kind === 'takeoff' ? root.Store.db.takeoffs : root.Store.db.proposals;
+    var now = coll && coll[c.id];
+    var was = beforeJson ? JSON.parse(beforeJson) : null;
+    if (!now) return [];
+    var list = c.kind === 'takeoff' ? (now.products || []) : (now.scopeItems || []);
+    var old = {};
+    ((was && (c.kind === 'takeoff' ? was.products : was.scopeItems)) || []).forEach(function (x) {
+      old[x.id] = JSON.stringify(x);
+    });
+    var names = list.filter(function (x) { return old[x.id] !== JSON.stringify(x); })
+      .map(function (x) { return c.kind === 'takeoff' ? x.type : (x.description || 'a scope item'); });
+    if (!names.length) names.push(c.kind === 'takeoff' ? 'this takeoff' : 'this proposal');
+    return names;
+  }
+
+  function remoteArrived(info, busy) {
+    var open = openRecords();
+    var bid = root.Project && root.Project.currentBid ? root.Project.currentBid() : null;
+
+    if (!EDITOR_TABS[currentTab]) {
+      // A list. Live, quietly, and never under somebody's cursor.
+      if (busy) { defer(repaint); return; }
+      repaint();
+      return;
+    }
+
+    // The project bar's figures - the price a takeoff edit has moved - follow
+    // along without the page underneath being touched.
+    if (bid && info.changes.some(function (c) { return c.kind === 'bid' && String(c.id) === String(bid.id); })) {
+      root.Project.renderHeader();
+    }
+
+    var mine = info.changes.filter(function (c) { return open[c.kind + ':' + c.id]; });
+    if (!mine.length) return;
+
+    var who = info.by || 'Someone';
+    if (notice.names.indexOf(who) < 0) notice.names.push(who);
+    mine.forEach(function (c) {
+      notice.count++;
+      if (c.kind === 'takeoff' || c.kind === 'proposal') {
+        whatChanged(c, info.before && info.before[c.kind + ':' + c.id]).forEach(function (n) {
+          if (notice.what.indexOf(n) < 0) notice.what.push(n);
+        });
+      } else if (notice.what.indexOf('the project details') < 0) {
+        notice.what.push('the project details');
+      }
+      (c.clashes || []).forEach(function (p) {
+        var f = root.Merge ? root.Merge.describe({ path: p }) : p;
+        if (notice.clashes.indexOf(f) < 0) notice.clashes.push(f);
+      });
+    });
+    showNotice();
+  }
+
+  function showNotice() {
+    var el = U.$('liveNotice');
+    if (!el) return;
+    var names = notice.names.length <= 2 ? notice.names.join(' and ')
+      : notice.names.slice(0, 2).join(', ') + ' and ' + (notice.names.length - 2) + ' more';
+    // One line, always: the first thing by name (scope items lose the
+    // "Supply and Installation of" every one of them starts with), the rest
+    // counted, and the full list on hover.
+    var short = function (n) {
+      n = String(n).replace(/^Supply and Installation of\s+/i, '');
+      return n.length > 40 ? n.slice(0, 39) + '…' : n;
+    };
+    var what = short(notice.what[0] || 'this page') +
+      (notice.what.length > 1 ? ' and ' + (notice.what.length - 1) + ' more' : '');
+    el.querySelector('.live-who').textContent = names;
+    el.querySelector('.live-what').textContent = 'updated ' + what +
+      (notice.count > 1 ? ' · ' + notice.count + ' changes' : '');
+    el.title = notice.names.join(', ') + ' changed: ' + notice.what.join('; ');
+    el.querySelector('.live-clash').textContent = notice.clashes.length
+      ? 'Their value for ' + notice.clashes.slice(0, 3).join(', ') + ' is now in.' : '';
+    el.classList.remove('hidden');
+  }
+
+  function clearNotice() {
+    notice = { names: [], what: [], count: 0, clashes: [] };
+    var el = U.$('liveNotice');
+    if (el) el.classList.add('hidden');
+  }
+
   function wireExternalChanges() {
     root.Store.onExternalChange(function (info) {
       var bar = U.$('externalChangeBar');
@@ -312,25 +436,10 @@
       var busy = midEdit();
 
       // A remote change is already applied to the in-memory copy by the time we
-      // hear about it, so there is nothing to reload - only to repaint.
+      // hear about it, so there is nothing to reload - only, perhaps, to repaint.
       if (info && info.remote) {
-        var who = info.by ? U.esc(info.by) : 'Someone else';
         if (info.conflicts && info.conflicts.length) clashToast(info.conflicts, info.by);
-        if (busy) {
-          bar.classList.remove('hidden');
-          // True now: their change was merged into the record, not written
-          // over it - see Remote.absorb.
-          bar.querySelector('.change-message').innerHTML =
-            who + ' changed this project while you were editing. Both sets of changes are kept, ' +
-            'and the screen will catch up when you finish.';
-          defer(function () {
-            bar.classList.add('hidden');
-            repaint();
-          });
-          return;
-        }
-        repaint();
-        U.toast(who + ' updated ' + describe(info.changes) + '.', 'info');
+        remoteArrived(info, busy);
         return;
       }
 
@@ -419,16 +528,6 @@
     var what = names.length <= 3 ? names.join(', ') : names.length + ' fields';
     U.toast('You and ' + who + ' both changed ' + what + ' at the same time. Your value was kept - ' +
       'check it if that is not what you meant.', 'warn');
-  }
-
-  function describe(changes) {
-    if (!changes || !changes.length) return 'a record';
-    if (changes.length > 1) return changes.length + ' records';
-    var kind = changes[0].kind;
-    return kind === 'bid' ? 'a bid'
-      : kind === 'takeoff' ? 'a takeoff'
-      : kind === 'proposal' ? 'a proposal'
-      : kind === 'setting' ? 'the settings' : 'a record';
   }
 
   function wireShortcuts() {
@@ -624,6 +723,12 @@
       var target = ok ? last : root.Nav.firstSectionOf('settings');
       if (target) switchTab(target);
     },
+
+    /* The live notice's two buttons, and the editors telling it the screen is
+       current again (any render of the page they own draws the merged data). */
+    showLiveChanges: function () { clearNotice(); repaint(); },
+    dismissLiveNotice: function () { clearNotice(); },
+    screenIsCurrent: function () { clearNotice(); },
 
     dismissExternalChange: function () {
       U.$('externalChangeBar').classList.add('hidden');

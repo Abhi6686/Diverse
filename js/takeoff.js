@@ -125,6 +125,19 @@
     root.Store.save();          // the layout only - no record has changed
     render();
     revealActive();
+    announce();
+  }
+
+  /* Which product this window is on, for the presence marks in everybody
+     else's product list - see Presence.productMark. */
+  function presenceSection() {
+    var p = product();
+    return p ? 'takeoff:' + p.id : 'takeoff';
+  }
+
+  function announce() {
+    var t = takeoff();
+    if (root.Presence && t && t.bidId != null) root.Presence.here(t.bidId, presenceSection());
   }
 
   /* The selected product's row, scrolled into the list's view if it is not
@@ -268,6 +281,38 @@
     return g || p.groups[0] || null;
   }
 
+  /* ROWS ARE ADDRESSED BY ID, NOT POSITION.
+   *
+   * A colleague's change is merged into this takeoff without repainting the
+   * screen (see wireExternalChanges in js/app.js), so what is on screen can be
+   * a step behind the data. When the handlers said "row 3", somebody else
+   * adding or removing a row meant the next cell typed here landed in a
+   * different row - often theirs. An id cannot drift. A row from before rows
+   * had ids (the server stamps them, schema v7) still works by position. */
+  function newRow() { return { id: root.Store.uid('row'), ref: '', values: {} }; }
+
+  function argOf(ref) { return typeof ref === 'string' ? "'" + ref + "'" : String(ref); }
+
+  function rowArg(row, ri) { return argOf(row && row.id ? row.id : ri); }
+
+  function findIn(list, ref, what) {
+    var hit = typeof ref === 'string'
+      ? (list || []).filter(function (x) { return x.id === ref; })[0]
+      : (list || [])[ref];
+    if (!hit) U.toast('That ' + what + ' has just been removed by someone else.', 'warn');
+    return hit || null;
+  }
+
+  function findRow(ref) {
+    var g = currentGroup();
+    return g ? findIn(g.grid.rows, ref, 'row') : null;
+  }
+
+  function findExtra(ref) {
+    var p = product();
+    return p ? findIn(p.extras, ref, 'charge') : null;
+  }
+
   /* The current group first, then anywhere on the product: a row added for a
      scope lands in the group that owns the column, which is not always the one
      being looked at. */
@@ -395,6 +440,8 @@
           '<div>' + (state.view === 'rates' ? renderProjectRates(t) : renderProductPane(t)) + '</div>' +
         '</div>';
     });
+    // Drawn from the data as it stands, colleagues' changes included.
+    if (root.App && root.App.screenIsCurrent) root.App.screenIsCurrent();
   }
 
   function renderPicker() {
@@ -437,7 +484,13 @@
         '<button onclick="event.stopPropagation();Takeoff.toggle(\'p:' + p.id + '\')" class="w-5 text-faint hover:text-ink text-xs">' +
           '<i class="fas fa-chevron-' + (open ? 'down' : 'right') + '"></i></button>' +
         '<button onclick="Takeoff.selectProduct(\'' + p.id + '\')" class="flex-1 text-left min-w-0">' +
-          '<div class="text-sm font-semibold text-ink-strong truncate">' + U.esc(p.type) + '</div>' +
+          '<div class="text-sm font-semibold text-ink-strong flex items-center gap-1 min-w-0">' +
+            '<span class="truncate">' + U.esc(p.type) + '</span>' +
+            // Who else is on this product right now - see Presence.productMark.
+            '<span class="inline-flex -space-x-1 shrink-0" data-presence-bid="' + U.escAttr(String(t.bidId)) + '" ' +
+              'data-presence-product="' + U.escAttr(p.id) + '">' +
+              (root.Presence ? root.Presence.productMark(t.bidId, p.id) : '') + '</span>' +
+          '</div>' +
           '<div class="text-2xs text-muted font-mono">' + unitLabel + ' &middot; ' + U.currency2(c.total) + '</div>' +
         '</button>' +
         '<span class="relative"><button onclick="event.stopPropagation();Takeoff.menu(\'' + p.id + '\')" class="w-6 h-6 rounded hover:bg-line text-faint text-xs"><i class="fas fa-ellipsis-v"></i></button>' +
@@ -784,7 +837,7 @@
           : '') +
         unlinkedScopesChip(p, scopes) +
       '</div>' +
-      '<div class="overflow-x-auto border border-line rounded-lg">' +
+      '<div id="takeoffMatScroll" data-keep-scroll class="overflow-x-auto border border-line rounded-lg">' +
       '<table class="w-full text-xs grid-table">' + materialHead(offCount) +
       '<tbody id="matBody">' + (rows ||
         '<tr><td colspan="' + MAT_COLS.length + '" class="px-3 py-8 text-center text-faint">No material rows yet.</td></tr>') +
@@ -1258,7 +1311,7 @@
       '<button onclick="Takeoff.resetAllOverrides()" class="px-3 py-2 text-xs text-muted hover:text-brand-ink underline">Reset all to formula</button>' +
       '</div>' +
       hiddenRowsBar(p) +
-      '<div class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
+      '<div id="takeoffCostScroll" data-keep-scroll class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
       '<thead><tr>' +
         '<th class="px-2 py-2 w-8 text-center font-semibold text-muted" title="Show this line on the bid proposal">' +
           '<i class="fas fa-file-contract text-3xs"></i></th>' +
@@ -1275,24 +1328,25 @@
       // line total when both are given; an amount on its own still works, which
       // is what keeps every charge already in the database valid.
       (p.extras || []).map(function (e, i) {
+        var xk = argOf(e.id || i);
         var priced = e.qty !== null && e.qty !== undefined && e.qty !== '' &&
                      e.unitPrice !== null && e.unitPrice !== undefined && e.unitPrice !== '';
         function box(fieldName, value, cls) {
           return '<input type="number" step="any" value="' + (value == null ? '' : value) + '" ' +
-            'onchange="Takeoff.setExtra(' + i + ',\'' + fieldName + '\',this.value)" ' +
+            'onchange="Takeoff.setExtra(' + xk + ',\'' + fieldName + '\',this.value)" ' +
             'class="' + cls + ' px-1.5 py-1 bg-surface border border-warn/30 rounded text-xs ' +
             'text-right font-mono outline-none focus:border-warn">';
         }
         return '<tr class="bg-warn-soft/40">' +
           '<td class="px-2 py-1.5 text-center">' + proposalCheckbox(
-            'Takeoff.setExtra(' + i + ',\'showInProposal\',this.checked)',
+            'Takeoff.setExtra(' + xk + ',\'showInProposal\',this.checked)',
             e.showInProposal !== false, false) + '</td>' +
           '<td class="px-3 py-1.5"><input value="' + U.escAttr(e.label) + '" ' +
-            'onchange="Takeoff.setExtra(' + i + ',\'label\',this.value)" ' +
+            'onchange="Takeoff.setExtra(' + xk + ',\'label\',this.value)" ' +
             'class="w-full px-1.5 py-1 bg-surface border border-warn/30 rounded text-xs outline-none focus:border-warn"></td>' +
           '<td class="px-3 py-1.5 text-right">' + box('qty', e.qty, 'w-24') + '</td>' +
           '<td class="px-2 py-1.5"><input value="' + U.escAttr(e.um || '') + '" ' +
-            'onchange="Takeoff.setExtra(' + i + ',\'um\',this.value)" placeholder="EA" ' +
+            'onchange="Takeoff.setExtra(' + xk + ',\'um\',this.value)" placeholder="EA" ' +
             'aria-label="Unit" class="w-16 px-1.5 py-1 bg-surface border border-warn/30 rounded ' +
             'text-xs text-center outline-none focus:border-warn"></td>' +
           // Unit price when the line is a rate x quantity; otherwise this is the
@@ -1302,7 +1356,7 @@
                 priced || e.amount == null ? e.unitPrice : e.amount, 'w-24') + '</td>' +
           '<td class="px-3 py-1.5 text-right font-mono text-ink-strong">' +
             U.currency2(M.extraAmount(e)) + '</td>' +
-          '<td class="px-2 text-center"><button onclick="Takeoff.removeExtra(' + i + ')" class="text-faint hover:text-danger text-3xs" title="Delete this charge"><i class="fas fa-times"></i></button></td></tr>';
+          '<td class="px-2 text-center"><button onclick="Takeoff.removeExtra(' + xk + ')" class="text-faint hover:text-danger text-3xs" title="Delete this charge"><i class="fas fa-times"></i></button></td></tr>';
       }).join('') +
       '<tr class="border-t-2 border-line-strong bg-raised"><td></td><td class="px-3 py-2.5 font-bold text-ink">Material + Engg + Fab + Install Cost</td>' +
         '<td colspan="3" class="px-3 py-2.5 text-right text-3xs text-muted">Material ' + U.currency2(c.materialCost) + '</td>' +
@@ -1492,7 +1546,7 @@
         '<span class="text-2xs text-muted">shared by every product in this takeoff</span>' +
       '</div>' +
       (docs.length
-        ? '<div class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
+        ? '<div id="takeoffDocsScroll" data-keep-scroll class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
           '<thead><tr>' +
             ['', 'Name', 'Category', 'Link', 'Used by', ''].map(function (h, i) {
               return '<th class="px-2 py-2 ' + (i === 4 ? 'text-center' : i === 5 ? 'text-right' : 'text-left') +
@@ -1542,7 +1596,7 @@
    * carries a mark. The caret that changes it appears on hover, so the common
    * case - which is every row - shows nothing to decide about.
    */
-  function refLink(row, ri) {
+  function refLink(row, rk) {
     var t = takeoff();
     var doc = M.docForRow(t, row);
     var url = doc ? U.safeUrl(doc.url) : null;
@@ -1567,7 +1621,7 @@
         'class="text-faint hover:text-brand text-xs"><i class="far fa-file"></i></button>';
 
     return open +
-      '<button onmousedown="event.preventDefault();Takeoff.refMenu(this,' + ri + ')" ' +
+      '<button onmousedown="event.preventDefault();Takeoff.refMenu(this,' + rk + ')" ' +
         'title="Point this reference at a different document" ' +
         'class="opacity-0 group-hover/ref:opacity-100 focus:opacity-100 transition text-3xs text-faint hover:text-ink">' +
         '<i class="fas fa-caret-down"></i></button>';
@@ -1583,11 +1637,13 @@
     if (refBox) { refBox.remove(); refBox = null; }
   }
 
-  function refMenu(btn, ri) {
+  function refMenu(btn, ref) {
     refMenuClose();
     var t = takeoff();
     var docs = M.documents(t);
-    var row = currentGroup().grid.rows[ri];
+    var row = findRow(ref);
+    if (!row) return;
+    var ri = argOf(ref);
 
     function line(onclick, icon, label, sub, active) {
       return '<button onmousedown="event.preventDefault();' + onclick + '" ' +
@@ -1759,7 +1815,7 @@
 
     return '<div class="flex flex-wrap items-center gap-2 mb-4">' + groupTabs + '</div>' +
       scopeStrip(p, scopes) +
-      '<div class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
+      '<div id="takeoffGridScroll" data-keep-scroll class="overflow-x-auto border border-line rounded-lg"><table class="w-full text-xs grid-table">' +
       '<thead><tr>' +
         '<th class="px-2 py-2 text-left font-semibold text-muted uppercase text-3xs tracking-wider sticky left-0 bg-raised">Drawing Ref. No</th>' +
         // Column headings carry long labels like 'Top Rail_1-1/2" Pipe'. They
@@ -1799,18 +1855,19 @@
           'class="text-faint hover:text-brand" title="Add a column"><i class="fas fa-plus"></i></button></th>' +
       '</tr></thead><tbody>' +
       (g.grid.rows.length ? g.grid.rows.map(function (row, ri) {
+        var rk = rowArg(row, ri);
         return '<tr class="border-t border-line hover:bg-raised/60">' +
           '<td class="px-2 py-1 sticky left-0 bg-surface"><div class="group/ref flex items-center gap-1">' +
-            '<input value="' + U.escAttr(row.ref) + '" onchange="Takeoff.setRowRef(' + ri + ',this.value)" ' +
+            '<input value="' + U.escAttr(row.ref) + '" onchange="Takeoff.setRowRef(' + rk + ',this.value)" ' +
               'placeholder="2/A-101" class="w-28 px-1.5 py-1 bg-raised border border-line rounded text-xs outline-none focus:border-brand">' +
-            refLink(row, ri) +
+            refLink(row, rk) +
           '</div></td>' +
           cols.map(function (col) {
             return '<td class="px-1 py-1"><input type="number" step="any" value="' + (row.values[col.key] == null ? '' : row.values[col.key]) + '" ' +
-              'onchange="Takeoff.setCellValue(' + ri + ',\'' + col.key + '\',this.value)" ' +
+              'onchange="Takeoff.setCellValue(' + rk + ',\'' + col.key + '\',this.value)" ' +
               'class="w-full px-1.5 py-1 bg-raised border border-line rounded text-xs text-right font-mono outline-none focus:border-brand"></td>';
           }).join('') +
-          '<td class="px-1"><button onclick="Takeoff.removeRow(' + ri + ')" class="text-faint hover:text-danger text-3xs"><i class="fas fa-times"></i></button></td></tr>';
+          '<td class="px-1"><button onclick="Takeoff.removeRow(' + rk + ')" class="text-faint hover:text-danger text-3xs"><i class="fas fa-times"></i></button></td></tr>';
       }).join('') : '<tr><td colspan="' + (cols.length + 2) + '" class="px-3 py-8 text-center text-faint">No drawing references yet.</td></tr>') +
       '</tbody><tfoot class="bg-raised border-t-2 border-line-strong"><tr>' +
         '<td class="px-2 py-2.5 font-bold text-ink uppercase text-3xs tracking-wider sticky left-0 bg-raised">Sub Total</td>' +
@@ -1944,6 +2001,7 @@
     openTakeoff: function (id) { openTakeoff(id); },
     hasTakeoff: function (bid) { return !!(bid.takeoffId && db().takeoffs[bid.takeoffId]); },
     currentId: function () { return state.takeoffId; },
+    presenceSection: presenceSection,
     commit: commit,
 
     // Layout only (db.ui is this person's, not the takeoff's) - see showSelection.
@@ -2271,21 +2329,27 @@
                       qty: null, um: '', unitPrice: null, amount: null });
       save();
     },
-    setExtra: function (i, f, v) {
-      var p = product();
+    setExtra: function (ref, f, v) {
+      var x = findExtra(ref);
+      if (!x) return;
       var numeric = f === 'amount' || f === 'qty' || f === 'unitPrice';
-      p.extras[i][f] = numeric ? (v === '' ? null : Number(v))
+      x[f] = numeric ? (v === '' ? null : Number(v))
         : f === 'showInProposal' ? !!v
         : String(v == null ? '' : v).trim();
       // A charge given a quantity and a unit price is priced by them from now
       // on, so a flat amount left over from before would be dead data that the
       // XLSX export would still print.
-      if ((f === 'qty' || f === 'unitPrice') && M.extraAmount(p.extras[i]) !== U.n(p.extras[i].amount)) {
-        p.extras[i].amount = null;
+      if ((f === 'qty' || f === 'unitPrice') && M.extraAmount(x) !== U.n(x.amount)) {
+        x.amount = null;
       }
       save();
     },
-    removeExtra: function (i) { product().extras.splice(i, 1); save(); },
+    removeExtra: function (ref) {
+      var p = product(), x = findExtra(ref);
+      if (!x) return;
+      p.extras.splice(p.extras.indexOf(x), 1);
+      save();
+    },
 
     /* The unit a standard Cost & Labour row is billed in. Stored only when it
        differs from the default, the same way a renamed label is - see
@@ -2342,7 +2406,7 @@
       /* Somewhere to put a number, straight away. Without this the first column
          lands above an empty table and the estimator has to find a second
          button before they can type anything. */
-      if (!g.grid.rows.length) g.grid.rows.push({ ref: '', values: {} });
+      if (!g.grid.rows.length) g.grid.rows.push(newRow());
 
       if (nameEl) nameEl.value = '';
       save();
@@ -2412,17 +2476,23 @@
       save();
     },
     addRow: function () {
-      currentGroup().grid.rows.push({ ref: '', values: {} });
+      currentGroup().grid.rows.push(newRow());
       save();
     },
-    removeRow: function (i) { currentGroup().grid.rows.splice(i, 1); save(); },
+    removeRow: function (ref) {
+      var rows = currentGroup().grid.rows, row = findRow(ref);
+      if (!row) return;
+      rows.splice(rows.indexOf(row), 1);
+      save();
+    },
     /* Stamped like any other takeoff edit, because the refs now print on the
        proposal's scope - a changed ref has to mark the proposal out of date so
        Regenerate picks it up. No render(): this fires on blur, and rebuilding
        the grid then would drop the focus that is on its way to the next cell. */
-    setRowRef: function (i, v) {
-      var t = takeoff();
-      currentGroup().grid.rows[i].ref = v;
+    setRowRef: function (ref, v) {
+      var t = takeoff(), row = findRow(ref);
+      if (!row) return;
+      row.ref = v;
       if (t) t.updatedAt = new Date().toISOString();
       recordChange(t);
       root.Store.save();
@@ -2500,9 +2570,10 @@
     },
 
     refMenu: refMenu,
-    setRowDoc: function (i, docId) {
+    setRowDoc: function (ref, docId) {
       refMenuClose();
-      var row = currentGroup().grid.rows[i];
+      var row = findRow(ref);
+      if (!row) return;
       if (docId) row.docId = docId; else delete row.docId;
       save();
     },
@@ -2525,8 +2596,10 @@
     },
     /* Measuring something is asking to buy it, so the material row appears as
        the quantity is typed rather than waiting to be asked for. */
-    setCellValue: function (i, key, v) {
-      currentGroup().grid.rows[i].values[key] = v === '' ? null : Number(v);
+    setCellValue: function (ref, key, v) {
+      var row = findRow(ref);
+      if (!row) return;
+      row.values[key] = v === '' ? null : Number(v);
       var added = M.syncScopeRows(product());
       save();
       if (added.length) {

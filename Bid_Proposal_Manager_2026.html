@@ -46,6 +46,16 @@
 
 <div id="toastHost" class="fixed bottom-6 right-6 z-[100] space-y-2"></div>
 
+<!-- A colleague changed the takeoff or proposal on screen. The data is already merged;
+     this says so without repainting under the person's cursor. See remoteArrived in js/app.js. -->
+<div id="liveNotice" role="status" aria-live="polite"
+     class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-[90] max-w-[90vw] bg-chrome text-white rounded-full shadow-xl pl-4 pr-2 py-2 flex items-center gap-3 text-sm">
+  <i class="fas fa-user-pen text-brand-soft"></i>
+  <span class="min-w-0 truncate"><b class="live-who font-semibold"></b> <span class="live-what"></span> <span class="live-clash text-warn-soft"></span></span>
+  <button onclick="App.showLiveChanges()" class="shrink-0 px-3 py-1 bg-brand hover:bg-brand-hover rounded-full text-xs font-semibold">Show changes</button>
+  <button onclick="App.dismissLiveNotice()" title="Hide - the screen catches up on your next edit" class="shrink-0 w-7 h-7 rounded-full hover:bg-white/10 text-xs"><i class="fas fa-times"></i></button>
+</div>
+
 <!-- Shown until the local database has opened, then replaced by a failure panel if it cannot -->
 <div id="bootOverlay" class="fixed inset-0 z-[200] bg-canvas flex items-center justify-center">
   <div class="text-center">

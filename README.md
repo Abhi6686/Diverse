@@ -110,15 +110,31 @@ A few things worth knowing:
 - **Only what changed is sent.** On save the client compares each record against the copy the
   server last confirmed and sends the difference. Sending the whole database would make the
   last person to type the winner.
-- **Two people editing one record both keep their work.** Every record carries a revision,
-  and every change on the stream carries the revision it produced. A save made against an
-  older revision is merged rather than thrown away (`js/merge.js`), then sent again. Products,
-  groups, material rows, catalog parts and history entries are matched by id, so both sides'
-  additions and deletions survive, and drawing-takeoff rows added on both sides are all kept.
-  Only one field changed by both people to different values counts as a real clash. In that
-  case the value typed on your screen stands, and a toast names the field so you can check it.
-  The same merge runs when a colleague's change arrives while you still have unsent edits to
-  that record.
+- **Several people can work in one project, or one takeoff, at the same time.** The server
+  merges each save into the record as it stands, the way Figma's multiplayer server does. Every
+  save carries the copy it was made against. When someone else has saved since, `db.putMany`
+  folds the edit in with `js/merge.js` instead of refusing it, so no save is ever turned away
+  for being out of date:
+  - Products, groups, material rows, drawing-takeoff rows, extra charges, scope items, catalog
+    parts and history entries are matched by id. Two people on different products, or on
+    different rows of the same product, never conflict, and rows both of them add are all kept.
+  - Different projects are different records and never touch each other.
+  - Only a single field that two people changed to different values is a real clash. The save
+    that reached the server last stands, and both people are told which field it was.
+- **Somebody else's save never repaints your page.** Lists (the dashboard and the bid tables)
+  update live in place. On a takeoff, proposal or project page:
+  - A change to a different record is applied quietly, and only the figures in the project bar
+    follow it.
+  - A change to the record you have open is merged into the data underneath. A slim notice at
+    the bottom names who changed what, for example "Priya updated Bollard". **Show changes**
+    redraws the page and keeps your place, and your own next edit redraws it anyway.
+  - Rows and items are addressed by id, not by position, so you can keep typing on a page that
+    hasn't been redrawn and the typing still lands in the right row. Database upgrade v7 gave
+    every existing drawing row and extra charge an id.
+  - Redrawing never moves the page. `U.preserveView` keeps the window's scroll position, every
+    scroll box marked `data-keep-scroll`, and the cursor.
+  - The takeoff's product list shows a colleague's initials beside the product they are on, so
+    two people can avoid typing in the same rows.
 - **The project number is unique in the database itself**, not only in the form that types it.
   A check in the browser can be raced by two machines; a constraint cannot.
 - **Dropping the connection is cheap.** Every change has a sequence number, so a browser that

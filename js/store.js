@@ -1377,6 +1377,15 @@
     root.Remote.onChanges(function (list) {
       var merged = false;
       var clashes = [];
+      /* The open documents as they were before this change, so the screen can
+         say WHAT moved ("Priya updated Guardrail #2") without repainting to
+         find out. Only the two kinds anybody edits for long. */
+      var before = {};
+      list.forEach(function (c) {
+        var coll = c.kind === 'takeoff' ? DB.takeoffs : c.kind === 'proposal' ? DB.proposals : null;
+        var key = c.kind + ':' + c.id;
+        if (coll && !(key in before)) before[key] = coll[c.id] ? JSON.stringify(coll[c.id]) : null;
+      });
       list.forEach(function (c) {
         // Merged into, not written over: a record this screen has edits on
         // keeps them. See Remote.absorb.
@@ -1390,7 +1399,7 @@
       notify();
       if (externalChangeHandler) {
         externalChangeHandler({ remote: true, changes: list, by: list[0] && list[0].byName,
-          merged: merged, conflicts: clashes });
+          merged: merged, conflicts: clashes, before: before });
       }
       // The merged record is an edit of ours on top of theirs - send it.
       if (merged) schedulePush();
@@ -1617,8 +1626,15 @@
 
     var reason = nextReason;
     nextReason = null;
-    inflight = root.Remote.push(batch, reason).then(function () {
+    inflight = root.Remote.push(batch, reason, DB).then(function (body) {
       inflight = null;
+      /* Merged on the server into somebody else's save. The record already
+         holds the result; the only thing worth saying is a field both people
+         changed - this save, the later one, is the value that stands. */
+      if (body && body.applied && body.applied.some(function (a) { return a.json != null; })) notify();
+      if (body && body.clashes && body.clashes.length && conflictHandler) {
+        conflictHandler({ error: 'merged', conflicts: body.clashes });
+      }
       online = true;
       retryDelay = 1000;
       // Typed while it was on the wire - send that too, straight away.

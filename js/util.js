@@ -493,6 +493,19 @@
         catch (e) { /* not a control with a caret */ }
       }
 
+      /* The page itself as well. Replacing a section's innerHTML collapses it
+         for a moment, the browser clamps the window's scroll to the shorter
+         page, and nothing put it back - that is the proposal page jumping to
+         the top whenever it was rebuilt. Restored once straight away and once
+         more on the next frame, for a page (the paginated proposal) whose
+         height only settles after layout. */
+      var winX = root.scrollX || 0, winY = root.scrollY || 0;
+      function restoreWindow() {
+        if ((root.scrollX || 0) !== winX || (root.scrollY || 0) !== winY) {
+          try { root.scrollTo(winX, winY); } catch (e) { /* jsdom has no layout */ }
+        }
+      }
+
       try {
         return fn();
       } finally {
@@ -502,6 +515,19 @@
           el.scrollLeft = s.left;
           el.scrollTop = s.top;
         });
+        restoreWindow();
+        if (root.requestAnimationFrame) {
+          root.requestAnimationFrame(function () {
+            restoreWindow();
+            scrolls.forEach(function (s) {
+              var el = U.$(s.id);
+              if (el && (el.scrollTop !== s.top || el.scrollLeft !== s.left)) {
+                el.scrollLeft = s.left;
+                el.scrollTop = s.top;
+              }
+            });
+          });
+        }
         if (focus) {
           var back = U.$(focus.id);
           if (back && back.focus) {

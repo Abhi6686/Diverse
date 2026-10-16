@@ -298,6 +298,48 @@ const STEPS = [
         "INSERT OR IGNORE INTO role_permissions (role_id, perm) " +
         "SELECT role_id, 'catalog.learn' FROM role_permissions WHERE perm = 'takeoff.edit'");
     }
+  },
+
+  {
+    version: 7,
+    name: 'give every drawing-takeoff row and extra charge an id',
+    up: function (db) {
+      /* Rows used to be addressed by position. Two people adding rows to one
+         grid at the same time, with neither screen repainted, then wrote their
+         next cells into each other's rows. New rows carry an id; this gives
+         one to every row already in the database. Done once, here on the
+         server, so every browser sees the same ids - a browser inventing its
+         own would disagree with the next. Each record that changes gets a new
+         rev and a change-log entry, so a browser catching up takes it. */
+      const crypto = require('crypto');
+      const uid = p => p + '-' + Date.now().toString(36) + '-' + crypto.randomBytes(4).toString('hex');
+      const now = new Date().toISOString();
+      const rows = db.prepare('SELECT id, json, rev FROM takeoffs').all();
+      const upd = db.prepare('UPDATE takeoffs SET json = ?, rev = ?, updated_at = ? WHERE id = ?');
+      const log = db.prepare(
+        'INSERT INTO changes (kind, entity_id, op, json, at, by, rev) VALUES (?,?,?,?,?,?,?)');
+      for (const r of rows) {
+        let t;
+        try { t = JSON.parse(r.json); } catch (e) { continue; }
+        let touched = false;
+        (t.products || []).forEach(p => {
+          (p.groups || []).forEach(g => {
+            ((g.grid && g.grid.rows) || []).forEach(row => {
+              if (row && !row.id) { row.id = uid('row'); touched = true; }
+            });
+          });
+          (p.extras || []).forEach(x => {
+            if (x && !x.id) { x.id = uid('x'); touched = true; }
+          });
+        });
+        if (!touched) continue;
+        const json = JSON.stringify(t);
+        upd.run(json, r.rev + 1, now, r.id);
+        // Same body rule as db.logChange: a large record travels by fetch.
+        log.run('takeoff', String(r.id), 'put', Buffer.byteLength(json) > 32768 ? null : json,
+          now, null, r.rev + 1);
+      }
+    }
   }
 ];
 

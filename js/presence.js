@@ -76,6 +76,36 @@
     if (root.Bids && root.App && /^(all|active|awarded)$/.test(root.App.currentTab)) {
       root.Bids.filterTable();
     }
+    paintProductMarks();
+  }
+
+  /* Who is on which product of a takeoff. Painted into slots the product list
+     already has (data-presence-product), not by redrawing the takeoff - people
+     moving between products is frequent, and a redraw would be under somebody's
+     cursor. */
+  function onProduct(bidId, productId) {
+    return on(bidId).filter(function (c) {
+      return c.where && c.where.section === 'takeoff:' + productId;
+    });
+  }
+
+  function productMark(bidId, productId) {
+    var list = onProduct(bidId, productId);
+    if (!list.length) return '';
+    return list.slice(0, 3).map(function (c) {
+      return '<span class="presence-dot ' + colorClass(c) + ' w-4 h-4 rounded-full text-[8px] font-bold ' +
+        'inline-flex items-center justify-center" title="' +
+        U.escAttr((c.name || badge(c)) + ' is working on this product') + '">' + U.esc(badge(c)) + '</span>';
+    }).join('');
+  }
+
+  function paintProductMarks() {
+    if (!root.document) return;
+    var slots = root.document.querySelectorAll('[data-presence-product]');
+    for (var i = 0; i < slots.length; i++) {
+      var el = slots[i];
+      el.innerHTML = productMark(el.getAttribute('data-presence-bid'), el.getAttribute('data-presence-product'));
+    }
   }
 
   /* ---- what the screen asks ---------------------------------------------- */
@@ -161,6 +191,8 @@
     on: on,
     headerChip: headerChip,
     rowMark: rowMark,
+    productMark: productMark,
+    paintProductMarks: paintProductMarks,
     /* For tests and for anything that wants the raw list. */
     get others() { return others.slice(); },
     adopt: adopt

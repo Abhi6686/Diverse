@@ -390,10 +390,15 @@ async function handle(req, res, ctx) {
       sync.broadcast(applied.map((a, i) => ({
         seq: a.seq, kind: a.kind, id: a.id, rev: a.rev,
         op: batch[i].op || 'put',
+        // batch[i].json is what was STORED - the merged record when this save
+        // was folded into somebody else's (see db.putMany), not what was sent.
         json: (batch[i].op === 'delete' || !db.bodyTravels(batch[i].json))
           ? null : batch[i].json,
         by: user.id,
-        byName: user.name
+        byName: user.name,
+        // Fields this save overwrote that somebody else had also changed, so
+        // their screen can say so rather than the value just changing.
+        clashes: a.conflicts && a.conflicts.length ? a.conflicts.map(c => c.path) : undefined
       })), originId);
 
       json(res, 200, { applied: applied, seq: db.latestSeq() });

@@ -104,6 +104,30 @@ function takeoff() {
   check('edits to different cells of one row both land', rows[0].ref === '1A' && rows[0].values.c1 === 6);
 }
 
+// Drawing rows with ids: both add one, one deletes a row the other edits.
+{
+  const withIds = () => {
+    const t = takeoff();
+    t.products[0].groups[0].grid.rows = [{ id: 'r1', ref: '1', values: {} }, { id: 'r2', ref: '2', values: {} }];
+    return t;
+  };
+  const base = withIds(), mine = withIds(), theirs = withIds();
+  const gm = mine.products[0].groups[0].grid, gt = theirs.products[0].groups[0].grid;
+  gm.rows.push({ id: 'rm', ref: 'mine', values: {} });
+  gt.rows.push({ id: 'rt', ref: 'theirs', values: {} });
+  gm.rows[1].ref = '2 edited here';         // r2, which they delete
+  gt.rows.splice(1, 1);
+  gm.rows[0].values = { c1: 3 };           // r1, which they also touch elsewhere
+  gt.rows[0].ref = '1 edited there';
+  const r = M.merge3(base, mine, theirs);
+  const rows = r.value.products[0].groups[0].grid.rows;
+  check('rows with ids: both new rows are kept', rows.some(x => x.id === 'rm') && rows.some(x => x.id === 'rt'),
+    rows.map(x => x.id).join());
+  check('a row deleted there stays deleted', !rows.some(x => x.id === 'r2'));
+  check('two edits to different fields of one row both land',
+    rows[0].ref === '1 edited there' && rows[0].values.c1 === 3, J(rows[0]));
+}
+
 // A real clash: the local value wins and is reported.
 {
   const base = takeoff(), mine = takeoff(), theirs = takeoff();
