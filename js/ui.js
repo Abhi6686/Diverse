@@ -270,11 +270,18 @@
           '<i class="fas fa-pen text-3xs text-faint opacity-40 group-hover:opacity-100 transition"></i>' +
         '</div>' +
         '<div class="edit-field text-sm text-ink break-words rounded px-1 -mx-1 cursor-text ' +
+             // A comment typed over several lines reads that way.
+             (spec.type === 'textarea' ? 'whitespace-pre-line ' : '') +
              'hover:bg-raised transition" ' +
              'tabindex="0" role="button" ' +
              'onclick="UI.beginEdit(this)" ' +
              'ondblclick="UI.beginEdit(this)" ' +
-             'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();UI.beginEdit(this)}" ' +
+             /* Only a key pressed ON this box opens it. The editor is put
+                inside the box, so every key typed into the field bubbles up
+                here too - and without the target test, Space (and Enter, a
+                new line in Comments) was swallowed: nobody could type a space
+                into any field on this card. */
+             'onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();UI.beginEdit(this)}" ' +
              'title="Click to edit ' + U.escAttr(label) + '" ' +
              'data-edit="' + U.escAttr(JSON.stringify(spec)) + '">' +
           (display || '<span class="text-faint">&mdash;</span>') +
@@ -305,8 +312,17 @@
         });
       } else if (spec.type === 'textarea') {
         control = document.createElement('textarea');
-        control.rows = 2;
+        // Room to write in, growing with what is written rather than
+        // scrolling inside a two-line box.
+        control.rows = 4;
         control.value = spec.value;
+        control.style.resize = 'vertical';
+        var grow = function () {
+          control.style.height = 'auto';
+          if (control.scrollHeight) control.style.height = (control.scrollHeight + 2) + 'px';
+        };
+        control.addEventListener('input', grow);
+        setTimeout(grow, 0);
       } else {
         control = document.createElement('input');
         // A date is typed as MM-DD-YYYY and stored ISO, so the control shows

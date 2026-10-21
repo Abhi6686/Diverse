@@ -370,6 +370,12 @@
       out.push(G.menuItem({ icon: 'fa-pen', label: 'Edit bid',
         onclick: 'Bids.edit(' + bid.id + ')' }));
     }
+    // Another project like this one - same details, takeoff and proposal; new
+    // number, today's dates, empty team. See cloneBid.
+    if (root.Auth.can('bid.create')) {
+      out.push(G.menuItem({ icon: 'fa-clone', label: 'Clone project',
+        onclick: 'Bids.promptClone(' + bid.id + ')' }));
+    }
     // Undoing a stage: an award rescinded, a bid picked up by mistake. It takes
     // a comment, and it is logged - see js/history.js.
     if (root.History.canReverse(bid)) {
@@ -625,6 +631,209 @@
 
     return next;
   }
+
+  /* ---- cloning ----------------------------------------------------------- */
+
+  /* A SECOND PROJECT LIKE THIS ONE.
+   *
+   * The same job bid again - another GC asking for the same building, a
+   * sister site - so everything that describes the work comes across: the
+   * details, the takeoff, the proposal. What does not is everything that
+   * belongs to THIS bid's life: its number, its dates, its history, its
+   * outcome, and its team. The team starts empty on purpose - a clone is
+   * usually handed to somebody else, and carrying names across would book
+   * people onto work they were never given.
+   *
+   * It lands on the same list as the original: an Active bid's clone is
+   * Active and numbered, an intake record's stays intake and unnumbered. A
+   * decided job (Awarded, Lost) clones as fresh Active work - nobody clones
+   * a decision. */
+  function deepCopy(x) { return x == null ? x : JSON.parse(JSON.stringify(x)); }
+
+  /* New ids for everything inside a document that is addressed by id - the
+     products, groups, material rows, drawing rows, extra charges. Column keys
+     and document ids are left alone: rows point at them by value. */
+  function refreshTakeoffIds(t) {
+    var uid = root.Store.uid;
+    (t.products || []).forEach(function (p) {
+      p.id = uid('prd');
+      (p.groups || []).forEach(function (g) {
+        g.id = uid('grp');
+        (g.items || []).forEach(function (it) { it.id = uid('mi'); });
+        ((g.grid && g.grid.rows) || []).forEach(function (r) { r.id = uid('row'); });
+      });
+      (p.extras || []).forEach(function (x) { x.id = uid('x'); });
+    });
+  }
+
+  function cloneTarget(original) {
+    return original.active || original.status === 'Awarded' || original.status === 'Lost'
+      ? 'active' : 'intake';
+  }
+
+  function cloneBid(bidId, o) {
+    o = o || {};
+    var d = db();
+    var original = bids().filter(function (b) { return b.id === bidId; })[0];
+    if (!original) return null;
+    var today = U.today();
+    var now = new Date().toISOString();
+    var active = cloneTarget(original) === 'active';
+    var dueDate = o.dueDate !== undefined ? (o.dueDate || '') : (original.dueDate || '');
+
+    var next = {
+      id: bids().reduce(function (m, b) { return Math.max(m, b.id || 0); }, 0) + 1,
+      sr: bids().reduce(function (m, b) { return Math.max(m, Number(b.sr) || 0); }, 0) + 1,
+      project: String(o.project || original.project || '').trim(),
+      products: (original.products || []).slice(),
+      productLines: deepCopy(original.productLines || []),
+      material: original.material || '',
+      region: original.region || '',
+      location: original.location || '',
+      portal: original.portal || '',
+      link: original.link || '',
+      comments: original.comments || '',
+      inRegion: original.inRegion,
+      price: original.price == null ? null : original.price,
+      priceLocked: !!original.priceLocked,
+      lf: original.lf == null ? null : original.lf,
+      bidHrs: 0,
+
+      dueDate: dueDate,
+      revisedDueDate: '',
+      month: dueDate ? U.parseDate(dueDate).getMonth() : new Date().getMonth(),
+      createdAt: now,
+
+      // The team is the one thing deliberately left behind - see above.
+      engineer: '',
+      estHrs: 0,
+      assignedHrs: 0,
+      assignments: [],
+
+      status: 'Not Started',
+      active: active,
+      activatedAt: active ? today : null,
+      proposalNo: active ? nextProjectNo(today) : '',
+      awardNo: null,
+      awardedAt: null,
+      decidedAt: null,
+      takeoffId: null,
+      proposalId: null,
+      history: [],
+      clonedFrom: original.id
+    };
+    d.bids.push(next);
+
+    var src = original.takeoffId ? d.takeoffs[original.takeoffId] : null;
+    var t = null;
+    if (src) {
+      t = deepCopy(src);
+      t.id = root.Store.uid('tko');
+      t.bidId = next.id;
+      t.project = Object.assign({}, t.project || {}, {
+        name: next.project, location: next.location,
+        proposalNo: next.proposalNo, bidDueDate: next.dueDate
+      });
+      refreshTakeoffIds(t);
+      t.createdAt = now;
+      t.updatedAt = now;
+      d.takeoffs[t.id] = t;
+      next.takeoffId = t.id;
+    }
+
+    var srcP = original.proposalId ? d.proposals[original.proposalId] : null;
+    if (srcP) {
+      var p = deepCopy(srcP);
+      p.id = root.Store.uid('pro');
+      p.bidId = next.id;
+      p.takeoffId = t ? t.id : null;
+      p.proposalData = Object.assign({}, p.proposalData || {}, {
+        projectName: next.project,
+        proposalNo: next.proposalNo,
+        submittedDate: today,
+        approvalDeadline: U.addDays(today, 14)
+      });
+      (p.scopeItems || []).forEach(function (si) { si.id = root.Store.uid('si'); });
+      // Generated from the copied takeoff at the same instant it was made, so
+      // the copy does not open saying it has fallen behind.
+      if (t) p.generatedAt = now;
+      d.proposals[p.id] = p;
+      next.proposalId = p.id;
+    }
+
+    var label = function (b) { return String(b.proposalNo || '').trim() || b.project || 'this project'; };
+    root.History.recordCreated(next);
+    root.History.entries(next).slice(-1)[0].comment = 'Cloned from ' + label(original) + '.';
+    root.History.record(original, root.History.stageOf(original), 'cloned', {
+      fromStatus: original.status, toStatus: original.status,
+      comment: 'Cloned as ' + label(next) + '.'
+    });
+    return next;
+  }
+
+  var cloneSource = null;
+
+  function promptClone(id) {
+    var b = bids().filter(function (x) { return x.id === id; })[0];
+    if (!b) return;
+    if (!root.Auth.can('bid.create')) { U.toast('Your role cannot add bids.', 'warn'); return; }
+    cloneSource = id;
+    var d = db();
+    var t = b.takeoffId ? d.takeoffs[b.takeoffId] : null;
+    var p = b.proposalId ? d.proposals[b.proposalId] : null;
+    var active = cloneTarget(b) === 'active';
+
+    U.$('cloneFrom').textContent =
+      (String(b.proposalNo || '').trim() ? b.proposalNo + ' · ' : '') + (b.project || '');
+    var name = U.$('cloneName');
+    name.value = (b.project || 'Project') + ' (copy)';
+    U.wireDateField('cloneDue');
+    // The original's due date only if it is still ahead - a clone is new work,
+    // and a date that has already passed is not one it can be due on.
+    U.$('cloneDue').value = b.dueDate && b.dueDate >= U.today() ? U.dateToInput(b.dueDate) : '';
+    U.$('cloneWarn').classList.add('hidden');
+
+    function count(k, w) { return k + ' ' + w + (k === 1 ? '' : 's'); }
+    function line(icon, html) {
+      return '<li class="flex items-start gap-2"><i class="fas ' + icon + ' w-4 mt-0.5 text-center"></i>' +
+        '<span>' + html + '</span></li>';
+    }
+    U.$('cloneWhat').innerHTML =
+      line('fa-check text-ok', 'Project details' + (b.comments ? ', comments' : '') + ' and price') +
+      line(t ? 'fa-check text-ok' : 'fa-minus text-faint',
+        t ? 'Takeoff &middot; ' + count((t.products || []).length, 'product') : 'No takeoff to copy') +
+      line(p ? 'fa-check text-ok' : 'fa-minus text-faint',
+        p ? 'Proposal &middot; ' + count((p.scopeItems || []).length, 'scope item') : 'No proposal to copy') +
+      line('fa-user-slash text-faint', 'Team &amp; Hours start empty &mdash; assign people on the new project') +
+      line('fa-hashtag text-faint', active
+        ? 'Opens on Active Bids as <b class="font-mono text-ink-strong">' + U.esc(nextProjectNo(U.today())) +
+          '</b>, dated today'
+        : 'Stays in All Bids; numbered when it is picked up');
+
+    U.$('cloneModal').classList.remove('hidden');
+    setTimeout(function () { name.focus(); name.select(); }, 0);
+  }
+
+  function confirmClone() {
+    var name = String(U.$('cloneName').value || '').trim();
+    var dueRaw = String(U.$('cloneDue').value || '').trim();
+    var due = dueRaw ? U.inputToDate(dueRaw) : '';
+    var warn = U.$('cloneWarn');
+    if (!name) { warn.textContent = 'Give the new project a name.'; warn.classList.remove('hidden'); return; }
+    if (dueRaw && !due) { warn.textContent = 'Not a date. Use MM-DD-YYYY.'; warn.classList.remove('hidden'); return; }
+
+    var next = cloneBid(cloneSource, { project: name, dueDate: due });
+    U.$('cloneModal').classList.add('hidden');
+    if (!next) { U.toast('That project could not be cloned.', 'warn'); return; }
+    root.Store.save();
+    refresh();
+    var dup = duplicateProjects(next).length;
+    U.toast('Cloned as ' + (next.proposalNo || '"' + next.project + '"') +
+      '. Add the team on Team & Hours.' + (dup ? ' Another project already has this name.' : ''), 'ok');
+    // Straight to the new project, on the list it was made on.
+    root.Project.openFrom(next.id, next.active ? 'active' : 'all');
+  }
+
 
   /* ---- dates ------------------------------------------------------------- */
 
@@ -2102,6 +2311,10 @@
   }
 
   root.Bids = {
+    promptClone: promptClone,
+    confirmClone: confirmClone,
+    cloneBid: cloneBid,
+    closeCloneModal: function () { U.$('cloneModal').classList.add('hidden'); },
     /* The revised due date is chosen against the one it replaces, so the
        calendar opens with the original flagged rather than leaving somebody to
        remember it. Everything else on the form opens the plain picker. */

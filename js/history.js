@@ -38,7 +38,9 @@
        a thing that happened TO a finished bid: the client brought the job back
        and a fresh revision entry opened beside this one. The bid itself has not
        moved, and it is not going to. */
-    reopened: { label: 'Re-opened', icon: 'fa-rotate-right', tint: 'text-warn-ink' }
+    reopened: { label: 'Re-opened', icon: 'fa-rotate-right', tint: 'text-warn-ink' },
+    /* Not a place either: a second project was made from this one. */
+    cloned: { label: 'Cloned', icon: 'fa-clone', tint: 'text-brand' }
   };
 
   function label(key) {

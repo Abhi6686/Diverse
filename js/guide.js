@@ -48,7 +48,10 @@
         'A bid leaves Active when it is Awarded or marked No Scope. A <b>Lost</b> bid stays, ' +
           'greyed - the work went into it, and hiding it hides that.',
         'Every move can be reversed, with a comment, and both the move and the reversal are ' +
-          'kept in the project\'s history.'
+          'kept in the project\'s history.',
+        '<b>Clone project</b>, in the row menu, makes a second project like this one: the same ' +
+          'details, takeoff and proposal, a new number, today\'s dates, and an empty team for ' +
+          'whoever picks it up. It lands on the same list as the original.'
       ]
     },
     {

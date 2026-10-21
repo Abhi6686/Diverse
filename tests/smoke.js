@@ -5895,6 +5895,93 @@ console.log('\n--- the takeoff and the proposal reach the history ---');
     History.card(b).slice(0, 160));
 }
 
+console.log('\n--- typing a space in an inline field ---');
+{
+  Bids.setView('active');
+  const b = Bids.baseList().filter(x => Bids.bucketOf(x) === 'open')[0];
+  Project.openFrom(b.id, 'active');
+  Project.render();
+  const host = () => [...win.document.querySelectorAll('#section-project [data-edit]')]
+    .find(el => JSON.parse(el.dataset.edit).field === 'comments');
+  const h = host();
+  check('Comments is an inline field', !!h);
+  // Space on the closed box still opens it - the keyboard way in.
+  const open = new win.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  h.dispatchEvent(open);
+  const ta = h.querySelector('textarea');
+  check('Space on the box opens the editor', !!ta && open.defaultPrevented);
+  // Space and Enter typed INTO the field are the field's own.
+  const space = new win.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  ta.dispatchEvent(space);
+  check('a space typed in the comment is not swallowed', !space.defaultPrevented);
+  const enter = new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  ta.dispatchEvent(enter);
+  check('nor is Enter, a new line in the comment', !enter.defaultPrevented);
+  ta.value = 'Same request from another GC.\nSubmit to them as well.';
+  ta.dispatchEvent(new win.Event('blur'));
+  check('the comment saves with its spaces and its line', b.comments === 'Same request from another GC.\nSubmit to them as well.',
+    JSON.stringify(b.comments));
+  Project.render();
+  check('and shows its lines', /whitespace-pre-line/.test(host().className));
+}
+
+console.log('\n--- cloning a project ---');
+{
+  const d = Store.db;
+  const src = d.bids.find(x => x.active && x.takeoffId && d.takeoffs[x.takeoffId] && Bids.bucketOf(x) === 'open') ||
+    d.bids.find(x => x.takeoffId && d.takeoffs[x.takeoffId]);
+  if (!src.proposalId) Proposal.generateFromTakeoff(src.takeoffId);
+  src.assignments = src.assignments && src.assignments.length ? src.assignments
+    : [{ id: 'asg-x', engineer: 'AJP', taskType: 'Estimating', estHrs: 4, asgnHrs: 0, days: [] }];
+  const before = JSON.stringify(Object.assign({}, src, { history: null }));
+  const historyLen = (src.history || []).length;
+  const srcT = d.takeoffs[src.takeoffId], srcP = d.proposals[src.proposalId];
+  const expectedNo = Bids.nextProjectNo ? Bids.nextProjectNo() : null;
+
+  Bids.promptClone(src.id);
+  const modal = win.document.getElementById('cloneModal');
+  check('Clone opens its dialog', !modal.classList.contains('hidden'));
+  check('with the name ready to edit', win.document.getElementById('cloneName').value === src.project + ' (copy)');
+  check('saying the team starts empty', /start empty/.test(win.document.getElementById('cloneWhat').textContent));
+  win.document.getElementById('cloneName').value = 'Clone Test Project';
+  win.document.getElementById('cloneDue').value = '12-15-2026';
+  Bids.confirmClone();
+
+  const c = d.bids.find(x => x.project === 'Clone Test Project');
+  check('a new project is made', !!c && c.id !== src.id);
+  check('on the same list, Not Started', c.active === true && c.status === 'Not Started', c.status);
+  check('with a new project number', /^DIS-\d\d-\d{4}$/.test(c.proposalNo) && c.proposalNo !== src.proposalNo,
+    c.proposalNo + (expectedNo ? ' expected ' + expectedNo : ''));
+  check('dated today, due when it was told', c.activatedAt === U.today() && c.dueDate === '2026-12-15',
+    c.activatedAt + ' / ' + c.dueDate);
+  check('and an empty team', Array.isArray(c.assignments) && c.assignments.length === 0 && !c.engineer);
+  const ct = d.takeoffs[c.takeoffId], cp = d.proposals[c.proposalId];
+  check('its own takeoff, linked to it', !!ct && ct.id !== srcT.id && ct.bidId === c.id);
+  check('with the same products under new ids',
+    ct.products.length === srcT.products.length &&
+    ct.products.every((p, i) => p.type === srcT.products[i].type && p.id !== srcT.products[i].id));
+  check('and the same figures', M.computeTakeoff(ct).total === M.computeTakeoff(srcT).total,
+    M.computeTakeoff(ct).total + ' vs ' + M.computeTakeoff(srcT).total);
+  check('its own proposal, linked to it', !!cp && cp.id !== srcP.id && cp.bidId === c.id &&
+    cp.proposalData.proposalNo === c.proposalNo && cp.proposalData.projectName === 'Clone Test Project');
+  check('with the same scope wording',
+    cp.scopeItems.map(s => s.description).join('|') === srcP.scopeItems.map(s => s.description).join('|'));
+  check('and not marked out of date', !Proposal.isStale(cp));
+  { const was = JSON.parse(before), now = Object.assign({}, src, { history: null });
+    // updatedAt is the Last Modified stamp every history line moves - the one below.
+    const moved = Object.keys(Object.assign({}, was, now)).filter(k => k !== 'updatedAt' && JSON.stringify(was[k]) !== JSON.stringify(now[k]));
+    check('the original is unchanged', !moved.length, moved.map(k => k + ': ' + JSON.stringify(was[k]) + ' -> ' + JSON.stringify(now[k])).join('; ')); }
+  check('apart from one line in its history', (src.history || []).length === historyLen + 1 &&
+    /Cloned as/.test(src.history[src.history.length - 1].comment));
+  check('and the clone says where it came from', /Cloned from/.test(c.history[0].comment));
+
+  // An intake record's clone stays intake, unnumbered.
+  const intake = d.bids.find(x => !x.active && x.status !== 'Awarded' && x.status !== 'Lost');
+  const ic = Bids.cloneBid(intake.id, { project: 'Intake clone' });
+  check('an All Bids clone stays in All Bids', ic.active === false && !ic.proposalNo, JSON.stringify({ a: ic.active, n: ic.proposalNo }));
+  check('the row menu offers Clone project', /Clone project/.test(Bids.rowMenu(src)));
+}
+
 console.log('\n' + (failures === 0
   ? 'All smoke checks passed.'
   : failures + ' CHECK(S) FAILED: ' + errors.join(', ')));

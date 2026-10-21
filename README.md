@@ -834,6 +834,24 @@ The Awarded tab is awarded jobs only, so a lost bid is never hidden there — it
 Active Bids. Adding a No Scope or Awarded bid back to Active Bids reopens it at Not Started;
 adding a Lost one back leaves its status alone, because Lost is a state Active Bids can hold.
 
+## Cloning a project
+
+**Clone project** in a bid's row menu (needs `bid.create`) makes a second project like this one.
+Use it for the same job requested by another GC, or a sister site. A small dialog asks for the
+new name (pre-filled with " (copy)") and a due date, and lists what comes across:
+
+| Comes across | Starts fresh |
+|---|---|
+| Details: region, location, portal, link, products, materials, comments, price | **Number:** the next `DIS-yy-####` on Active Bids; none for an intake record |
+| **Takeoff:** a full copy, with new ids, under the new project | **Dates:** created and picked up today, plus the due date from the dialog |
+| **Proposal:** a full copy, under the new number and name, submitted today | **Team & Hours:** empty, so whoever takes it on assigns the people |
+| | **History:** starts with "Cloned from …"; the original gains one line, "Cloned as …" |
+
+A clone lands on the same list as the original: an Active bid's clone is Active, and an All
+Bids record's clone stays in All Bids. A decided job (Awarded or Lost) clones as fresh Active
+work. The bid, takeoff and proposal are saved in one batch, so other people's screens receive
+the whole project at once.
+
 ## Re-opening a job the client brings back
 
 A job marked **Completed** or **No Scope** that comes back gets a **Re-open** button, on the

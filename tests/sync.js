@@ -689,6 +689,21 @@ async function main() {
       B.App.switchTab('active');
     }
 
+    console.log('\n--- a cloned project reaches everybody whole ---');
+    {
+      const src = A.Store.db.bids.find(b => b.takeoffId && A.Store.db.takeoffs[b.takeoffId]);
+      const c = A.Bids.cloneBid(src.id, { project: 'Cloned on A' });
+      A.Store.save();
+      await wait(1600);
+      const snap = db.snapshot();
+      const onSrv = snap.bids.find(b => b.id === c.id);
+      check('the server has the clone, its takeoff and its proposal',
+        !!onSrv && !!snap.takeoffs[c.takeoffId] && (!c.proposalId || !!snap.proposals[c.proposalId]));
+      const onB = B.Store.db.bids.find(b => b.id === c.id);
+      check('and so does the other browser, without a refresh',
+        !!onB && onB.project === 'Cloned on A' && !!B.Store.db.takeoffs[c.takeoffId]);
+    }
+
     console.log('\n--- no server, no problem ---');
     const solo = await openBrowser(null, 'offline client');
     check('a browser with no server still opens',
