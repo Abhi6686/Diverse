@@ -244,7 +244,8 @@ Six top-level modules, of which one is built:
 |---|---|
 | **Dashboard** | Month overview, KPI cards and the four charts |
 | **Bid Management** | The working module: All Bids, Active Bids, Awarded Bids |
-| Production Manager, Inventory Manager, Report Manager, Scheduler | Placeholders — each says so plainly rather than showing a mock-up |
+| Production Manager | Overview and Sales Orders — see *Production Manager* below. Engineering requests, job orders and the traveler follow in later phases |
+| Inventory Manager, Report Manager, Scheduler | Placeholders — each says so plainly rather than showing a mock-up |
 
 ### Where it opens, and the guide
 
@@ -833,6 +834,51 @@ The statuses you *can* set are **Not Started**, **In Progress**, **Submitted to 
 The Awarded tab is awarded jobs only, so a lost bid is never hidden there — it stays on
 Active Bids. Adding a No Scope or Awarded bid back to Active Bids reopens it at Not Started;
 adding a Lost one back leaves its status alone, because Lost is a state Active Bids can hold.
+
+## Production Manager
+
+An awarded job goes into production as a **sales order**. On the project page, or in the
+Awarded Bids row menu, **Add to Production Manager** (needs `so.edit`) opens a short dialog.
+It shows the number the order will get and takes the desired ship date, PO, general
+contractor and deposit. Creating the order:
+
+- issues the next number, `SO-00001`. It is the highest in use plus one, as project numbers
+  are, so deleting an order never frees its number. The database has a unique index on it; two
+  people taking jobs into production at the same moment get different numbers, because the
+  second browser takes the next one by itself and resends;
+- fills in a **line per product**. Lines come from the proposal's scope items, which add up to
+  the price. Quantity and unit come from the takeoff. With no proposal, lines come from the
+  takeoff alone;
+- sets the project cost to the bid price and the deposit to half of it, per the payment terms;
+- targets a date **one week before the ship date**. That date follows the ship date until
+  someone types another; **Back to automatic** restores the rule;
+- links the bid to the order, and the bid's history records "Moved to Production Manager as
+  SO-…".
+
+The **Sales Order** page edits in place:
+
+- **Project, addresses and contract:** project details, shipping and billing addresses (billing
+  can be "Same as shipping"), general contractor, PO, project cost.
+- **Money and priority:** deposit required and received, with a progress bar, and priority
+  Low/Medium/High.
+- **Dates:** ship date and targeted date, plus a weeks-left chip that turns amber at two weeks
+  and red when late.
+- **Line items:** item no, revision, product type, qty, U/M and cost, with a total checked
+  against the project cost.
+- **Order actions:** **Revise** raises Rev 0 to Rev 1 and records why. Status is Open, In
+  Production, Shipped or Closed. Every change goes into the order's own history.
+
+**Overview** shows open orders, value in production, deposits still owed, shipments due in
+14 days, late orders, and awarded jobs not taken into production yet. Attention lists link
+straight to each order.
+
+The records sync like everything else. The database has four new tables, from schema
+step 8: `salesorders`, `engrequests`, `joborders` and `parts`. The last three are ready for
+the phases that use them. Step 9 gives existing roles the new permissions: an Employee
+gets production, inventory, engineering requests, job orders and shop-floor updates. Sales
+orders and assigning engineering work stay with Admin until ticked on in Roles & Access.
+The shop's workcenters, engineering request types and inventory categories are seeded as
+shared lists.
 
 ## Cloning a project
 

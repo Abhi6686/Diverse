@@ -223,13 +223,29 @@
       ]
     },
     {
+      key: 'production', icon: 'fa-industry',
+      title: 'Production Manager',
+      blurb: 'An awarded job goes on into production as a sales order.',
+      points: [
+        'On an awarded project, <b>Add to Production Manager</b> - on the project page or in ' +
+          'the Awarded Bids row menu - makes a sales order with the next number, SO-00001.',
+        'It brings a line per product from the proposal, the price as the project cost, and a ' +
+          'deposit of half, per the payment terms. Ship date, PO and contractor can be ' +
+          'given straight away or later.',
+        'On the order, every field edits in place: addresses, PO, deposit received, priority. ' +
+          'The targeted date follows a week before the ship date unless you type another.',
+        '<b>Overview</b> shows what is in production, what ships soon or is late, deposits still ' +
+          'owed, and awarded jobs not taken into production yet.'
+      ]
+    },
+    {
       key: 'soon', icon: 'fa-road-barrier',
       title: 'What is not built yet',
-      blurb: 'Bid Management is the module in use. Four others are named in the bar and are ' +
-             'honest placeholders rather than mock-ups.',
+      blurb: 'Coming next in Production: engineering requests and their scheduler, job orders ' +
+             'with routing and bill of material, the production traveler and labels.',
       points: [
-        'Production Manager, Inventory Manager, Report Manager and Scheduler are planned for ' +
-          'later phases.',
+        'Inventory Manager, Report Manager and Scheduler are named in the bar and are honest ' +
+          'placeholders rather than mock-ups.',
         'Opening one says so rather than showing a screen that does nothing.'
       ]
     }

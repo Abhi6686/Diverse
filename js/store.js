@@ -51,6 +51,26 @@
     'Site measure', 'Proposal prep', 'Revisions', 'Coordination'
   ];
 
+  /* THE SHOP FLOOR. Workcenters a job order is routed through, with the set-up
+     time each one defaults to (hours) - the list from the Production Manager
+     proposal. Managed from Settings > Workcenters; these are the start. */
+  var DEFAULT_WORKCENTERS = [
+    ['RAWIN', 'Raw Material In', null], ['RAWST', 'Raw Material Storage', null],
+    ['MSAW', 'Saw Cutting', 0.5], ['MWAT', 'Water Jet', 1],
+    ['MMAC', 'Machining/Drilling/Tapping/Milling', 0.25], ['MBRA', 'Bending/Brakeforming', 0.3],
+    ['MROL', 'Rolling', 0.5], ['MWEL', 'Welding', 1], ['MFIN', 'Finishing', 0.5],
+    ['QC', 'Quality Check', 0.25], ['MPAI', 'Painting', 0.5],
+    ['SUBPOW', 'Powdercoating Vendor', 0.5], ['SUBGALV', 'Galvanizing', 0.5],
+    ['FASSY', 'Final Assembly', 1], ['FINSP', 'Final Inspection', 0.5], ['PACSHI', 'Pack & Ship', 0.5]
+  ].map(function (w) {
+    return { id: 'wc-' + w[0].toLowerCase(), code: w[0], description: w[1], setupHrs: w[2] };
+  });
+
+  /* What an engineering request can be for, and how inventory is grouped. */
+  var DEFAULT_REQUEST_TYPES = ['New CSD', 'New MFG Package', 'QC', 'M2M', 'Revision'];
+  var DEFAULT_INVENTORY_CATEGORIES = ['Sheet', 'Plate', 'Bar', 'Tube', 'Pipe', 'Hardware',
+    'Welding Consumables'];
+
   /* Where a bid came in from. Six <option> tags in the Add/Edit Bid form until
      the office started using a portal that was not one of them; a managed list
      now, like materials and task types, editable from Settings > Portals. */
@@ -214,6 +234,11 @@
       catalog: [],
       rates: null,      // filled by rates.js on first boot
       company: Object.assign({}, root.COMPANY_DEFAULT || {}),
+      // Production and Inventory.
+      salesorders: [], engrequests: [], joborders: [], parts: [],
+      workcenters: JSON.parse(JSON.stringify(DEFAULT_WORKCENTERS)),
+      requestTypes: DEFAULT_REQUEST_TYPES.slice(),
+      inventoryCategories: DEFAULT_INVENTORY_CATEGORIES.slice(),
       ui: { version: UI_VERSION,
             collapsed: {}, lastTakeoffId: null, lastProposalId: null,
             grids: {}, module: 'bids', section: 'active',
@@ -990,9 +1015,21 @@
     }
 
     // Backfill containers a hand-edited or partial file might be missing.
-    ['regions', 'bids', 'catalog', 'engineers'].forEach(function (k) {
+    ['regions', 'bids', 'catalog', 'engineers',
+      'salesorders', 'engrequests', 'joborders', 'parts'].forEach(function (k) {
       if (!Array.isArray(db[k])) db[k] = [];
     });
+    // The shop's production lists. Empty is not a state any of them is meant
+    // to be in, so an empty one is given the starting list back.
+    if (!Array.isArray(db.workcenters) || !db.workcenters.length) {
+      db.workcenters = JSON.parse(JSON.stringify(DEFAULT_WORKCENTERS));
+    }
+    if (!Array.isArray(db.requestTypes) || !db.requestTypes.length) {
+      db.requestTypes = DEFAULT_REQUEST_TYPES.slice();
+    }
+    if (!Array.isArray(db.inventoryCategories) || !db.inventoryCategories.length) {
+      db.inventoryCategories = DEFAULT_INVENTORY_CATEGORIES.slice();
+    }
     ['takeoffs', 'proposals'].forEach(function (k) {
       if (!db[k] || typeof db[k] !== 'object') db[k] = {};
     });
@@ -1196,7 +1233,7 @@
           // Everything else is remembered as absent, so the first save sends
           // the seed up as one batch and the next browser finds it there.
           root.Remote.remember({ bids: [], takeoffs: {}, proposals: {}, catalog: [],
-            engineers: known });
+            engineers: known, salesorders: [], engrequests: [], joborders: [], parts: [] });
           save();
         } else {
           root.Remote.remember(db);
@@ -1235,6 +1272,11 @@
       rates: snap.rates || null,
       ui: null
     };
+    // Every other collection the server keeps, in the shape it is kept here -
+    // the production records and anything added after them.
+    (root.Remote ? root.Remote.COLLECTIONS : []).forEach(function (c) {
+      if (db[c.prop] === undefined) db[c.prop] = snap[c.prop] || (c.shape === 'array' ? [] : {});
+    });
     /* Every shared list the server holds, read from the one list of them
        (Remote.SETTING_KEYS, checked against the server's by tests/sync.js).
        This used to be a hand-written copy of five of the nine, and the other
@@ -1541,7 +1583,22 @@
      the person to fix. */
   var MAX_MERGE_ATTEMPTS = 3;
 
+  /* Records whose clashing number is the browser's to fix, not the person's:
+     a sales order number taken by somebody who allocated it a moment earlier
+     is simply re-issued (the next one) and the record goes again. Each kind
+     that allocates numbers registers how - see Store.onDuplicate. */
+  var duplicateFixers = {};
+
   function resolveConflict(body, attempt) {
+    if (body.error === 'duplicate' && body.kind && duplicateFixers[body.kind] &&
+        (attempt || 0) < MAX_MERGE_ATTEMPTS) {
+      var fixed = false;
+      try { fixed = duplicateFixers[body.kind](DB, body); } catch (e) { console.error(e); }
+      if (fixed) {
+        notify();
+        return pushNow((attempt || 0) + 1);
+      }
+    }
     if (body.error === 'duplicate') {
       if (conflictHandler) conflictHandler(body);
       /* Only that bid is held back until somebody changes the number; the rest
@@ -1825,6 +1882,10 @@
     /* A conflict or a duplicate came back from the server. js/app.js puts it on
        screen; nothing else needs to know. */
     onConflict: function (fn) { conflictHandler = fn; },
+
+    /* fn(db, body) -> true when it has renumbered the record named in a
+       duplicate refusal, so the batch can simply go again. */
+    onDuplicate: function (kind, fn) { duplicateFixers[kind] = fn; },
 
     /* Unsent records, for the status pill and the leave-the-page guard. */
     pendingCount: pendingCount,

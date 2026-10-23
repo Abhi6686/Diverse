@@ -22,6 +22,8 @@
     proposal: function () { root.Proposal.render(); },
     references: function () { root.References.render(); },
     project: function () { root.Project.render(); },
+    prodoverview: function () { root.Production.render(); },
+    salesorders: function () { root.SalesOrders.render(); },
     regions: function () { root.Settings.render(); },
     engineers: function () { root.Settings.render(); },
     tasktypes: function () { root.Settings.render(); },
@@ -171,6 +173,8 @@
     if (bidId == null) bidId = root.Nav.tabBidId();
     if (bidId == null) bidId = ui.projectBidId;
     if (bidId != null) root.Project.setBid(bidId);
+    // The sales order that was open, open again.
+    if (root.SalesOrders) root.SalesOrders.restore();
     if (ui.lastTakeoffId && root.Store.db.takeoffs[ui.lastTakeoffId]) {
       root.Takeoff.openTakeoff(ui.lastTakeoffId);
     }
@@ -327,6 +331,17 @@
    *     The person's own next edit repaints anyway and takes the notice down.
    */
   var EDITOR_TABS = { takeoff: true, proposal: true, project: true };
+
+  /* Pages that are a list until a record is opened in them - then an editor,
+     and a colleague's save must not repaint under the person typing. Each
+     answers with the 'kind:id' it has open, or null when it is showing the
+     list. */
+  var RECORD_PAGES = {
+    salesorders: function () {
+      var id = root.SalesOrders && root.SalesOrders.openId();
+      return id ? ['salesorder:' + id] : null;
+    }
+  };
   var notice = { names: [], what: [], count: 0, clashes: [] };
 
   /* 'kind:id' of the records the editor on screen is showing. */
@@ -334,6 +349,8 @@
     var keys = {};
     if (currentTab === 'takeoff' && root.Takeoff.currentId()) keys['takeoff:' + root.Takeoff.currentId()] = true;
     if (currentTab === 'proposal' && root.Proposal.currentId()) keys['proposal:' + root.Proposal.currentId()] = true;
+    var rec = RECORD_PAGES[currentTab] && RECORD_PAGES[currentTab]();
+    if (rec) rec.forEach(function (k) { keys[k] = true; });
     var bid = root.Project && root.Project.currentBid ? root.Project.currentBid() : null;
     if (bid && currentTab === 'project') {
       keys['bid:' + bid.id] = true;
@@ -365,7 +382,8 @@
     var open = openRecords();
     var bid = root.Project && root.Project.currentBid ? root.Project.currentBid() : null;
 
-    if (!EDITOR_TABS[currentTab]) {
+    var recordOpen = RECORD_PAGES[currentTab] && RECORD_PAGES[currentTab]();
+    if (!EDITOR_TABS[currentTab] && !recordOpen) {
       // A list. Live, quietly, and never under somebody's cursor.
       if (busy) { defer(repaint); return; }
       repaint();
@@ -389,8 +407,9 @@
         whatChanged(c, info.before && info.before[c.kind + ':' + c.id]).forEach(function (n) {
           if (notice.what.indexOf(n) < 0) notice.what.push(n);
         });
-      } else if (notice.what.indexOf('the project details') < 0) {
-        notice.what.push('the project details');
+      } else {
+        var what = c.kind === 'salesorder' ? 'this sales order' : 'the project details';
+        if (notice.what.indexOf(what) < 0) notice.what.push(what);
       }
       (c.clashes || []).forEach(function (p) {
         var f = root.Merge ? root.Merge.describe({ path: p }) : p;

@@ -49,6 +49,18 @@ const PERMISSIONS = [
      settings.edit. See learnOnly(). */
   { key: 'catalog.learn', group: 'Bids', label: 'Teach the Rate Library from a takeoff (new parts, prices, usage)' },
 
+  /* Production Manager. Taking an awarded job into production and assigning
+     engineering work are decisions; raising a request, writing up a job
+     order and reporting progress on the floor are the work itself. */
+  { key: 'so.edit', group: 'Production', label: 'Create and edit sales orders (Add to Production Manager)' },
+  { key: 'engreq.create', group: 'Production', label: 'Raise engineering requests and post in their conversations' },
+  { key: 'engreq.manage', group: 'Production', label: 'Assign engineering requests - engineer, due date, hours' },
+  { key: 'jo.edit', group: 'Production', label: 'Create and edit job orders - routing, bill of material, drawings' },
+  { key: 'shopfloor.update', group: 'Production', label: 'Report operation status and quantities from the shop floor' },
+
+  /* Inventory Manager. */
+  { key: 'inventory.edit', group: 'Inventory', label: 'Add and edit parts, and receive stock' },
+
   { key: 'settings.view', group: 'Settings', label: 'Open Settings' },
   { key: 'settings.edit', group: 'Settings', label: 'Change rates, regions, references, company' },
 
@@ -84,7 +96,10 @@ const ROLE_DEFAULTS = {
   Employee: [
     'module.dashboard', 'module.bids',
     'bid.create', 'bid.edit', 'bid.award', 'bid.export',
-    'takeoff.edit', 'proposal.edit', 'list.extend', 'catalog.learn'
+    'takeoff.edit', 'proposal.edit', 'list.extend', 'catalog.learn',
+    // Production and Inventory - see schema step 9 for existing databases.
+    'module.production', 'module.inventory', 'engreq.create', 'jo.edit',
+    'shopfloor.update', 'inventory.edit'
   ]
 };
 
@@ -179,6 +194,14 @@ function requiredFor(item, existing) {
       if (op === 'delete') return 'settings.edit';
       if (!existing) return 'catalog.learn';
       return learnOnly(existing, item.json) ? 'catalog.learn' : 'settings.edit';
+
+    // Production and Inventory. Finer rules (who may move a request to which
+    // step, what the shop floor may change on a job order) arrive with the
+    // pages that make those changes.
+    case 'salesorder': return 'so.edit';
+    case 'engrequest': return op === 'delete' ? 'engreq.manage' : 'engreq.create';
+    case 'joborder': return 'jo.edit';
+    case 'part': return 'inventory.edit';
     default: return 'settings.edit';
   }
 }

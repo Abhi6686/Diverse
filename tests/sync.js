@@ -28,7 +28,7 @@ const FILES = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js',
   'js/proposal.styles.js', 'js/proposal.defaults.js', 'js/util.js', 'js/ui.js', 'js/datepicker.js', 'js/sparks.js', 'js/intro.js', 'js/guide.js', 'js/auth.js', 'js/merge.js', 'js/remote.js',
   'js/store.js', 'js/nav.js', 'js/rates.js', 'js/catalog.js', 'js/bidgrid.js',
   'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js', 'js/takeoff.js',
-  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
+  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js', 'js/datagrid.js', 'js/reclog.js', 'js/salesorders.js', 'js/production.js',
   'js/settings.js', 'js/app.js'];
 
 const HTML = fs.readFileSync(path.join(ROOT, 'Bid_Proposal_Manager_2026.html'), 'utf8')
@@ -278,8 +278,16 @@ async function main() {
       A.Remote.SETTING_KEYS.join(',') + '  vs  ' + serverKeys.join(','));
     check('and every list Settings can edit is among them',
       ['regions', 'productTypes', 'taskTypes', 'materials', 'portals', 'statuses',
-       'references', 'rates', 'company']
+       'references', 'rates', 'company', 'workcenters', 'requestTypes', 'inventoryCategories']
         .every(k => serverKeys.indexOf(k) >= 0), serverKeys.join(','));
+    // The record collections are written out twice as well, and nothing used
+    // to check them. A kind on one side only is records that never travel.
+    const serverColls = require(path.join(ROOT, 'server/schema.js')).COLLECTIONS
+      .map(c => c.kind + ':' + c.prop + ':' + c.shape).sort();
+    const clientColls = A.Remote.COLLECTIONS.map(c => c.kind + ':' + c.prop + ':' + c.shape).sort();
+    check('the client and the server agree on which records sync',
+      JSON.stringify(clientColls) === JSON.stringify(serverColls),
+      clientColls.join(',') + '  vs  ' + serverColls.join(','));
 
     A.Store.db.portals.push('Dodge');
     A.Store.db.materials.push('Bronze');
@@ -362,8 +370,12 @@ async function main() {
       String(A.Nav.firstSectionOf('settings')));
     B.Nav.render();
     var barB = B.document.getElementById('moduleBar').innerHTML;
-    check('and the module bar leaves out the four Admin-only modules',
-      barB.indexOf('Production Manager') < 0 && barB.indexOf('Scheduler') < 0, barB.slice(0, 200));
+    check('and the module bar leaves out the Admin-only modules',
+      barB.indexOf('Report Manager') < 0 && barB.indexOf('Scheduler') < 0, barB.slice(0, 200));
+    // Production and Inventory are the Employee's work too - raising engineering
+    // requests, job orders, the shop floor, stock.
+    check('but offers Production and Inventory',
+      barB.indexOf('Production Manager') >= 0 && barB.indexOf('Inventory Manager') >= 0);
     check('while still offering Bid Management', barB.indexOf('Bid Management') >= 0);
 
     // The one that matters: the screen hides it, and the server refuses it.
@@ -702,6 +714,45 @@ async function main() {
       const onB = B.Store.db.bids.find(b => b.id === c.id);
       check('and so does the other browser, without a refresh',
         !!onB && onB.project === 'Cloned on A' && !!B.Store.db.takeoffs[c.takeoffId]);
+    }
+
+    console.log('\n--- an awarded job goes into production ---');
+    {
+      const awardIt = (W, b) => { b.status = 'Awarded'; b.awardedAt = W.U.today(); };
+      const b1 = A.Store.db.bids[20];
+      awardIt(A, b1);
+      A.Store.save();
+      await wait(1200);
+      const so1 = A.SalesOrders.createFromBid(b1, { desiredShipDate: '2026-12-31' });
+      A.Store.save();
+      await wait(1600);
+      check('the server has the sales order', db.snapshot().salesorders.some(s => s.id === so1.id && s.soNo === so1.soNo));
+      check('and the other browser shows it, with the bid pointing at it',
+        B.Store.db.salesorders.some(s => s.id === so1.id) && bidOn(B, b1.id).soId === so1.id);
+
+      // Two people take two awarded jobs into production at the same moment.
+      // Both browsers work out the same next number; the database refuses the
+      // second, and that browser takes the next one by itself.
+      const empRole = db.handle().prepare("SELECT id FROM roles WHERE name = 'Employee'").get().id;
+      db.handle().prepare("INSERT OR IGNORE INTO role_permissions (role_id, perm) VALUES (?, 'so.edit')").run(empRole);
+      const b2 = A.Store.db.bids[21], b3 = A.Store.db.bids[22];
+      awardIt(A, b2); awardIt(A, b3);
+      A.Store.save();
+      await wait(1400);
+      const soA = A.SalesOrders.createFromBid(b2, {});
+      const soB = B.SalesOrders.createFromBid(bidOn(B, b3.id), {});
+      check('both browsers reach for the same number', soA.soNo === soB.soNo, soA.soNo + ' / ' + soB.soNo);
+      A.Store.save();
+      B.Store.save();
+      await wait(2500);
+      const nums = db.snapshot().salesorders.filter(s => s.id === soA.id || s.id === soB.id).map(s => s.soNo);
+      check('both orders are on the server', nums.length === 2, JSON.stringify(nums));
+      check('under different numbers', nums[0] !== nums[1], JSON.stringify(nums));
+      check('and both browsers agree on them',
+        A.Store.db.salesorders.find(s => s.id === soB.id).soNo === B.Store.db.salesorders.find(s => s.id === soB.id).soNo &&
+        A.Store.status.state === 'saved' && B.Store.status.state === 'saved',
+        A.Store.status.state + '/' + B.Store.status.state);
+      db.handle().prepare("DELETE FROM role_permissions WHERE role_id = ? AND perm = 'so.edit'").run(empRole);
     }
 
     console.log('\n--- no server, no problem ---');

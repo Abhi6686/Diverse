@@ -340,6 +340,63 @@ const STEPS = [
           now, null, r.rev + 1);
       }
     }
+  },
+
+  {
+    version: 8,
+    name: 'production and inventory: sales orders, engineering requests, job orders, parts',
+    up: function (db) {
+      /* The four records the Production and Inventory Managers keep. The same
+         shape as every other table - json, rev, who and when - plus, for the
+         three that carry a human number, that number as a real column with a
+         unique index. A number is allocated in the browser (the next one after
+         the highest in use, as project numbers are); two browsers allocating
+         at the same moment is caught HERE, and the second is told to take the
+         next one. Partial indexes, so a record not yet numbered is no clash. */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS salesorders (
+          id TEXT PRIMARY KEY, so_no TEXT, bid_id INTEGER, json TEXT NOT NULL,
+          rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS salesorders_so_no ON salesorders(so_no) WHERE so_no IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS engrequests (
+          id TEXT PRIMARY KEY, req_no TEXT, so_id TEXT, json TEXT NOT NULL,
+          rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS engrequests_req_no ON engrequests(req_no) WHERE req_no IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS joborders (
+          id TEXT PRIMARY KEY, jo_no TEXT, so_id TEXT, json TEXT NOT NULL,
+          rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS joborders_jo_no ON joborders(jo_no) WHERE jo_no IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS parts (
+          id TEXT PRIMARY KEY, json TEXT NOT NULL,
+          rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, updated_by INTEGER
+        );
+      `);
+    }
+  },
+
+  {
+    version: 9,
+    name: 'production and inventory permissions for existing roles',
+    up: function (db) {
+      /* The roles in an existing database were written before these
+         permissions existed. Everyone who may edit a takeoff - the Employee
+         role, and Admin - gets what an Employee starts with on a new database;
+         everything else (sales orders, assigning engineering work) stays with
+         Admin until somebody ticks it on in Roles & Access. Admin gets the
+         lot, because Admin always has every permission. */
+      const grant = (perm, fromPerm) => db.exec(
+        "INSERT OR IGNORE INTO role_permissions (role_id, perm) " +
+        "SELECT role_id, '" + perm + "' FROM role_permissions WHERE perm = '" + fromPerm + "'");
+      ['module.production', 'module.inventory', 'engreq.create', 'jo.edit',
+        'shopfloor.update', 'inventory.edit'].forEach(p => grant(p, 'takeoff.edit'));
+      ['so.edit', 'engreq.manage'].forEach(p => grant(p, 'admin.roles'));
+    }
   }
 ];
 
@@ -353,7 +410,18 @@ const KINDS = {
   proposal: { table: 'proposals', keyed: true, idType: 'string' },
   catalog: { table: 'catalog', keyed: true, idType: 'string' },
   engineer: { table: 'engineers', keyed: true, idType: 'string' },
-  setting: { table: 'settings', keyed: true, idType: 'string' }
+  setting: { table: 'settings', keyed: true, idType: 'string' },
+
+  /* Production and Inventory. `columns` are kept beside the json, derived from
+     it on every write (column -> field); `unique` names the ones with a unique
+     index, and what to call them when a number is already taken. */
+  salesorder: { table: 'salesorders', keyed: true, idType: 'string', noun: 'sales order',
+    columns: { so_no: 'soNo', bid_id: 'bidId' }, unique: { so_no: 'Sales Order No.' } },
+  engrequest: { table: 'engrequests', keyed: true, idType: 'string', noun: 'request',
+    columns: { req_no: 'reqNo', so_id: 'soId' }, unique: { req_no: 'Request No.' } },
+  joborder: { table: 'joborders', keyed: true, idType: 'string', noun: 'job order',
+    columns: { jo_no: 'joNo', so_id: 'soId' }, unique: { jo_no: 'Job Order No.' } },
+  part: { table: 'parts', keyed: true, idType: 'string', noun: 'part' }
 };
 
 /* Which client-side collection each kind maps to, and how it is shaped there.
@@ -363,7 +431,11 @@ const COLLECTIONS = [
   { kind: 'takeoff', prop: 'takeoffs', shape: 'map', idKey: 'id' },
   { kind: 'proposal', prop: 'proposals', shape: 'map', idKey: 'id' },
   { kind: 'catalog', prop: 'catalog', shape: 'array', idKey: 'id' },
-  { kind: 'engineer', prop: 'engineers', shape: 'array', idKey: 'id' }
+  { kind: 'engineer', prop: 'engineers', shape: 'array', idKey: 'id' },
+  { kind: 'salesorder', prop: 'salesorders', shape: 'array', idKey: 'id' },
+  { kind: 'engrequest', prop: 'engrequests', shape: 'array', idKey: 'id' },
+  { kind: 'joborder', prop: 'joborders', shape: 'array', idKey: 'id' },
+  { kind: 'part', prop: 'parts', shape: 'array', idKey: 'id' }
 ];
 
 /* The singleton settings rows, by the property they hold on the client.
@@ -375,7 +447,10 @@ const COLLECTIONS = [
    the row appears the first time somebody writes it. */
 const SETTING_KEYS = [
   'regions', 'productTypes', 'taskTypes', 'materials', 'portals', 'statuses',
-  'references', 'rates', 'company'
+  'references', 'rates', 'company',
+  // Production and Inventory: the shop's workcenters, what an engineering
+  // request can be for, and how parts are grouped.
+  'workcenters', 'requestTypes', 'inventoryCategories'
 ];
 
 function currentVersion(db) {

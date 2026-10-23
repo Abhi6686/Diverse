@@ -74,7 +74,7 @@ const localScripts = ['js/seed.js', 'js/references.seed.js', 'js/catalog.seed.js
   'js/bidgrid.js', 'js/references.js', 'js/ratespanel.js', 'js/takeoff.model.js',
   'js/xlsx.zip.js', 'js/estimate.template.js', 'js/estimate.xlsx.js',
   'js/report.xlsx.js', 'js/takeoff.js',
-  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/bids.report.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js',
+  'js/proposal.paginate.js', 'js/proposal.js', 'js/ratelib.js', 'js/bids.js', 'js/bids.report.js', 'js/assignments.js', 'js/products.js', 'js/history.js', 'js/schedule.js', 'js/presence.js', 'js/project.js', 'js/datagrid.js', 'js/reclog.js', 'js/salesorders.js', 'js/production.js',
   'js/settings.js', 'js/app.js'];
 
 // Wait until parsing has finished, otherwise app.js correctly defers its boot to
@@ -3276,12 +3276,12 @@ check('and the project view is immersive',
 App.switchTab('active');
 check('leaving the project view drops the immersive class',
   !win.document.body.classList.contains('projectview'));
-App.switchTab('production');
+App.switchTab('inventory');
 check('a placeholder module opens its own page',
-  Nav.current.module === 'production' &&
-  !U.$('section-production').classList.contains('hidden'));
+  Nav.current.module === 'inventory' &&
+  !U.$('section-inventory').classList.contains('hidden'));
 check('the placeholder says it is not built yet',
-  /Not built yet/.test(U.$('section-production').innerHTML));
+  /Not built yet/.test(U.$('section-inventory').innerHTML));
 check('the sub-menu strip is hidden for a placeholder module',
   U.$('subMenuBar').classList.contains('hidden'));
 App.switchTab('active');
@@ -5980,6 +5980,105 @@ console.log('\n--- cloning a project ---');
   const ic = Bids.cloneBid(intake.id, { project: 'Intake clone' });
   check('an All Bids clone stays in All Bids', ic.active === false && !ic.proposalNo, JSON.stringify({ a: ic.active, n: ic.proposalNo }));
   check('the row menu offers Clone project', /Clone project/.test(Bids.rowMenu(src)));
+}
+
+console.log('\n--- Production Manager: awarded bid to sales order ---');
+{
+  const SO = win.SalesOrders;
+  const d = Store.db;
+  // An awarded bid with a takeoff and a proposal, the usual way in.
+  const b = d.bids.find(x => x.takeoffId && d.takeoffs[x.takeoffId] && d.takeoffs[x.takeoffId].products.length);
+  if (!b.proposalId) Proposal.generateFromTakeoff(b.takeoffId);
+  b.status = 'Awarded';
+  b.awardedAt = U.today();
+  if (!b.proposalNo) b.proposalNo = Bids.nextProjectNo();
+  delete b.soId;
+  const before = d.salesorders.length;
+
+  Project.openFrom(b.id, 'awarded');
+  check('the awarded project offers Add to Production Manager',
+    /Add to Production Manager/.test(U.$('projectHeader').innerHTML));
+  check('and so does its row menu', /Add to Production Manager/.test(Bids.rowMenu(b)));
+
+  SO.promptFromBid(b.id);
+  check('the dialog says which number it will get', /^SO-\d{5}$/.test(U.$('soNumber').textContent),
+    U.$('soNumber').textContent);
+  check('with a deposit of half the price', Number(U.$('soDeposit').value) === Math.round(b.price / 2),
+    U.$('soDeposit').value + ' vs ' + b.price);
+  U.$('soShip').value = '12-31-2026';
+  U.$('soPo').value = 'PO-0001';
+  U.$('soGc').value = 'Frenjo Construction, LLC';
+  SO.confirmFromBid();
+
+  const so = d.salesorders[d.salesorders.length - 1];
+  check('a sales order is made', d.salesorders.length === before + 1 && so.bidId === b.id);
+  check('numbered SO-00001 style', /^SO-\d{5}$/.test(so.soNo), so.soNo);
+  check('carrying what the dialog said', so.poNumber === 'PO-0001' &&
+    so.generalContractor === 'Frenjo Construction, LLC' && so.desiredShipDate === '2026-12-31');
+  check('targeted a week before shipping', so.targetDate === '2026-12-24' && so.targetAuto === true, so.targetDate);
+  check('valued at the bid price', so.projectCost === Number(b.price));
+  const p = d.proposals[b.proposalId];
+  const productScopes = p.scopeItems.filter(s => s.sourceType);
+  check('a line per product, from the proposal', so.lines.length === productScopes.length &&
+    so.lines.every((l, i) => l.productType === productScopes[i].sourceType && l.itemNo === String(i + 1).padStart(3, '0')),
+    JSON.stringify(so.lines.map(l => l.itemNo + ' ' + l.productType)));
+  check('with quantity and unit from the takeoff', so.lines.every(l => l.um === 'LF' || l.um === 'EA'),
+    JSON.stringify(so.lines.map(l => l.qty + ' ' + l.um)));
+  check('the bid points at its order', b.soId === so.id);
+  check('and says so in its history', /Moved to Production Manager as SO-/.test(b.history[b.history.length - 1].comment));
+  check('the order opens straight away', App.currentTab === 'salesorders' && SO.openId() === so.id);
+  check('showing its number and lines', U.$('section-salesorders').innerHTML.indexOf(so.soNo) >= 0 &&
+    /Line Items/.test(U.$('section-salesorders').innerHTML));
+
+  // Editing.
+  SO.saveField(so.id, 'desiredShipDate', '01-15-2027', 'date', null);
+  check('moving the ship date moves the automatic target', so.targetDate === '2027-01-08', so.targetDate);
+  SO.saveField(so.id, 'targetDate', '01-05-2027', 'date', null);
+  check('typing a target makes it manual', so.targetDate === '2027-01-05' && so.targetAuto === false);
+  SO.saveField(so.id, 'desiredShipDate', '01-20-2027', 'date', null);
+  check('and a manual target stays put', so.targetDate === '2027-01-05');
+  SO.targetAuto(so.id);
+  check('until it is put back to automatic', so.targetAuto && so.targetDate === '2027-01-13', so.targetDate);
+  SO.saveField(so.id, 'depositReceived', String(so.depositRequired), 'number', null);
+  check('a deposit received in full owes nothing', SO.depositOutstanding(so) === 0);
+  check('and every edit is in the order\'s history', so.log.some(e => e.kind === 'edit' &&
+    e.changes.some(c => c.label === 'Desired Ship Date')));
+  const lineCount = so.lines.length;
+  SO.addLine(so.id);
+  const added = so.lines[so.lines.length - 1];
+  check('a line can be added, numbered next', so.lines.length === lineCount + 1 &&
+    added.itemNo === String(lineCount + 1).padStart(3, '0'));
+  SO.setLine(so.id, added.id, 'cost', '1500');
+  check('and priced', added.cost === 1500);
+  SO.removeLine(so.id, added.id);
+  check('and removed', so.lines.length === lineCount);
+  SO.setStatus(so.id, 'In Production');
+  check('the status moves', so.status === 'In Production');
+  SO.revise(so.id);
+  check('revising bumps the revision', so.revision === 1 && /Revised to Rev 1/.test(so.log[so.log.length - 1].text));
+
+  // The way back from the bid.
+  Project.openFrom(b.id, 'awarded');
+  check('the project now offers the way to its order', U.$('projectHeader').innerHTML.indexOf('Open ' + so.soNo) >= 0);
+  check('and so does the row menu', Bids.rowMenu(b).indexOf('Open ' + so.soNo) >= 0);
+
+  // The list and the overview.
+  App.switchTab('salesorders');
+  SO.back();
+  check('the list shows the order', U.$('soGridHost').innerHTML.indexOf(so.soNo) >= 0);
+  win.DataGrid.search('so', 'nothing-matches-this');
+  check('search narrows it', U.$('soGridHost').innerHTML.indexOf(so.soNo) < 0);
+  win.DataGrid.clear('so');
+  App.switchTab('prodoverview');
+  check('the overview counts it', /Open orders/.test(U.$('section-production').innerHTML));
+
+  // A second order taken at the same moment as another browser's: renumbered.
+  check('the next number follows on', SO.nextSoNo() === 'SO-' + String(Number(so.soNo.slice(3)) + 1).padStart(5, '0'),
+    SO.nextSoNo());
+
+  // Deleting lets the bid go into production again.
+  SO.remove(so.id);
+  check('deleting the order frees the bid', !d.salesorders.some(x => x.id === so.id) && !b.soId);
 }
 
 console.log('\n' + (failures === 0

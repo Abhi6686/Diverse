@@ -30,14 +30,20 @@
     { kind: 'takeoff', prop: 'takeoffs', shape: 'map' },
     { kind: 'proposal', prop: 'proposals', shape: 'map' },
     { kind: 'catalog', prop: 'catalog', shape: 'array' },
-    { kind: 'engineer', prop: 'engineers', shape: 'array' }
+    { kind: 'engineer', prop: 'engineers', shape: 'array' },
+    // Production and Inventory - MUST match COLLECTIONS in server/schema.js.
+    { kind: 'salesorder', prop: 'salesorders', shape: 'array' },
+    { kind: 'engrequest', prop: 'engrequests', shape: 'array' },
+    { kind: 'joborder', prop: 'joborders', shape: 'array' },
+    { kind: 'part', prop: 'parts', shape: 'array' }
   ];
   /* The shop-wide singletons. MUST match SETTING_KEYS in server/schema.js - a
      key on one side and not the other is a list that silently stops travelling.
      `materials` was exactly that: managed from Settings like regions and task
      types, and never once sent to anybody else's browser. */
   var SETTING_KEYS = ['regions', 'productTypes', 'taskTypes', 'materials',
-    'portals', 'statuses', 'references', 'rates', 'company'];
+    'portals', 'statuses', 'references', 'rates', 'company',
+    'workcenters', 'requestTypes', 'inventoryCategories'];
 
   /* What the server last confirmed it holds: 'kind:id' -> JSON string, and the
      rev we read. Diffing against this is how save() knows what to send without

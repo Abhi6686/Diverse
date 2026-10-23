@@ -133,10 +133,10 @@ function getOne(kind, id) {
 /* The whole dataset in the shape js/store.js holds it, so the client can drop
    it straight into DB without a translation layer on top of the one here. */
 function snapshot() {
-  const out = {
-    bids: [], takeoffs: {}, proposals: {}, catalog: [], engineers: [],
-    revs: {}
-  };
+  const out = { revs: {} };
+  // Every collection starts empty in its client shape, so one with no rows
+  // yet is still there - [] or {} - rather than undefined.
+  for (const c of schema.COLLECTIONS) out[c.prop] = c.shape === 'array' ? [] : {};
 
   for (const c of schema.COLLECTIONS) {
     for (const row of allOf(c.kind)) {
@@ -224,20 +224,27 @@ class Conflict extends Error {
 /* A duplicate of something the schema says must be unique - a Proposal No. or
    a Job No. already on another bid. Reported the same way a form would. */
 class Duplicate extends Error {
-  constructor(field, value) {
-    super(field + ' "' + value + '" is already used by another bid.');
+  constructor(field, value, noun) {
+    super(field + ' "' + value + '" is already used by another ' + (noun || 'bid') + '.');
     this.name = 'Duplicate';
     this.field = field;
     this.value = value;
   }
 }
 
-function friendlyConstraint(e, rec) {
+function friendlyConstraint(e, rec, kind) {
   const m = String(e && e.message || '');
   if (!/UNIQUE|constraint/i.test(m)) return e;
   if (/proposal_no/.test(m)) return new Duplicate('Proposal No.', rec.proposalNo);
   if (/award_no/.test(m)) return new Duplicate('Job No.', rec.awardNo);
   if (/engineers_initials/.test(m)) return new Duplicate('Initials', rec.initials);
+  // The numbered production records: whichever unique column it was.
+  const def = schema.KINDS[kind];
+  if (def && def.unique) {
+    for (const col of Object.keys(def.unique)) {
+      if (m.indexOf(col) >= 0) return new Duplicate(def.unique[col], rec[def.columns[col]], def.noun);
+    }
+  }
   return e;
 }
 
@@ -292,6 +299,22 @@ function put(kind, id, rec, expectedRev, userId) {
         '  rev=excluded.rev, updated_at=excluded.updated_at, updated_by=excluded.updated_by'
       ).run(key, rec.bidId == null ? null : Number(rec.bidId), json, rev, now,
         userId == null ? null : Number(userId));
+    } else if (def.columns) {
+      /* A record that keeps some of its fields as real columns too - the
+         production numbers, so the database itself refuses a second SO-00001.
+         Derived from the json on every write; never edited on their own. */
+      const cols = Object.keys(def.columns);
+      const vals = cols.map(c => {
+        const v = rec[def.columns[c]];
+        return v == null || String(v).trim() === '' ? null
+          : (typeof v === 'number' ? v : String(v).trim());
+      });
+      stmt(
+        'INSERT INTO ' + def.table + ' (id, ' + cols.join(', ') + ', json, rev, updated_at, updated_by) ' +
+        'VALUES (' + cols.map(() => '?').join(',') + ',?,?,?,?,?) ' +
+        'ON CONFLICT(id) DO UPDATE SET ' + cols.map(c => c + '=excluded.' + c).join(', ') +
+        ', json=excluded.json, rev=excluded.rev, updated_at=excluded.updated_at, updated_by=excluded.updated_by'
+      ).run(key, ...vals, json, rev, now, userId == null ? null : Number(userId));
     } else {
       stmt(
         'INSERT INTO ' + def.table + ' (id, json, rev, updated_at, updated_by) ' +
@@ -301,7 +324,7 @@ function put(kind, id, rec, expectedRev, userId) {
       ).run(key, json, rev, now, userId == null ? null : Number(userId));
     }
   } catch (e) {
-    const err = friendlyConstraint(e, rec);
+    const err = friendlyConstraint(e, rec, kind);
     if (err && err.name === 'Duplicate') { err.kind = kind; err.id = key; }
     throw err;
   }

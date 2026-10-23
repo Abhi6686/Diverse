@@ -25,6 +25,9 @@
 (function (root) {
   'use strict';
 
+  var SAVERS = {};      // kind -> inline-edit saver, see UI.registerSaver
+
+
   var U = root.U;
 
   /* ---- vocabulary ------------------------------------------------------- */
@@ -255,6 +258,9 @@
       var spec = { field: o.field, type: o.type || 'text', bidId: o.bidId,
                    value: o.value == null ? '' : String(o.value),
                    options: o.options || null };
+      // Any other kind of record names itself and its id; its saver is
+      // registered with UI.registerSaver. A bid needs neither - see beginEdit.
+      if (o.kind) { spec.kind = o.kind; spec.id = o.id; }
       /* The pencil is always faintly there rather than appearing on hover: a
          field you can edit should say so before you touch it. A single click
          opens the editor as well as a double, because nobody guesses that a
@@ -292,6 +298,11 @@
     /* Swap the value for a control. The original markup is kept on the node so
        Escape - or a save that the record refuses - can put it back exactly as
        it was rather than re-deriving it. */
+    /* How an inline edit on a non-bid record is written: fn(id, field, raw,
+       type, host). Same contract as Bids.saveField, which stays the default -
+       a refusal puts host.dataset.original back and says why. */
+    registerSaver: function (kind, fn) { SAVERS[kind] = fn; },
+
     beginEdit: function (host) {
       if (host.dataset.editing) return;
       var spec;
@@ -408,7 +419,11 @@
         done = true;
         delete host.dataset.editing;
         if (!commit) { host.innerHTML = host.dataset.original; return true; }
-        root.Bids.saveField(spec.bidId, spec.field, control.value, spec.type, host);
+        if (spec.kind && SAVERS[spec.kind]) {
+          SAVERS[spec.kind](spec.id, spec.field, control.value, spec.type, host);
+        } else {
+          root.Bids.saveField(spec.bidId, spec.field, control.value, spec.type, host);
+        }
         flash(host);
         if (thenFocusNext) focusNext(host);
         return true;

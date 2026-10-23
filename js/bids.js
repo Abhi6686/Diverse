@@ -334,6 +334,18 @@
         label: hasT ? 'Open takeoff' : 'Start a takeoff',
         onclick: 'Takeoff.openForBid(' + bid.id + ')' }));
 
+      // An awarded job goes on into production as a sales order.
+      if (bid.status === 'Awarded' && root.SalesOrders) {
+        var so = root.SalesOrders.forBid(bid.id);
+        if (so) {
+          out.push(G.menuItem({ icon: 'fa-industry', label: 'Open ' + so.soNo,
+            onclick: 'SalesOrders.open(\'' + so.id + '\')' }));
+        } else if (root.Auth.can('so.edit')) {
+          out.push(G.menuItem({ icon: 'fa-industry', label: 'Add to Production Manager', tone: 'ok',
+            onclick: 'SalesOrders.promptFromBid(' + bid.id + ')' }));
+        }
+      }
+
       var d = db();
       if (bid.proposalId && d.proposals[bid.proposalId]) {
         out.push(G.menuItem({ icon: 'fa-file-contract', label: 'Open proposal',

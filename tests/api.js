@@ -252,6 +252,18 @@ async function run() {
     r.status === 409 && r.body.error === 'duplicate', JSON.stringify(r.body));
   check('and it names the field', r.body.field === 'Proposal No.', r.body.field);
 
+  // The production numbers are unique in the database too.
+  r = await post('/changes', { changes: [{ kind: 'salesorder', id: 'so-a', json: { id: 'so-a', soNo: 'SO-00001', bidId: 1, project: 'A' } }] });
+  check('a sales order is stored', r.status === 200, JSON.stringify(r.body));
+  r = await get('/bootstrap');
+  check('and comes back in its own list', Array.isArray(r.body.db.salesorders) &&
+    r.body.db.salesorders.some(s => s.id === 'so-a') && Array.isArray(r.body.db.parts),
+    JSON.stringify(Object.keys(r.body.db)));
+  r = await post('/changes', { changes: [{ kind: 'salesorder', id: 'so-b', json: { id: 'so-b', soNo: 'SO-00001', project: 'B' } }] });
+  check('a second SO-00001 is refused', r.status === 409 && r.body.error === 'duplicate' &&
+    r.body.field === 'Sales Order No.' && r.body.kind === 'salesorder' && r.body.id === 'so-b', JSON.stringify(r.body));
+  check('in words about sales orders, not bids', /another sales order/.test(r.body.message), r.body.message);
+
   await post('/changes', { changes: [{ kind: 'bid', id: 5, json: { id: 5, project: 'Won', awardNo: 'DIS-26-0001' } }] });
   r = await post('/changes', { changes: [{ kind: 'bid', id: 6, json: { id: 6, project: 'Also won', awardNo: 'DIS-26-0001' } }] });
   check('a duplicate Job No. is refused too',
@@ -557,6 +569,20 @@ async function run() {
   r = await get('/session');
   check('the Employee role has catalog.learn',
     (r.body.user && r.body.user.permissions || []).indexOf('catalog.learn') >= 0, JSON.stringify(r.body.user));
+
+  // Production and Inventory: what an Employee may write by default.
+  r = await post('/changes', { changes: [{ kind: 'salesorder', id: 'so-emp', json: { id: 'so-emp', soNo: 'SO-09999' } }] });
+  check('an Employee cannot create a sales order by default', r.status === 403 && /so.edit/.test(r.body.error),
+    JSON.stringify(r.body));
+  r = await post('/changes', { changes: [{ kind: 'part', id: 'pt-emp', json: { id: 'pt-emp', vendorPartNo: 'ALRO 200003' } }] });
+  check('but can add a part to inventory', r.status === 200, JSON.stringify(r.body));
+  r = await post('/changes', { changes: [{ kind: 'engrequest', id: 'er-emp', json: { id: 'er-emp', reqNo: '1000' } }] });
+  check('and raise an engineering request', r.status === 200, JSON.stringify(r.body));
+  r = await get('/session');
+  check('the Employee role has the production defaults',
+    ['module.production', 'module.inventory', 'engreq.create', 'jo.edit', 'shopfloor.update', 'inventory.edit']
+      .every(p => (r.body.user.permissions || []).indexOf(p) >= 0) &&
+    (r.body.user.permissions || []).indexOf('so.edit') < 0, JSON.stringify(r.body.user.permissions));
 
   r = await get('/users');
   check('the people screen is refused', r.status === 403, String(r.status));

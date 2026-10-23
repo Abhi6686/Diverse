@@ -40,7 +40,9 @@
        moved, and it is not going to. */
     reopened: { label: 'Re-opened', icon: 'fa-rotate-right', tint: 'text-warn-ink' },
     /* Not a place either: a second project was made from this one. */
-    cloned: { label: 'Cloned', icon: 'fa-clone', tint: 'text-brand' }
+    cloned: { label: 'Cloned', icon: 'fa-clone', tint: 'text-brand' },
+    /* Not a place: an awarded job taken into production, as a sales order. */
+    production: { label: 'Production', icon: 'fa-industry', tint: 'text-ok' }
   };
 
   function label(key) {

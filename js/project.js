@@ -175,7 +175,7 @@
           : tab('project', 'Overview', 'fa-circle-info', section === 'project') +
             tab('takeoff', 'TakeOff', 'fa-calculator', section === 'takeoff') +
             tab('proposal', 'Proposal', 'fa-file-contract', section === 'proposal') +
-            reopenAction(bid) + decisionMenu(bid)) +
+            reopenAction(bid) + decisionMenu(bid) + productionAction(bid)) +
         '<span id="saveIndicator" class="text-xs text-faint ml-1"></span>' +
       '</div>';
   }
@@ -192,6 +192,23 @@
     return '<button onclick="Project.addToActive()" ' +
       'class="px-3 py-2 rounded-lg text-sm font-medium bg-warn hover:bg-warn-hover text-white flex items-center gap-2">' +
       '<i class="fas fa-bolt text-xs"></i>Add to Active bid</button>';
+  }
+
+  /* An awarded job's way into production - where "Add to Active bid" sits for
+     a received bid. Once it has a sales order, the way across to it instead. */
+  function productionAction(bid) {
+    if (bid.status !== 'Awarded' || !root.SalesOrders) return '';
+    var so = root.SalesOrders.forBid(bid.id);
+    if (so) {
+      return '<button onclick="SalesOrders.open(\'' + so.id + '\')" ' +
+        'class="px-3 py-2 rounded-lg text-sm font-medium bg-brand hover:bg-brand-hover text-white flex items-center gap-2">' +
+        '<i class="fas fa-industry text-xs"></i>Open ' + U.esc(so.soNo) +
+        '<i class="fas fa-arrow-up-right-from-square text-3xs opacity-70"></i></button>';
+    }
+    if (!root.Auth.can('so.edit')) return '';
+    return '<button onclick="SalesOrders.promptFromBid(' + bid.id + ')" ' +
+      'class="px-3 py-2 rounded-lg text-sm font-medium bg-ok hover:bg-ok-hover text-white flex items-center gap-2">' +
+      '<i class="fas fa-industry text-xs"></i>Add to Production Manager</button>';
   }
 
   function backButton() {

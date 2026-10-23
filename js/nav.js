@@ -44,8 +44,14 @@
         { label: 'XLSX', icon: 'fa-file-excel', onclick: 'Bids.exportXLSX()', green: true, perm: 'bid.export' }
       ] },
 
-    { key: 'production', label: 'Production Manager', icon: 'fa-industry', placeholder: true,
-      perm: 'module.production' },
+    /* Awarded work, from the sales order on. Overview keeps the module's old
+       DOM host, #section-production; each list has its own. */
+    { key: 'production', label: 'Production Manager', icon: 'fa-industry',
+      perm: 'module.production',
+      sections: [
+        { key: 'prodoverview', label: 'Overview', icon: 'fa-gauge-high', dom: 'production' },
+        { key: 'salesorders', label: 'Sales Orders', icon: 'fa-file-invoice-dollar' }
+      ] },
     { key: 'inventory', label: 'Inventory Manager', icon: 'fa-boxes-stacked', placeholder: true,
       perm: 'module.inventory' },
     { key: 'report', label: 'Report Manager', icon: 'fa-chart-pie', placeholder: true,
